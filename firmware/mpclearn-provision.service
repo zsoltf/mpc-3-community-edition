@@ -1,0 +1,13 @@
+[Unit]
+Description=Install bundled MPC controller package once
+RequiresMountsFor=/data /etc
+Before=mpclearn-boot.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/mpclearn/provision.sh
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target

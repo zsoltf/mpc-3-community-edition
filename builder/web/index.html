@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MPC 3 Community Edition Image Builder</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <style>
+    :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #101315; color: #f4f6f7; }
+    main { width: min(660px, calc(100vw - 32px)); padding: 34px; border: 1px solid #343b40; border-radius: 14px; background: #191e21; box-shadow: 0 18px 60px #0008; }
+    h1 { margin: 0 0 8px; font-size: 25px; letter-spacing: -.02em; }
+    .intro { color: #bbc3c8; line-height: 1.5; margin: 0 0 24px; }
+    .notice { padding: 12px 14px; margin-bottom: 18px; border-left: 3px solid #f2b544; background: #232321; color: #d9d9d0; font-size: 13px; line-height: 1.45; }
+    .file { min-height: 54px; padding: 14px; border-radius: 8px; background: #111518; color: #d7dde0; overflow-wrap: anywhere; }
+    input[type=file], [hidden] { display: none !important; }
+    button, .download { appearance: none; border: 0; border-radius: 8px; padding: 12px 17px; background: #eceff1; color: #121516; font-weight: 700; font-size: 14px; cursor: pointer; text-decoration: none; display: inline-block; }
+    button.primary, .download.primary { background: #f2b544; color: #17120a; }
+    button:disabled { opacity: .45; cursor: default; }
+    .actions { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+    .progress { margin-top: 24px; display: none; }
+    progress { width: 100%; height: 14px; accent-color: #f2b544; }
+    #message { margin: 9px 0 0; color: #cbd1d5; }
+    #error { display: none; margin-top: 20px; padding: 13px; border-radius: 8px; background: #3a1e22; color: #ffcbd1; white-space: pre-wrap; }
+    #result { display: none; margin-top: 20px; padding: 15px; border-radius: 8px; background: #183025; color: #d8f7e4; line-height: 1.48; overflow-wrap: anywhere; }
+    .small { color: #98a2a8; font-size: 12px; margin-top: 22px; line-height: 1.5; }
+    code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; }
+    a { color: #f2c76c; text-underline-offset: 3px; }
+    a:focus-visible, button:focus-visible { outline: 2px solid #f2c76c; outline-offset: 4px; }
+    nav { display: flex; flex-wrap: wrap; gap: 10px 20px; margin: 0 0 20px; font-size: 14px; }
+    footer { border-top: 1px solid #343b40; margin-top: 24px; padding-top: 20px; }
+    footer nav { margin-bottom: 10px; }
+    footer p { margin: 0; color: #98a2a8; font-size: 12px; line-height: 1.5; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>MPC 3 Community Edition Image Builder</h1>
+  <p class="intro">Build a custom MPC 3.9 image with Mackie MCU support.</p>
+  <nav aria-label="Help">
+    <a href="guide.html#quick-start" target="_blank" rel="noopener">Quick-start guide</a>
+    <a href="guide.html#cheat-sheet" target="_blank" rel="noopener">X-Touch cheat sheet</a>
+  </nav>
+  <div class="notice">Experimental release candidate r3 (performance update) for MPC 3.9.1 Gen1. MCU tested on Live II with a full X-Touch in MC/USB mode; other Gen1 models need testing. Not for Gen2 or Force. This page builds an image; it does not flash your MPC.</div>
+  <p><a class="download primary" href="https://cdn.inmusicbrands.com/Software/MPC/MVSU391APC/MPC-3.9.1-Gen1-update.img" rel="noreferrer">Download official MPC 3.9.1 firmware from Akai</a></p>
+  <p class="small">Already downloaded it? Choose the <code>MPC-3.9.1-Gen1-update.img</code> file below. <a href="https://www.akaipro.com/downloads-and-support/downloads/firmware/mpc/" rel="noreferrer">Akai firmware downloads</a></p>
+  <input id="picker" type="file" accept=".img,application/octet-stream">
+  <input id="keyPicker" type="file" accept=".pub,text/plain">
+  <div id="file" class="file">No image selected</div>
+  <div class="actions">
+    <button id="select">Choose Downloaded Firmware</button>
+    <button id="selectKey">Add Owner Public Key (Optional)</button>
+    <button id="clearKey" hidden>Remove Public Key</button>
+    <button id="create" class="primary" disabled>Create MPC 3 CE Image</button>
+  </div>
+  <p id="sshStatus" class="small">SSH disabled. Add your own Ed25519 public key only if you want root SSH access.</p>
+  <section id="progress" class="progress" aria-live="polite">
+    <progress id="bar" max="100" value="0"></progress>
+    <p id="message">Loading the local image engine...</p>
+  </section>
+  <div id="error" role="alert"></div>
+  <div id="result">
+    <strong>Verified image ready.</strong>
+    <div class="actions">
+      <a id="imageDownload" class="download primary">Save MCU Image</a>
+    </div>
+    <p>Copy this file to the root of your USB drive. Keep the filename ending in <code>-update.img</code>; remove any browser-added <code>(1)</code> suffix.</p>
+    <p id="sshResult"></p>
+    <p>Image SHA-256:<br><code id="imageSHA"></code></p>
+  </div>
+  <p class="small">Your firmware and optional public key stay in this browser. Nothing is uploaded. Image creation can take several minutes and needs about 2.5 GB of free memory. Keep this tab open until verification finishes.</p>
+  <footer>
+    <nav id="githubLinks" aria-label="Community">
+      <a id="githubStar" href="https://github.com/zsoltf/mpc-3-community-edition" target="_blank" rel="noopener noreferrer">Star on GitHub</a>
+      <a id="githubSource" href="https://github.com/zsoltf/mpc-3-community-edition" target="_blank" rel="noopener noreferrer">Source code</a>
+      <a href="https://github.com/zsoltf/mpc-3-community-edition/releases" target="_blank" rel="noopener noreferrer">Release notes</a>
+      <a id="githubIssues" href="https://github.com/zsoltf/mpc-3-community-edition/issues" target="_blank" rel="noopener noreferrer">Report an issue</a>
+    </nav>
+
+    <p>Built on the community research in <a href="https://github.com/TheKikGen/MPC-LiveXplore" target="_blank" rel="noopener noreferrer">MPC-LiveXplore</a>. Unofficial; not affiliated with Akai Professional or Behringer.</p>
+  </footer>
+</main>
+<script>
+const imageName = 'MPC-3.9.1-Gen1-CE-r3-update.img';
+const picker = document.querySelector('#picker');
+const keyPicker = document.querySelector('#keyPicker');
+const select = document.querySelector('#select');
+const selectKey = document.querySelector('#selectKey');
+const clearKey = document.querySelector('#clearKey');
+const create = document.querySelector('#create');
+const file = document.querySelector('#file');
+const progress = document.querySelector('#progress');
+const bar = document.querySelector('#bar');
+const message = document.querySelector('#message');
+const errorBox = document.querySelector('#error');
+const result = document.querySelector('#result');
+let selectedFile = null;
+let selectedKey = null;
+let workerReady = false;
+let downloads = [];
+const worker = new Worker('worker.js');
+
+worker.onmessage = event => {
+  const data = event.data;
+  if (data.type === 'ready') {
+    workerReady = true;
+    create.disabled = !selectedFile;
+  } else if (data.type === 'progress') {
+    bar.value = data.progress;
+    message.textContent = data.message;
+  } else if (data.type === 'error') {
+    showError(data.message);
+    finishBusy();
+  } else if (data.type === 'complete') {
+    setDownload('imageDownload', data.image, imageName, 'application/octet-stream');
+    document.querySelector('#imageSHA').textContent = data.imageSHA256;
+    document.querySelector('#sshResult').textContent = data.sshEnabled
+      ? 'SSH enabled with the selected owner public key.'
+      : 'SSH disabled in this image.';
+    bar.value = 100;
+    message.textContent = 'Verified MCU image created';
+    result.style.display = 'block';
+    finishBusy();
+  }
+};
+worker.onerror = event => {
+  showError('The local image engine stopped: ' + (event.message || 'unknown browser error'));
+  finishBusy();
+};
+
+select.onclick = () => picker.click();
+picker.onchange = () => {
+  invalidateResult();
+  selectedFile = picker.files[0] || null;
+  file.textContent = selectedFile ? selectedFile.name + ' (' + formatBytes(selectedFile.size) + ')' : 'No image selected';
+  create.disabled = !(selectedFile && workerReady);
+  showError('');
+};
+selectKey.onclick = () => keyPicker.click();
+keyPicker.onchange = () => {
+  invalidateResult();
+  selectedKey = keyPicker.files[0] || null;
+  if (selectedKey && (selectedKey.size === 0 || selectedKey.size > 16384)) {
+    selectedKey = null;
+    keyPicker.value = '';
+    showError('Owner public key must be a nonempty OpenSSH .pub file (16 KB maximum).');
+  } else {
+    showError('');
+  }
+  document.querySelector('#sshStatus').textContent = selectedKey
+    ? 'SSH enabled with: ' + selectedKey.name + '. Only this key will authorize root login.'
+    : 'SSH disabled. Add your own Ed25519 public key only if you want root SSH access.';
+  clearKey.hidden = !selectedKey;
+};
+clearKey.onclick = () => {
+  invalidateResult();
+  selectedKey = null;
+  keyPicker.value = '';
+  clearKey.hidden = true;
+  document.querySelector('#sshStatus').textContent = 'SSH disabled. Add your own Ed25519 public key only if you want root SSH access.';
+};
+create.onclick = async () => {
+  if (!selectedFile || !workerReady) return;
+  clearDownloads();
+  showError('');
+  result.style.display = 'none';
+  progress.style.display = 'block';
+  select.disabled = selectKey.disabled = clearKey.disabled = create.disabled = true;
+  bar.value = 1;
+  message.textContent = 'Reading the selected image...';
+  try {
+    const image = await selectedFile.arrayBuffer();
+    const ownerKey = selectedKey ? await selectedKey.arrayBuffer() : new ArrayBuffer(0);
+    worker.postMessage({type: 'build', image, ownerKey}, [image, ownerKey]);
+  } catch (error) {
+    showError('Could not read the selected image: ' + error.message);
+    finishBusy();
+  }
+};
+function setDownload(id, bytes, name, type) {
+  const url = URL.createObjectURL(new Blob([bytes], {type}));
+  downloads.push(url);
+  const link = document.querySelector('#' + id);
+  link.href = url;
+  link.download = name;
+}
+function clearDownloads() { downloads.forEach(URL.revokeObjectURL); downloads = []; }
+function invalidateResult() { clearDownloads(); result.style.display = 'none'; document.querySelector('#imageSHA').textContent = ''; }
+function finishBusy() { select.disabled = selectKey.disabled = clearKey.disabled = false; create.disabled = !(selectedFile && workerReady); }
+function showError(text) { errorBox.textContent = text; errorBox.style.display = text ? 'block' : 'none'; }
+function formatBytes(value) { return (value / (1024 * 1024)).toFixed(1) + ' MB'; }
+</script>
+</body>
+</html>

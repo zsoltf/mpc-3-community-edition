@@ -1,0 +1,12 @@
+# Local firmware inputs, device key selection and generated image evidence.
+/inputs/
+/artifacts/
+/build/
+
+# Rebuildable plug-in, controller and VNC packages.
+**/package/
+
+# Interpreter and desktop caches.
+__pycache__/
+*.py[cod]
+.DS_Store

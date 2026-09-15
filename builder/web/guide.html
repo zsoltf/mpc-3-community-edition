@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>X-Touch setup and cheat sheet - MPC 3 Community Edition</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <style>
+    :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #101315; color: #f4f6f7; }
+    main { width: min(980px, calc(100vw - 32px)); margin: 28px auto 64px; }
+    header, section { border: 1px solid #343b40; border-radius: 12px; background: #191e21; padding: 24px; margin-bottom: 16px; }
+    h1 { margin: 8px 0; font-size: 28px; }
+    h2 { margin: 0 0 14px; font-size: 20px; }
+    h3 { margin: 22px 0 10px; font-size: 16px; }
+    p, li { line-height: 1.48; }
+    a { color: #f2c467; }
+    .back { font-weight: 700; text-decoration: none; }
+    button { border: 0; border-radius: 7px; padding: 10px 14px; background: #f2b544; color: #17120a; font: inherit; cursor: pointer; }
+    a:focus-visible, button:focus-visible { outline: 2px solid #f2b544; outline-offset: 4px; }
+    .tools { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-top: 16px; }
+    .lede { color: #bbc3c8; margin-bottom: 0; }
+    .notice { border-left: 3px solid #f2b544; background: #232321; padding: 12px 14px; }
+    ol { padding-left: 23px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; vertical-align: top; border-bottom: 1px solid #343b40; padding: 8px 9px; line-height: 1.4; }
+    th { color: #f2c467; }
+    tr:last-child td { border-bottom: 0; }
+    code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .92em; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .compact { margin: 0; padding-left: 20px; }
+    @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } header, section { padding: 18px; } }
+    @media print {
+      :root { color-scheme: light; }
+      body { background: white; color: black; }
+      main { width: auto; margin: 0; }
+      header, section { border: 0; border-radius: 0; padding: 0; margin: 0 0 18pt; background: white; break-inside: avoid; }
+      section.long { break-inside: auto; }
+      h2, h3, tr { break-inside: avoid; }
+      th, td { border-color: #bbb; padding: 5pt; }
+      th { color: black; }
+      a { color: black; text-decoration: none; }
+      .back, .tools { display: none; }
+      .notice { background: white; border: 1px solid #777; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <a class="back" href="index.html">&larr; Back to image builder</a>
+    <h1>Full X-Touch setup and cheat sheet</h1>
+    <p class="lede">MPC Live II 3.9.1, full Behringer X-Touch in MC/USB mode, MPC Learn runtime <code>ce4ccce</code>.</p>
+    <nav class="tools" aria-label="Guide actions">
+      <button type="button" onclick="window.print()">Print / Save PDF</button>
+      <a href="#quick-start">Setup</a>
+      <a href="#cheat-sheet">Controls</a>
+      <a href="xtouch-cheatsheet.md" download>Download text cheat sheet</a>
+    </nav>
+  </header>
+
+  <section id="quick-start">
+    <h2>Quick start</h2>
+    <ol>
+      <li>Power off the X-Touch. Hold channel 1 <strong>Select</strong> while powering it on. Set encoder 1 to <strong>MC</strong> and encoder 2 to <strong>USB</strong>, then press <strong>Select</strong> to save.</li>
+      <li>Connect the X-Touch USB port directly to the MPC.</li>
+      <li>With the MPC on AC power, copy the generated image to the root of a USB drive and use the MPC firmware update flow. Its filename must end in <code>-update.img</code>; remove any browser-added <code>(1)</code> suffix.</li>
+      <li>After the configured MPC boots, create a blank project or load your User Template or a saved project. The controller connects when project creation or loading completes.</li>
+    </ol>
+    <p id="compatibility" class="notice"><strong>MIDI input setup:</strong> In MPC Preferences &gt; MIDI/Sync, turn off <strong>Track, Global and Control</strong> for the <code>X-TOUCH_INT</code> input. The MCU bridge receives these controls independently; this keeps controller messages from playing notes or bending pitch on instrument tracks. Leave your other MIDI ports configured as usual. <strong>MCU support does not require Global MIDI Learn or an XMM profile.</strong> The image preserves your MIDI settings. Global MIDI Learn and optional Mini/Launch Control mappings are a separate feature.</p>
+  </section>
+
+  <section id="cheat-sheet" class="long">
+    <h2>Tracks and mixing</h2>
+    <table>
+      <thead><tr><th>Control</th><th>Action</th></tr></thead>
+      <tbody>
+        <tr><td>Channel Left / Right</td><td>Select previous / next MPC track. Also changes the parent track in Send, Drum Mix, I/O and Q-Link views.</td></tr>
+        <tr><td>Bank Left / Right</td><td>Fixed banks of eight strips. Changes pad banks in Drum Mix, parameter pages in Plug-In, and Q-Links 1-8 / 9-16 in EQ. Send has no banking.</td></tr>
+        <tr><td>Strip Select</td><td>Select the visible track in the normal mixer. In Send and Drum Mix, lit Select buttons identify the parent track; pad selection is unavailable.</td></tr>
+        <tr><td>Eight faders</td><td>Track volume in the normal mixer, or the active page target. Flip can exchange targets.</td></tr>
+        <tr><td>Master fader</td><td>Global master output level.</td></tr>
+        <tr><td>Eight encoders</td><td>Pan in the normal mixer, or active-page controls. Push centers ordinary pan.</td></tr>
+        <tr><td>Mute / Solo</td><td>Toggle strip mute / solo; controls the pad in Drum Mix.</td></tr>
+        <tr><td>Rec/Rdy</td><td>Toggle track recording arm where available. Pad arm is unavailable.</td></tr>
+        <tr><td>Track</td><td>Return to the normal track mixer with track names and volume readouts.</td></tr>
+        <tr><td>Shift + Track</td><td>Open the selected track's native type chooser. Choose on the MPC. This does not create a track.</td></tr>
+        <tr><td>Instrument</td><td>The top assignment button beside EQ opens the native Add Track chooser. Choose Drum, MIDI or another type on the MPC.</td></tr>
+        <tr><td>Audio Inst</td><td>The separate mixer-view button filters Instrument tracks. It does not open Add Track.</td></tr>
+        <tr><td>Pan</td><td>Pan assignment and pan value presentation.</td></tr>
+        <tr><td>Send</td><td>Selected track's four sends on faders and corresponding return levels on encoders.</td></tr>
+        <tr><td>Flip</td><td>Exchange fader and encoder targets in mixer, Send, Drum Mix, plug-in parameter and Q-Link pages.</td></tr>
+        <tr><td>Shift + Flip</td><td>Toggle motor following On/Off. The preference persists; control input remains available while following is Off.</td></tr>
+        <tr><td>Name/Value</td><td>Switch label/value display. Editing a control temporarily shows its value.</td></tr>
+      </tbody>
+    </table>
+    <p>Audio levels use MPC's dB scale: 0 dB default and +6 dB maximum. MIDI track volume is 0-127. MIDI pan/sends and CV volume are unavailable. Motors follow MPC state without requiring an initial fader touch.</p>
+  </section>
+
+  <section>
+    <h2>Mixer views</h2>
+    <table>
+      <thead><tr><th>Button</th><th>View</th></tr></thead>
+      <tbody>
+        <tr><td>MIDI Tracks</td><td>MIDI tracks</td></tr>
+        <tr><td>Audio Tracks</td><td>Audio tracks</td></tr>
+        <tr><td>Audio Inst</td><td>Instrument tracks</td></tr>
+        <tr><td>Busses</td><td>Submixes</td></tr>
+        <tr><td>Outputs</td><td>Outputs</td></tr>
+        <tr><td>Global View / User</td><td>All channel types</td></tr>
+        <tr><td>Inputs</td><td>Selected-track I/O</td></tr>
+        <tr><td>Aux</td><td>Drum Mix for the selected Drum track; press again to leave.</td></tr>
+        <tr><td>Shift + Aux</td><td>Returns mixer</td></tr>
+        <tr><td>Shift + Audio Inst</td><td>Alias for Drum Mix</td></tr>
+        <tr><td>Shift + Inputs</td><td>Diagnostic input-type filter; its population is not qualified.</td></tr>
+      </tbody>
+    </table>
+    <p>Drum Mix shows pads A01-H16. Faders control volume, encoders control pan, and Flip swaps them. A non-Drum parent leaves the strips blank. Pad names, colors, meters, Select and Arm are unavailable.</p>
+  </section>
+
+  <section class="long">
+    <h2>Plug-In, effects and Q-Links</h2>
+    <table>
+      <thead><tr><th>Control</th><th>Action</th></tr></thead>
+      <tbody>
+        <tr><td>Plug-In</td><td>Show four inserts for the selected track. Press again from parameters to return to slots.</td></tr>
+        <tr><td>Push occupied-slot encoder</td><td>Open its parameter pages.</td></tr>
+        <tr><td>Shift + push occupied-slot encoder</td><td>Toggle insert bypass from the slot list.</td></tr>
+        <tr><td>Push empty-slot encoder</td><td>Open MPC's native Add Effect chooser; finish on MPC.</td></tr>
+        <tr><td>Shift + Plug-In while editing</td><td>Open MPC's native Replace Effect chooser; finish on MPC.</td></tr>
+        <tr><td>Turn parameter encoder</td><td>Adjust the displayed parameter.</td></tr>
+        <tr><td>Push parameter encoder</td><td>Toggle a parameter with two declared states. Continuous parameters do not reset.</td></tr>
+        <tr><td>Bank Left / Right in parameters</td><td>Previous / next authored group or parameter page.</td></tr>
+        <tr><td>Flip in parameters</td><td>Parameters on faders; bank track volumes on encoders.</td></tr>
+        <tr><td>EQ</td><td>Q-Links 1-8 on encoders. EQ effects remain ordinary inserts.</td></tr>
+        <tr><td>Bank Left / Right on EQ</td><td>Switch Q-Links 1-8 / 9-16.</td></tr>
+        <tr><td>Shift + Bank Left / Right on EQ</td><td>Previous / next MPC Q-Link mode.</td></tr>
+        <tr><td>Flip on EQ</td><td>Q-Links on faders; bank track volumes on encoders.</td></tr>
+      </tbody>
+    </table>
+    <p>Q-Link encoder push has no reset/toggle assignment. Presets, reliable parameter-default reset and synth-instance parameter pages are unavailable. Chooser navigation stays on MPC. Add/Replace chooses an installed effect; it does not install plug-ins.</p>
+  </section>
+
+  <section>
+    <h2>Inputs: selected-track I/O</h2>
+    <p>Turn encoders through MPC's applicable choices. Faders retain track volumes; encoder push and Flip do not change routing. Unavailable fields show N/A/dashes.</p>
+    <table>
+      <thead><tr><th>Encoder</th><th>Field</th><th>Encoder</th><th>Field</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>Monitor</td><td>5</td><td>Audio Out</td></tr>
+        <tr><td>2</td><td>MIDI In Port</td><td>6</td><td>MIDI Out Port</td></tr>
+        <tr><td>3</td><td>MIDI In Channel</td><td>7</td><td>MIDI Out Channel</td></tr>
+        <tr><td>4</td><td>Send To Track</td><td>8</td><td>Audio In</td></tr>
+      </tbody>
+    </table>
+    <p>Send To Track is internal MIDI routing, separate from the four audio sends on the Send page.</p>
+  </section>
+
+  <section class="long">
+    <h2>Transport, editing and automation</h2>
+    <table>
+      <thead><tr><th>Control</th><th>Action</th></tr></thead>
+      <tbody>
+        <tr><td>Play</td><td>Play from the current position.</td></tr>
+        <tr><td>Stop</td><td>Stop immediately. A distinct press while already stopped returns to the beginning and remains stopped.</td></tr>
+        <tr><td>Record</td><td>Native MPC recording toggle.</td></tr>
+        <tr><td>Rewind / Fast Forward</td><td>Move backward / forward in beats; holding repeats.</td></tr>
+        <tr><td>Jog wheel</td><td>Move by beats.</td></tr>
+        <tr><td>Shift + jog wheel</td><td>Fine movement in pulses/ticks.</td></tr>
+        <tr><td>Cycle</td><td>Toggle loop.</td></tr>
+        <tr><td>Click</td><td>Toggle metronome.</td></tr>
+        <tr><td>Save</td><td>Native Save action.</td></tr>
+        <tr><td>Undo</td><td>Native Undo, including edits MPC puts in its undo history.</td></tr>
+        <tr><td>Shift + Undo</td><td>Redo.</td></tr>
+        <tr><td>Read/Off</td><td>Automation Read.</td></tr>
+        <tr><td>Write</td><td>Automation Write.</td></tr>
+        <tr><td>Group</td><td>Automation Off.</td></tr>
+        <tr><td>Cursor arrows</td><td>Native context-dependent navigation.</td></tr>
+        <tr><td>Zoom</td><td>Toggle arrows between ordinary navigation and horizontal/vertical zoom.</td></tr>
+        <tr><td>Enter / Cancel</td><td>Native context-dependent key actions; not qualified for every popup. Use MPC for chooser selection/cancel.</td></tr>
+        <tr><td>Shift</td><td>Modifier for the combinations listed on this page.</td></tr>
+      </tbody>
+    </table>
+    <p>The position display uses bars/beats/ticks. SMPTE switching is unavailable.</p>
+  </section>
+
+  <section>
+    <div class="grid">
+      <div>
+        <h2>F-button shortcuts</h2>
+        <table>
+          <thead><tr><th>Button</th><th>MPC page</th></tr></thead>
+          <tbody>
+            <tr><td>F1</td><td>Main</td></tr><tr><td>F2</td><td>Arrange</td></tr>
+            <tr><td>F3</td><td>Clip</td></tr><tr><td>F4</td><td>Track Mix</td></tr>
+            <tr><td>F5</td><td>Pad Mix</td></tr><tr><td>F6</td><td>Track Edit</td></tr>
+            <tr><td>F7</td><td>Sample Edit</td></tr><tr><td>F8</td><td>Step Sequencer</td></tr>
+          </tbody>
+        </table>
+        <p>F6 is Track Edit. Shift + Track opens the current track's type chooser.</p>
+      </div>
+      <div>
+        <h2>Known limits</h2>
+        <ul class="compact">
+          <li>Unassigned: SMPTE/Beats, Option, Control, Alt, Trim, Touch, Latch, Marker, Nudge, Drop, Replace, transport-area Solo, Scrub and footswitch inputs.</li>
+          <li>Channel Solo buttons do work. Unlisted modifier combinations add no implied action.</li>
+          <li>Only the full X-Touch is qualified. Discovery currently depends on X-Touch device/port names; colors and motor policy are hardware-specific.</li>
+          <li>Other MCU devices need a device profile and hardware checks. HUI is unavailable.</li>
+          <li>Controller chooser navigation, synth/preset navigation, plug-in presets, Q-Link push reset, SMPTE display and pad Select/Arm are unavailable.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+</main>
+</body>
+</html>

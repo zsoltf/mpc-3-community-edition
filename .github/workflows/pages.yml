@@ -1,0 +1,47 @@
+name: Publish MPC 3 CE Image Builder
+
+on:
+  push:
+    branches: [main]
+    paths: ['builder/**', '.github/workflows/pages.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.4'
+          cache-dependency-path: builder/go.sum
+      - name: Check image builder
+        working-directory: builder
+        run: go test ./...
+      - name: Build static site
+        run: sh builder/build-web.sh
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: builder/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publish verified static files
+        id: deployment
+        uses: actions/deploy-pages@v4

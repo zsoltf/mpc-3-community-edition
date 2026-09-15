@@ -1,0 +1,22 @@
+[Unit]
+Description=MPC controller session boot admission
+Wants=acvs.service
+# Match the stock prerequisites, but do not order against acvs: the existing
+# session owner synchronously stops that service during its admission.
+After=az01-network-midi.service az01-script-runner.service az01-usbsata-fixer.service touch-fw-update.service xmos-update.service
+RequiresMountsFor=/data /media/az01-internal /etc
+ConditionPathExists=/etc/mpclearn-boot-stage
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/data/mpclearn-boot/mcu-boot.sh start
+ExecStopPost=/data/mpclearn-boot/mcu-boot.sh recover
+TimeoutStartSec=90
+TimeoutStopSec=90
+KillMode=control-group
+SendSIGKILL=yes
+Restart=no
+
+[Install]
+WantedBy=multi-user.target
