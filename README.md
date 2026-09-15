@@ -1,18 +1,28 @@
 # MPC 3 Community Edition
 
-Mackie Control (MCU) support for standalone MPC firmware 3.9.1 Gen1, tested
-with an MPC Live II and a full Behringer X-Touch. The controller drives mixer,
-sends, drum pad mix, inserts, Q-Links and transport through MPC's own state,
-so motor faders, names, colors and meters follow whatever changes on the MPC.
-No computer is involved while playing.
+A community build of the MPC 3.9.1 Gen1 firmware that adds features to
+standalone MPCs. You build the image yourself in a browser from Akai's official
+update file; nothing is uploaded and no firmware is distributed here.
 
-The project ships as a browser-based image builder. You supply the official
-Akai firmware; the builder patches a copy in your browser and verifies the
-result. Nothing is uploaded, and Akai firmware is not distributed here.
+Shipped so far: Mackie Control (MCU) support, tested with an MPC Live II and a
+full Behringer X-Touch. The controller drives mixer, sends, drum pad mix,
+inserts, Q-Links and transport through MPC's own state, so motor faders,
+names, colors and meters follow whatever changes on the MPC. The roadmap below
+lists what comes next.
 
 - Image builder: https://zsoltf.github.io/mpc-3-community-edition/
-- Setup and controller guide: https://zsoltf.github.io/mpc-3-community-edition/guide.html
+- X-Touch setup and cheat sheet: https://zsoltf.github.io/mpc-3-community-edition/guide.html
 - Releases: https://github.com/zsoltf/mpc-3-community-edition/releases
+
+## Roadmap
+
+- [x] Mackie MCU support
+- [ ] Global MIDI Learn
+- [ ] Mouse support
+- [ ] Basic VST2 support
+- [ ] Bonus update 1
+- [ ] Bonus update 2
+- [ ] Bonus update 3
 
 ## Requirements
 

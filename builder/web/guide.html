@@ -6,59 +6,115 @@
   <title>X-Touch setup and cheat sheet - MPC 3 Community Edition</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <style>
-    :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    :root {
+      color-scheme: light;
+      --paper: #ffffff; --ink: #141414; --ink-2: #4b5054; --ink-3: #8a9095; --rule: #d9dcdf; --rule-2: #eceef0; --red: #d6362a;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    }
     * { box-sizing: border-box; }
-    body { margin: 0; background: #101315; color: #f4f6f7; }
-    main { width: min(980px, calc(100vw - 32px)); margin: 28px auto 64px; }
-    header, section { border: 1px solid #343b40; border-radius: 12px; background: #191e21; padding: 24px; margin-bottom: 16px; }
-    h1 { margin: 8px 0; font-size: 28px; }
-    h2 { margin: 0 0 14px; font-size: 20px; }
-    h3 { margin: 22px 0 10px; font-size: 16px; }
-    p, li { line-height: 1.48; }
-    a { color: #f2c467; }
-    .back { font-weight: 700; text-decoration: none; }
-    button { border: 0; border-radius: 7px; padding: 10px 14px; background: #f2b544; color: #17120a; font: inherit; cursor: pointer; }
-    a:focus-visible, button:focus-visible { outline: 2px solid #f2b544; outline-offset: 4px; }
-    .tools { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-top: 16px; }
-    .lede { color: #bbc3c8; margin-bottom: 0; }
-    .notice { border-left: 3px solid #f2b544; background: #232321; padding: 12px 14px; }
-    ol { padding-left: 23px; }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th, td { text-align: left; vertical-align: top; border-bottom: 1px solid #343b40; padding: 8px 9px; line-height: 1.4; }
-    th { color: #f2c467; }
+    html { background: var(--paper); scroll-behavior: smooth; }
+    body { margin: 0; font-family: var(--sans); font-size: 15px; color: var(--ink); background: var(--paper); line-height: 1.5; }
+    a { color: var(--ink); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+    a:hover { color: var(--red); }
+    a:focus-visible, button:focus-visible { outline: 2px solid var(--red); outline-offset: 3px; }
+    code { font-family: var(--mono); font-size: .88em; background: var(--rule-2); padding: 1px 4px; border-radius: 2px; }
+    main { width: min(760px, 100% - 32px); margin: 0 auto 40px; }
+    .top { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; padding: 18px 0 14px; border-bottom: 1px solid var(--ink); }
+    .top .brand { font-weight: 600; text-decoration: none; }
+    .top nav { display: flex; gap: 14px; flex-wrap: wrap; justify-content: flex-end; font-size: 14px; }
+    .top nav a { text-decoration: none; color: var(--ink-2); white-space: nowrap; }
+    .top nav a:hover { color: var(--red); }
+    .label { font-family: var(--mono); font-size: 12px; color: var(--ink-3); letter-spacing: .04em; }
+    header { padding: 36px 0 24px; border-bottom: 1px solid var(--rule); }
+    figure { margin: 0 0 8px; }
+    .figure-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    figure svg { width: 100%; min-width: 640px; height: auto; display: block; }
+    figcaption { display: grid; grid-template-columns: auto 1fr; gap: 0 14px; margin-top: 10px; font-size: 13px; color: var(--ink-2); }
+    figcaption b { font-family: var(--mono); font-weight: 400; color: var(--ink-3); font-size: 12px; letter-spacing: .04em; }
+    .key { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 10px 0 0; padding: 0; list-style: none; font-size: 13px; color: var(--ink-2); }
+    .key li::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 7px; vertical-align: -1px; border: 1px solid var(--ink); }
+    .key li.on::before { background: var(--ink); }
+    .key li.off::before { border-color: var(--rule); background: var(--paper); }
+    .key li.lcd::before { background: var(--red); border-color: var(--red); }
+    h1 { font-size: 28px; font-weight: 600; letter-spacing: -.01em; line-height: 1.2; margin: 6px 0 12px; }
+    .lede { color: var(--ink-2); margin: 0; }
+    .tools { display: flex; gap: 8px 16px; align-items: center; flex-wrap: wrap; margin-top: 16px; font-size: 14px; }
+    button { appearance: none; font: inherit; font-size: 14px; font-weight: 500; border: 1px solid var(--ink); border-radius: 3px; padding: 7px 12px; background: var(--paper); color: var(--ink); cursor: pointer; }
+    button:hover { background: var(--rule-2); }
+    section { padding: 24px 0; border-bottom: 1px solid var(--rule); }
+    section.figure { padding: 22px 0 18px; }
+    section:last-of-type { border-bottom: 0; }
+    h2 { font-size: 18px; font-weight: 600; margin: 0 0 12px; }
+    h3 { margin: 20px 0 8px; font-size: 15px; }
+    p, li { line-height: 1.5; }
+    p { color: var(--ink-2); }
+    p strong, li strong { color: var(--ink); }
+    ol { padding-left: 22px; color: var(--ink-2); }
+    ol li { margin-bottom: 8px; }
+    .notice { border-left: 3px solid var(--red); padding: 10px 14px; color: var(--ink-2); background: #fff8f7; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; vertical-align: top; border-bottom: 1px solid var(--rule); padding: 8px 10px 8px 0; line-height: 1.45; }
+    th { font-family: var(--mono); font-size: 12px; font-weight: 400; color: var(--ink-3); letter-spacing: .04em; }
+    td:first-child { color: var(--ink); font-weight: 600; white-space: nowrap; padding-right: 18px; }
+    td { color: var(--ink-2); }
     tr:last-child td { border-bottom: 0; }
-    code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .92em; }
-    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
-    .compact { margin: 0; padding-left: 20px; }
-    @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } header, section { padding: 18px; } }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px; }
+    .compact { margin: 0; padding-left: 20px; color: var(--ink-2); }
+    .compact li { margin-bottom: 6px; }
+    footer { margin: 36px 0 0; padding-top: 14px; border-top: 1px solid var(--rule); font-size: 13px; color: var(--ink-3); }
+    footer nav { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-bottom: 8px; }
+    footer nav a { color: var(--ink-2); text-decoration: none; }
+    footer nav a:hover { color: var(--red); }
+    footer p { margin: 0; }
+    @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } td:first-child { white-space: normal; } }
     @media print {
-      :root { color-scheme: light; }
-      body { background: white; color: black; }
+      body { color: black; }
       main { width: auto; margin: 0; }
-      header, section { border: 0; border-radius: 0; padding: 0; margin: 0 0 18pt; background: white; break-inside: avoid; }
-      section.long { break-inside: auto; }
+      header, section { border: 0; padding: 0; margin: 0 0 18pt; }
       h2, h3, tr { break-inside: avoid; }
-      th, td { border-color: #bbb; padding: 5pt; }
-      th { color: black; }
+      th, td { border-color: #bbb; padding: 5pt; color: black; }
+      p, li, .compact { color: black; }
       a { color: black; text-decoration: none; }
-      .back, .tools { display: none; }
+      .top, .tools, footer { display: none; }
       .notice { background: white; border: 1px solid #777; }
+      code { background: none; padding: 0; }
     }
   </style>
-</head>
 <body>
 <main>
-  <header>
-    <a class="back" href="index.html">&larr; Back to image builder</a>
-    <h1>Full X-Touch setup and cheat sheet</h1>
-    <p class="lede">MPC Live II 3.9.1, full Behringer X-Touch in MC/USB mode, MPC Learn runtime <code>9000390</code>.</p>
-    <nav class="tools" aria-label="Guide actions">
-      <button type="button" onclick="window.print()">Print / Save PDF</button>
+  <div class="top">
+    <a class="brand" href="./">MPC 3 Community Edition</a>
+    <nav aria-label="Pages">
+      <a href="./">Image builder</a>
       <a href="#quick-start">Setup</a>
       <a href="#cheat-sheet">Controls</a>
-      <a href="xtouch-cheatsheet.md" download>Download text cheat sheet</a>
+      <a href="https://github.com/zsoltf/mpc-3-community-edition" rel="noopener noreferrer">Source</a>
+    </nav>
+  </div>
+  <header>
+
+    <span class="label">Mackie Control feature &middot; full X-Touch, MC/USB mode</span>
+    <h1>Setup and cheat sheet</h1>
+    <p class="lede">MPC Live II 3.9.1, MPC Learn runtime <code>9000390</code>. The controller connects on its own once a project is created or loaded.</p>
+    <nav class="tools" aria-label="Guide actions">
+      <button type="button" onclick="window.print()">Print or save as PDF</button>
+      <a href="xtouch-cheatsheet.md" download>Download the text cheat sheet</a>
     </nav>
   </header>
+
+  <section class="figure">
+  <figure>
+    <div class="figure-scroll">
+    <svg id="panel" viewBox="0 0 1000 330" role="img" aria-labelledby="panel-title panel-desc">
+      <title id="panel-title">Behringer X-Touch top panel</title>
+      <desc id="panel-desc">Schematic of the X-Touch. Controls that MPC 3 Community Edition drives or reads are drawn in black; unassigned controls are light grey.</desc>
+    </svg>
+    </div>
+    <figcaption><b>Fig. 1</b><span>What the MPC drives on a full X-Touch in MC/USB mode. Scribble strips show track names, values and colors from the project; motor faders and meters follow it. The tables below list every assignment.</span></figcaption>
+    <ul class="key"><li class="on">Assigned</li><li class="lcd">Driven by MPC state</li><li class="off">Unassigned</li></ul>
+  </figure>
+  </section>
 
   <section id="quick-start">
     <h2>Quick start</h2>
@@ -212,6 +268,100 @@
       </div>
     </div>
   </section>
+  <footer>
+    <nav aria-label="Community">
+      <a href="./">Image builder</a>
+      <a href="https://github.com/zsoltf/mpc-3-community-edition/releases" rel="noopener noreferrer">Release notes</a>
+      <a href="https://github.com/zsoltf/mpc-3-community-edition/issues" rel="noopener noreferrer">Report a result or bug</a>
+      <a href="https://github.com/zsoltf/mpc-3-community-edition" rel="noopener noreferrer">GitHub</a>
+    </nav>
+    <p>Unofficial; not affiliated with Akai, inMusic or Behringer.</p>
+  </footer>
 </main>
+<script>
+
+// Fig. 1: the X-Touch top panel as a control map. on=assigned, lcd=driven by MPC state, off=unassigned.
+(function drawPanel() {
+  const svg = document.querySelector('#panel');
+  const NS = 'http://www.w3.org/2000/svg';
+  const ink = '#141414', off = '#cfd3d6', red = '#d6362a';
+  function el(name, attrs, text) {
+    const node = document.createElementNS(NS, name);
+    for (const k in attrs) node.setAttribute(k, attrs[k]);
+    if (text != null) node.textContent = text;
+    svg.appendChild(node); return node;
+  }
+  const stroke = on => ({stroke: on ? ink : off, fill: 'none', 'stroke-width': on ? 1.4 : 1});
+  function box(x, y, w, h, on, label, r) {
+    el('rect', Object.assign({x, y, width: w, height: h, rx: r == null ? 2 : r}, stroke(on)));
+    if (label) el('text', {x: x + w / 2, y: y + h / 2 + 3, 'text-anchor': 'middle', 'font-size': 7.5, 'font-family': 'ui-monospace, Menlo, monospace', fill: on ? ink : off}, label);
+  }
+  function knob(cx, cy, r, on) {
+    el('circle', Object.assign({cx, cy, r}, stroke(on)));
+    el('line', {x1: cx, y1: cy - r + 2, x2: cx, y2: cy - r + 7, stroke: on ? ink : off, 'stroke-width': 1.5});
+    for (let i = 0; i < 11; i++) { const a = Math.PI * (0.75 + i * 1.5 / 10); el('circle', {cx: cx + Math.cos(a) * (r + 5), cy: cy + Math.sin(a) * (r + 5), r: 1.1, fill: on && i < 7 ? red : off}); }
+  }
+  el('rect', {x: 0.5, y: 0.5, width: 999, height: 329, rx: 8, fill: '#fff', stroke: ink, 'stroke-width': 1});
+  el('text', {x: 16, y: 20, 'font-size': 9, 'font-family': 'ui-monospace, Menlo, monospace', fill: '#8a9095', 'letter-spacing': 1.5}, 'X-TOUCH  MC / USB');
+  const names = ['Kick', 'Snare', 'HiHat', 'Bass', 'Keys', 'Lead', 'Pad', 'Vocal'];
+  const meters = [8, 6, 4, 9, 5, 6, 3, 10];
+  for (let i = 0; i < 8; i++) {
+    const x = 20 + i * 70;
+    // meter bridge
+    for (let k = 0; k < 12; k++) el('rect', {x: x + 26, y: 46 - k * 2.2, width: 8, height: 1.2, fill: k < meters[i] ? (k > 9 ? red : ink) : off});
+    // scribble strip
+    el('rect', {x, y: 52, width: 60, height: 24, rx: 2, fill: red, stroke: 'none'});
+    el('text', {x: x + 30, y: 62, 'text-anchor': 'middle', 'font-size': 8, 'font-family': 'ui-monospace, Menlo, monospace', fill: '#fff'}, names[i]);
+    el('text', {x: x + 30, y: 72, 'text-anchor': 'middle', 'font-size': 7, 'font-family': 'ui-monospace, Menlo, monospace', fill: '#fff'}, ['0.0dB', '-2.5dB', '-6.0dB', '-1.0dB', '-4.5dB', '-3.0dB', '-9.0dB', '+1.5dB'][i]);
+    knob(x + 30, 100, 11, true);
+    box(x + 8, 122, 44, 12, true, 'REC');
+    box(x + 8, 138, 44, 12, true, 'SOLO');
+    box(x + 8, 154, 44, 12, true, 'MUTE');
+    box(x + 8, 170, 44, 12, true, 'SELECT');
+    // fader
+    el('rect', {x: x + 28, y: 192, width: 4, height: 122, rx: 2, fill: '#f3f4f5', stroke: ink, 'stroke-width': 1});
+    const pos = [0.74, 0.62, 0.48, 0.70, 0.55, 0.60, 0.36, 0.80][i];
+    el('rect', {x: x + 19, y: 192 + (1 - pos) * 100, width: 22, height: 22, rx: 2, fill: '#fff', stroke: ink, 'stroke-width': 1.4});
+    el('line', {x1: x + 22, y1: 203 + (1 - pos) * 100, x2: x + 38, y2: 203 + (1 - pos) * 100, stroke: ink, 'stroke-width': 1});
+  }
+  // master section
+  const mx = 590;
+  el('line', {x1: mx - 12, y1: 30, x2: mx - 12, y2: 316, stroke: '#eceef0'});
+  // assignment (all assigned) and display
+  const assign = [['TRACK', 1], ['PAN', 1], ['EQ', 1], ['SEND', 1], ['PLUG-IN', 1], ['INST', 1]];
+  assign.forEach(([l, on], i) => box(mx + (i % 3) * 46, 36 + Math.floor(i / 3) * 16, 42, 12, on, l));
+  // timecode display (bars/beats/ticks)
+  el('rect', {x: mx + 150, y: 34, width: 120, height: 28, rx: 2, fill: '#fff', stroke: ink, 'stroke-width': 1.2});
+  el('text', {x: mx + 210, y: 53, 'text-anchor': 'middle', 'font-size': 13, 'font-family': 'ui-monospace, Menlo, monospace', fill: ink, 'letter-spacing': 2}, '004.03.480');
+  el('text', {x: mx + 150, y: 72, 'font-size': 7, 'font-family': 'ui-monospace, Menlo, monospace', fill: ink}, 'BARS  BEATS  TICKS');
+  box(mx + 290, 34, 40, 12, false, 'SMPTE');
+  box(mx + 290, 50, 40, 12, true, 'NAME/VAL');
+  // function keys
+  for (let i = 0; i < 8; i++) box(mx + i * 45, 84, 41, 12, true, 'F' + (i + 1));
+  // modify (unassigned) / automation / utility
+  [['SHIFT', 1], ['OPTION', 0], ['CONTROL', 0], ['ALT', 0]].forEach(([l, on], i) => box(mx + i * 45, 104, 41, 12, on, l));
+  [['READ', 1], ['WRITE', 1], ['TRIM', 0], ['TOUCH', 0], ['LATCH', 0], ['GROUP', 1]].forEach(([l, on], i) => box(mx + i * 45, 124, 41, 12, on, l));
+  [['SAVE', 1], ['UNDO', 1], ['CANCEL', 1], ['ENTER', 1]].forEach(([l, on], i) => box(mx + i * 45, 144, 41, 12, on, l));
+  // views / banks
+  [['MIDI', 1], ['INPUTS', 1], ['AUDIO', 1], ['AUD INST', 1], ['AUX', 1], ['BUSES', 1], ['OUTPUTS', 1], ['USER', 1]].forEach(([l, on], i) => box(mx + i * 45, 168, 41, 12, on, l));
+  [['FLIP', 1], ['GLOBAL', 1], ['BANK <', 1], ['BANK >', 1], ['CH <', 1], ['CH >', 1]].forEach(([l, on], i) => box(mx + i * 45, 188, 41, 12, on, l));
+  // transport
+  [['MARKER', 0], ['NUDGE', 0], ['CYCLE', 1], ['DROP', 0], ['REPLACE', 0], ['CLICK', 1], ['SOLO', 0]].forEach(([l, on], i) => box(mx + i * 45, 212, 41, 12, on, l));
+  [['REW', 1], ['FF', 1], ['STOP', 1], ['PLAY', 1], ['REC', 1]].forEach(([l, on], i) => box(mx + i * 56, 232, 52, 18, on, l, 3));
+  // arrows / zoom / scrub / jog
+  box(mx + 20, 262, 22, 14, true, '↑'); box(mx + 20, 296, 22, 14, true, '↓'); box(mx - 4, 279, 22, 14, true, '←'); box(mx + 44, 279, 22, 14, true, '→'); box(mx + 20, 279, 22, 14, true, 'ZOOM');
+  box(mx + 90, 262, 40, 12, false, 'SCRUB');
+  el('circle', {cx: mx + 200, cy: 288, r: 30, fill: '#fff', stroke: ink, 'stroke-width': 1.4});
+  el('circle', {cx: mx + 200, cy: 288, r: 9, fill: 'none', stroke: ink, 'stroke-width': 1});
+  el('circle', {cx: mx + 214, cy: 274, r: 2.5, fill: ink});
+  el('text', {x: mx + 200, y: 326, 'text-anchor': 'middle', 'font-size': 7.5, 'font-family': 'ui-monospace, Menlo, monospace', fill: ink}, 'JOG: BEATS  SHIFT: TICKS');
+  // master fader
+  el('rect', {x: mx + 300, y: 200, width: 4, height: 114, rx: 2, fill: '#f3f4f5', stroke: ink, 'stroke-width': 1});
+  el('rect', {x: mx + 291, y: 230, width: 22, height: 22, rx: 2, fill: '#fff', stroke: ink, 'stroke-width': 1.4});
+  el('line', {x1: mx + 294, y1: 241, x2: mx + 310, y2: 241, stroke: ink, 'stroke-width': 1});
+  el('text', {x: mx + 302, y: 326, 'text-anchor': 'middle', 'font-size': 7.5, 'font-family': 'ui-monospace, Menlo, monospace', fill: ink}, 'MASTER');
+  el('text', {x: 20, y: 326, 'font-size': 7.5, 'font-family': 'ui-monospace, Menlo, monospace', fill: ink}, 'CHANNELS 1-8: VOLUME  PAN  REC  SOLO  MUTE  SELECT  METER  NAME  COLOR');
+})();
+</script>
 </body>
 </html>
