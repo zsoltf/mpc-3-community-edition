@@ -9,12 +9,13 @@
 #include <time.h>
 #include <unistd.h>
 #include <math.h>
+#include <stddef.h>
 /* Reusable consumer copies only observer-owned words. The topology and each
  * scalar are independently coherent; this is not an atomic cross-field view. */
 typedef struct {uint32_t property,incarnation,owner_incarnation,revision,bits,updates,seed,available,error,length;char text[CHANNEL_TEXT+1];} CopiedField;
 typedef struct {uint32_t incarnation,available,tick,token,revision,left,right,enabled,site;} CopiedMeter;
 typedef struct {uint32_t serial,track,program,kind,incarnation,binding,vptr,revision,bits,updates,seed,available,track_owner,program_owner,meter_id,pad_owner,pad_index,pad_generation;CopiedField fields[CF_COUNT];CopiedMeter meter;} CopiedTrack;
-typedef struct {uint32_t epoch,generation,revision,count,ready,heartbeat,error,alive,allocated,project_owner,selected_serial;CopiedField selection,master,playing,automation,loop,record_mode,click;uint32_t position_available,position_error,position_tick,position_token,bar,beat,clock;CopiedTrack tracks[MIRROR_TRACKS];CopiedMeter master_meter;uint32_t meter_error,meter_cells,meter_tokens,meter_closed,automation_detail_available,automation_mixed,automation_count,automation_detail_tick,automation_generation,editor_owner,zoom_owner;uint32_t send_programs[4],send_owners[4];EffectsCopy effects;uint32_t effects_available;QLinkCopy qlinks;uint32_t qlinks_available;IOCopy io;uint32_t io_available;uint32_t pad_count,pad_error;const PadState *pad_source;CopiedTrack pads[PAD_SLOTS];} CopiedMirror;
+typedef struct {uint32_t epoch,generation,revision,count,ready,heartbeat,error,alive,allocated,project_owner,selected_serial;CopiedField selection,master,playing,automation,loop,record_mode,click;uint32_t position_available,position_error,position_tick,position_token,bar,beat,clock;CopiedTrack tracks[MIRROR_TRACKS];CopiedMeter master_meter;uint32_t meter_error,meter_cells,meter_tokens,meter_closed,automation_detail_available,automation_mixed,automation_count,automation_detail_tick,automation_generation,editor_owner,zoom_owner;uint32_t send_programs[4],send_owners[4],sends_source_revision;EffectsCopy effects;uint32_t effects_available,effects_source_revision;QLinkCopy qlinks;uint32_t qlinks_available,qlinks_source_revision;IOCopy io;uint32_t io_available;uint32_t pad_count,pad_error;const PadState *pad_source;CopiedTrack pads[PAD_SLOTS];} CopiedMirror;
 static void copy_meter(const MeterState *s,unsigned id,const CopiedMirror *snapshot,CopiedMeter *out){
  memset(out,0,sizeof(*out));out->incarnation=id;
  if(!id||id>METER_CELLS||atomic_load(&s->error)||!snapshot->ready)return;
@@ -75,6 +76,7 @@ static void copy_position(const MirrorState *s,CopiedMirror *out){
 static void copy_general(const MirrorState *s,CopiedMirror *out){
  const GeneralState *g=&s->general;
  unsigned sends=atomic_load_explicit(&g->sends_revision,memory_order_acquire),mixer=atomic_load(&g->sends_mixer);
+ out->sends_source_revision=sends;
  if(out->ready&&sends&&!(sends&1)&&atomic_load(&g->sends_epoch)==out->epoch&&mixer&&mixer<=CHANNEL_OWNERS&&mixer==atomic_load(&s->channel.mixer_owner)&&atomic_load(&s->channel.owners[mixer-1].live)){
   for(unsigned i=0;i<4;i++){unsigned p=atomic_load(&g->sends_programs[i]),owner=atomic_load(&g->sends_owners[i]);if(owner&&owner<=CHANNEL_OWNERS&&atomic_load(&s->channel.owners[owner-1].live)&&atomic_load(&s->channel.owners[owner-1].address)==p&&atomic_load(&s->channel.owners[owner-1].kind)==CO_PROGRAM){out->send_programs[i]=p;out->send_owners[i]=owner;}}
   atomic_thread_fence(memory_order_acquire);if(sends!=atomic_load(&g->sends_revision)||!atomic_load(&s->channel.owners[mixer-1].live)){memset(out->send_programs,0,sizeof(out->send_programs));memset(out->send_owners,0,sizeof(out->send_owners));}
@@ -139,9 +141,13 @@ static inline int copy_pad_receipt(const CopiedMirror *s,unsigned id,uint32_t pa
   out->revision=rev;out->available=out->seed!=0;return out->available;
  }return 0;
 }
-static int copy_mirror(const MirrorState *s,CopiedMirror *out){
+static int copy_mirror_view(const MirrorState *s,CopiedMirror *out,int pads){
  for(unsigned attempt=0;attempt<4;attempt++){
-  memset(out,0,sizeof(*out));
+  /* Only count/pad_count rows belong to a snapshot. Clear metadata here and
+   * each populated row below; clearing both 128-row capacities on every MIDI
+   * event needlessly consumes memory bandwidth during audio playback. */
+  memset(out,0,offsetof(CopiedMirror,tracks));
+  memset(&out->master_meter,0,offsetof(CopiedMirror,pads)-offsetof(CopiedMirror,master_meter));
   uint32_t rev=atomic_load_explicit(&s->revision,memory_order_acquire);if(rev&1)continue;
   out->epoch=atomic_load_explicit(&s->epoch,memory_order_relaxed);out->generation=atomic_load_explicit(&s->generation,memory_order_relaxed);out->ready=atomic_load_explicit(&s->ready,memory_order_relaxed);
   out->project_owner=atomic_load_explicit(&s->channel.project_owner,memory_order_relaxed);copy_channel(&s->channel,out->project_owner,CF_SELECTION,&out->selection);
@@ -150,6 +156,7 @@ static int copy_mirror(const MirrorState *s,CopiedMirror *out){
   out->count=atomic_load_explicit(&s->count,memory_order_relaxed);if(out->count>MIRROR_TRACKS)return 0;
   for(unsigned i=0;i<out->count;i++){
    CopiedTrack *t=out->tracks+i;const MirrorBinding *b=s->tracks+i;
+   memset(t,0,sizeof(*t));
    t->serial=atomic_load_explicit(&b->serial,memory_order_relaxed);t->track=atomic_load_explicit(&b->track,memory_order_relaxed);t->program=atomic_load_explicit(&b->program,memory_order_relaxed);t->kind=atomic_load_explicit(&b->kind,memory_order_relaxed);t->incarnation=atomic_load_explicit(&b->incarnation,memory_order_relaxed);t->binding=atomic_load_explicit(&b->binding,memory_order_relaxed);t->vptr=atomic_load_explicit(&b->vptr,memory_order_relaxed);
    t->track_owner=atomic_load_explicit(&b->track_owner,memory_order_relaxed);t->program_owner=atomic_load_explicit(&b->program_owner,memory_order_relaxed);
    t->meter_id=atomic_load_explicit(&b->meter,memory_order_relaxed);
@@ -177,18 +184,21 @@ static int copy_mirror(const MirrorState *s,CopiedMirror *out){
   atomic_thread_fence(memory_order_acquire);
   if(rev!=atomic_load_explicit(&s->revision,memory_order_relaxed))continue;
   out->revision=rev;out->error=atomic_load_explicit(&s->error,memory_order_acquire);out->alive=atomic_load_explicit(&s->alive,memory_order_acquire);out->heartbeat=atomic_load_explicit(&s->heartbeat,memory_order_acquire);out->allocated=atomic_load_explicit(&s->allocated,memory_order_acquire);copy_position(s,out);copy_general(s,out);
+  out->effects_source_revision=atomic_load_explicit(&s->effects.revision,memory_order_acquire);
   out->effects_available=effects_copy_read(&s->effects,&out->effects)&&out->ready&&out->effects.epoch==out->epoch&&out->effects.serial==out->selected_serial&&out->effects.tick<=out->heartbeat&&out->heartbeat-out->effects.tick<EFFECT_FRESH_MS;
   out->io_available=io_copy_read(&s->io,&out->io)&&out->ready&&out->io.epoch==out->epoch&&out->io.serial==out->selected_serial&&out->io.status==IO_READY&&out->io.tick<=out->heartbeat&&out->heartbeat-out->io.tick<IO_FRESH_MS;
+  out->qlinks_source_revision=atomic_load_explicit(&s->qlinks.revision,memory_order_acquire);
   out->qlinks_available=qlink_copy_read(&s->qlinks,&out->qlinks)&&out->ready&&out->qlinks.status==QL_SAMPLED&&out->qlinks.epoch==out->epoch&&out->qlinks.tick<=out->heartbeat&&out->heartbeat-out->qlinks.tick<QLINK_FRESH_MS;
   out->meter_error=atomic_load(&s->meters.error);out->meter_cells=atomic_load(&s->meters.used);out->meter_tokens=atomic_load(&s->meters.tokens);out->meter_closed=atomic_load(&s->meters.closed);
   copy_meter(&s->meters,atomic_load(&s->meters.master),out,&out->master_meter);
   for(unsigned i=0;i<out->count;i++)copy_meter(&s->meters,out->tracks[i].meter_id,out,&out->tracks[i].meter);
   out->pad_source=&s->pads;out->pad_error=atomic_load(&s->pads.error);
-  if(out->ready)for(unsigned i=0;i<out->count;i++)if(out->tracks[i].serial==out->selected_serial&&out->tracks[i].vptr==0x6930c00){out->pad_count=PAD_SLOTS;for(unsigned j=0;j<PAD_SLOTS;j++)copy_pad(out,out->tracks+i,j,out->pads+j);break;}
+  if(pads&&out->ready)for(unsigned i=0;i<out->count;i++)if(out->tracks[i].serial==out->selected_serial&&out->tracks[i].vptr==0x6930c00){out->pad_count=PAD_SLOTS;for(unsigned j=0;j<PAD_SLOTS;j++)copy_pad(out,out->tracks+i,j,out->pads+j);break;}
   return 1;
  }
  return 0;
 }
+static inline int copy_mirror(const MirrorState *s,CopiedMirror *out){return copy_mirror_view(s,out,1);}
 static inline const CopiedField *copied_field(const CopiedMirror *s,const CopiedTrack *t,unsigned field,CopiedField *volume){
  if(t->pad_owner)return field<CF_COUNT?t->fields+field:NULL;
  if(field==CF_SELECTION)return &s->selection;

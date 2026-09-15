@@ -1,4 +1,4 @@
-/* CMD30: bounded independent transactions, unique sequence-qualified ownership. MMV17
+/* CMD31: bounded independent transactions, unique sequence-qualified ownership. MMV17
  * remains the sole musical-state owner. Prior CMD1 artifacts remain versioned. */
 #ifndef MPC_COMMAND_STATE_H
 #define MPC_COMMAND_STATE_H
@@ -6,12 +6,13 @@
 #include <stdatomic.h>
 #include <string.h>
 #include "channel-state.h"
+#include "meter-state.h"
 #include "pad-state.h"
 #include "effects-state.h"
 #include "qlink-state.h"
 #include "io-state.h"
 #define COMMAND_MAGIC 0x41444d43u
-#define COMMAND_VERSION 30u
+#define COMMAND_VERSION 31u
 #define COMMAND_SLOTS 32u
 #define COMMAND_LANES 8u
 #define COMMAND_EVENTS 128u
@@ -93,6 +94,7 @@ typedef struct {
  EffectsInterest effects_interest;
  QLinkInterest qlink_interest;
  IOInterest io_interest;
+ MeterInterest meter_interest;
  CommandSlot slots[COMMAND_SLOTS];
  _Atomic uint32_t lane_tokens[COMMAND_LANES];
 } CommandState;

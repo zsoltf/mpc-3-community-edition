@@ -9,6 +9,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include "mirror-motor-core.h"
+#include "mirror-fresh.h"
 #include "sha256.h"
 static volatile sig_atomic_t stopping;
 #ifdef MIRROR_INPUT
@@ -56,7 +57,8 @@ static int servo_arguments(int argc,char **argv){
 static int input_fd=-1;
 static CommandState *input_mapping=MAP_FAILED;
 static struct stat input_file;
-static int fresh_copy(const MirrorState*,CopiedMirror*,uint32_t*);
+static inline int fresh_copy(const MirrorState*,CopiedMirror*,uint32_t*);
+static int fresh_copy_view(const MirrorState*,CopiedMirror*,uint32_t*,int);
 #endif
 #ifndef BRIDGE_LOG
 #define BRIDGE_LOG(...) printf(__VA_ARGS__)
@@ -297,6 +299,9 @@ static int surface_stop_relay(Surface *s,MirrorInput *in,const CopiedMirror *sna
 #endif
 static int surface_drain(Surface *s,MirrorBank *bank,const MirrorState *state,int discard){
  if(stopping)return 1;
+#ifdef MIRROR_INPUT
+ CopiedMirror snapshot;int batch_valid=0,batch_pads=0;
+#endif
  for(unsigned n=0;n<256;n++){
   snd_seq_event_t *event;int rc=snd_seq_event_input(s->seq,&event);if(rc==-EAGAIN)return !lost_events(s->seq);if(rc<0)return 0;
   if(event->source.client==SND_SEQ_CLIENT_SYSTEM&&event->source.port==SND_SEQ_PORT_SYSTEM_ANNOUNCE){
@@ -320,7 +325,17 @@ static int surface_drain(Surface *s,MirrorBank *bank,const MirrorState *state,in
   if(match&&!discard){
    uint32_t now=source_now(state);if(now==UINT32_MAX)return 0;
 #ifdef MIRROR_INPUT
-   CopiedMirror snapshot={0};int copied=fresh_copy(state,&snapshot,&now);if(copied<0)return 0;
+   int pads=bank->view==BV_DRUM_PADS;
+   /* A bounded MIDI batch shares one source observation. Desires coalesce in
+    * order; publication below takes a new snapshot and native execution still
+    * checks each target/revision. A topology or view change invalidates it. */
+   int copied=batch_valid;
+   if(!batch_valid||batch_pads!=pads||!mirror_selection_current(state,&snapshot)||snapshot.revision!=atomic_load_explicit(&state->revision,memory_order_acquire)||snapshot.epoch!=atomic_load(&state->epoch)){
+    copied=fresh_copy_view(state,&snapshot,&now,pads);if(copied<0)return 0;batch_valid=copied;batch_pads=pads;
+   }
+   uint32_t heartbeat=atomic_load_explicit(&state->heartbeat,memory_order_acquire);now=source_now(state);
+   if(now==UINT32_MAX||!atomic_load(&state->alive)||atomic_load(&state->error)||now<heartbeat||now-heartbeat>=1000)return 0;
+   if(copied&&(now<snapshot.heartbeat||now-snapshot.heartbeat>=1000))return 0;
    if(copied)bank_apply(bank,&snapshot,now);else bank_drop(bank,now);
    input_sync(&input,bank);
    if(!snapshot.ready||atomic_load(&input.commands->new_project_intent)){
@@ -671,14 +686,16 @@ static void input_close_file(void){
 }
 #endif
 /* -1 invalid/stale source, 0 bounded copy retry exhausted, 1 fresh snapshot. */
-static int fresh_copy(const MirrorState *state,CopiedMirror *snapshot,uint32_t *now){
- int copied=copy_mirror(state,snapshot);
+static int fresh_copy_view(const MirrorState *state,CopiedMirror *snapshot,uint32_t *now,int pads){
+ int copied=copy_mirror_view(state,snapshot,pads);
  uint32_t heartbeat=atomic_load_explicit(&state->heartbeat,memory_order_acquire);
  *now=source_now(state); /* clock after publication reads, never before them */
  if(*now==UINT32_MAX||!atomic_load_explicit(&state->alive,memory_order_acquire)||atomic_load_explicit(&state->error,memory_order_acquire)||*now<heartbeat||*now-heartbeat>=1000)return -1;
  if(!copied)return 0;
  return snapshot->alive&&!snapshot->error&&*now>=snapshot->heartbeat&&*now-snapshot->heartbeat<1000?1:-1;
 }
+
+static inline int fresh_copy(const MirrorState *state,CopiedMirror *snapshot,uint32_t *now){return fresh_copy_view(state,snapshot,now,0);}
 
 int main(int argc,char **argv){
 #ifdef MIRROR_INPUT
@@ -710,7 +727,7 @@ int main(int argc,char **argv){
  uint32_t began_sec=state->origin_sec,began_nsec=state->origin_nsec;
  if(!start||hz<=0||(uint64_t)began_sec*(unsigned long)hz+(uint64_t)began_nsec*(unsigned long)hz/1000000000<start||!process_file(pid,&exe,1)||!source_identity(argv[1],fd,&file,state,pid,start,&exe))goto done;
  CopiedMirror snapshot={0};uint32_t now;
- if(fresh_copy(state,&snapshot,&now)<0){reason="mirror unavailable or stale at start";goto done;}
+ if(fresh_copy_view(state,&snapshot,&now,bank.view==BV_DRUM_PADS)<0){reason="mirror unavailable or stale at start";goto done;}
 #ifdef MIRROR_INPUT
  if(!input_open_file(argv[2],state,start)){reason=input.error==C_BUSY?"command mailbox not idle at bridge start":input.error?"command producer unavailable at bridge start":"command mailbox identity, format or lock unavailable at bridge start";goto done;}
  BRIDGE_LOG("INPUT channel-bank source commands; continuous fader coalescing, independent bounded control transactions, fair owner-drain batches; first/touchless positions accepted; raw SERVO is not source settlement\n");
@@ -726,14 +743,18 @@ int main(int argc,char **argv){
  while(!stopping){
   uint64_t wall=monotonic_ms();if(wall==UINT64_MAX){reason="clock failure";break;}if(wall>=until){result=0;reason="finite duration";break;}
   if(state->origin_sec!=began_sec||state->origin_nsec!=began_nsec){reason="source origin changed";break;}
-  if(wall-last_identity>=100){last_identity=wall;if(!source_identity(argv[1],fd,&file,state,pid,start,&exe)){reason="source/process identity changed";break;}}
+  if(wall-last_identity>=100){last_identity=wall;if(!source_identity(argv[1],fd,&file,state,pid,start,&exe)){reason="source/process identity changed";break;}
+#ifdef MIRROR_INPUT
+   if(!input_file_current(argv[2],state,start)){reason="mailbox identity changed";break;}
+#endif
+  }
   if(!surface.seq&&disconnected_idle){
    /* No hardware consumer and no unsettled command: do not clear/copy the
     * entire mixer at100Hz. Lifetime and freshness still fail closed. */
    uint32_t heartbeat=atomic_load_explicit(&state->heartbeat,memory_order_acquire);now=source_now(state);
    if(now==UINT32_MAX||!atomic_load_explicit(&state->alive,memory_order_acquire)||atomic_load_explicit(&state->error,memory_order_acquire)||now<heartbeat||now-heartbeat>=1000){reason="mirror failure or stale heartbeat while disconnected";break;}
 #ifdef MIRROR_INPUT
-   if(!input_file_current(argv[2],state,start)||!input_health(&input)){reason="command source unavailable while disconnected";break;}
+   if(!input_health(&input)){reason="command source unavailable while disconnected";break;}
    if(!input_drained(&input))disconnected_idle=0;
 #endif
    if(disconnected_idle){
@@ -744,34 +765,37 @@ int main(int argc,char **argv){
     disconnected_idle=0;last_connect=0; /* normal fresh-copy path before attach */
    }
   }
-  int copied=fresh_copy(state,&snapshot,&now);
-  if(copied<0){reason="mirror failure or stale heartbeat";break;}
-  if(!copied){
+  int copied=0;
+  if(!surface.seq){
+   copied=fresh_copy_view(state,&snapshot,&now,bank.view==BV_DRUM_PADS);
+   if(copied<0){reason="mirror failure or stale heartbeat";break;}
+   if(!copied){
 #ifdef MIRROR_INPUT
-   if(surface.seq&&(bank.view==BV_DRUM_PADS||bank.assignment==BA_SEND))(void)parent_led_clear(&surface);
+    if(surface.seq&&(bank.view==BV_DRUM_PADS||bank.assignment==BA_SEND))(void)parent_led_clear(&surface);
 #endif
-   bank_drop(&bank,now);
+    bank_drop(&bank,now);
 #ifdef MIRROR_INPUT
-   input_discard(&input);input_jog_discard(&input);input_master_invalidate(&input);
+    input_discard(&input);input_jog_discard(&input);input_master_invalidate(&input);
 #endif
-   poll(NULL,0,10);continue;}
-  bank_apply(&bank,&snapshot,now);
+    poll(NULL,0,10);continue;}
+   bank_apply(&bank,&snapshot,now);
 #ifdef MIRROR_INPUT
-  if(!input_file_current(argv[2],state,start)||!source_identity(argv[1],fd,&file,state,pid,start,&exe)){reason="mailbox/source identity changed before command service";break;}
-  input_sync(&input,&bank);input_health(&input);
-  if(input.error){reason="input rejected, ambiguous, expired or unavailable (see error code)";break;}
+
+   input_sync(&input,&bank);input_health(&input);
+   if(input.error){reason="input rejected, ambiguous, expired or unavailable (see error code)";break;}
 #endif
-  #ifdef MIRROR_INPUT
-  input_drain(&input,&bank,&snapshot,now); /* also settle while USB is absent */
-  if(input.error){reason="published transaction drain failed";break;}
+ #ifdef MIRROR_INPUT
+   input_drain(&input,&bank,&snapshot,now); /* also settle while USB is absent */
+   if(input.error){reason="published transaction drain failed";break;}
 #endif
-  if(stopping)break;
+   if(stopping)break;
 
 #ifdef MIRROR_INPUT
-  if(!surface.seq){input_io_interest(&input,&bank,&snapshot,now,0);input_effects_interest(&input,&bank,&snapshot,now,0);input_qlink_interest(&input,&bank,&snapshot,now,0);}
+   if(!surface.seq){input_meter_interest(&input,&bank,&snapshot,now,0);input_io_interest(&input,&bank,&snapshot,now,0);input_effects_interest(&input,&bank,&snapshot,now,0);input_qlink_interest(&input,&bank,&snapshot,now,0);}
 #endif
+  }
   if(!surface.seq){
-   if(wall-last_connect>=250){last_connect=wall;surface_open(&surface,&bank,state,discovery);}
+   if(wall-last_connect>=250){last_connect=wall;if(surface_open(&surface,&bank,state,discovery))last_identity=0;}
 #ifdef MIRROR_INPUT
    disconnected_idle=!surface.seq&&input_drained(&input);
 #else
@@ -784,19 +808,25 @@ int main(int argc,char **argv){
   if(!surface_drain(&surface,&bank,state,0)){BRIDGE_LOG("INPUT continuity lost; all touch states UNKNOWN\n");surface_close(&surface,&bank);continue;}
 #ifdef MIRROR_INPUT
   /* Observe disconnect/bank/touch input before publishing any queued desire. */
-  copied=fresh_copy(state,&snapshot,&now);if(copied<0){reason="source unavailable before input publication";break;}
+  copied=fresh_copy_view(state,&snapshot,&now,bank.view==BV_DRUM_PADS);if(copied<0){reason="source unavailable before input publication";break;}
   if(!copied){
 #ifdef MIRROR_INPUT
    if(surface.seq&&(bank.view==BV_DRUM_PADS||bank.assignment==BA_SEND))(void)parent_led_clear(&surface);
 #endif
    bank_drop(&bank,now);input_discard(&input);input_master_invalidate(&input);continue;}
   bank_apply(&bank,&snapshot,now);input_sync(&input,&bank);
-  if(!input_file_current(argv[2],state,start)||!source_identity(argv[1],fd,&file,state,pid,start,&exe)){reason="source identity changed at input boundary";break;}
+  input_drain(&input,&bank,&snapshot,now);
+  if(input.error){reason="published transaction drain failed";break;}
   if(stopping)break;
-  input_io_interest(&input,&bank,&snapshot,now,surface.seq!=NULL);input_effects_interest(&input,&bank,&snapshot,now,surface.seq!=NULL);input_qlink_interest(&input,&bank,&snapshot,now,surface.seq!=NULL);
+  input_meter_interest(&input,&bank,&snapshot,now,surface.seq!=NULL);input_io_interest(&input,&bank,&snapshot,now,surface.seq!=NULL);input_effects_interest(&input,&bank,&snapshot,now,surface.seq!=NULL);input_qlink_interest(&input,&bank,&snapshot,now,surface.seq!=NULL);
   input_pump(&input,&bank,&snapshot,now);
   if(input.error){reason="input rejected, ambiguous, expired or unavailable (see error code)";break;}
   if(!channel_output(&surface,&bank,&snapshot,now)){surface_close(&surface,&bank);continue;}
+#else
+  copied=fresh_copy_view(state,&snapshot,&now,bank.view==BV_DRUM_PADS);
+  if(copied<0){reason="source unavailable before motor output";break;}
+  if(!copied){bank_drop(&bank,now);continue;}
+  bank_apply(&bank,&snapshot,now);
 #endif
   for(unsigned channel=0;channel<MIRROR_BANK;channel++){
    /* The iteration already copied source state and serviced input. An idle
@@ -807,35 +837,15 @@ int main(int argc,char **argv){
 #else
    if(bank_due(&bank,channel,now)<0)continue;
 #endif
-   /* Copy after draining touch/bank input and immediately revalidate before
-    * each direct send. There is no queue of targets across topology changes. */
-   if(!surface_drain(&surface,&bank,state,0)){surface_close(&surface,&bank);break;}
-   copied=fresh_copy(state,&snapshot,&now);if(copied<0){reason="mirror invalid before output";goto done;}if(!copied){
-#ifdef MIRROR_INPUT
-   if(surface.seq&&(bank.view==BV_DRUM_PADS||bank.assignment==BA_SEND))(void)parent_led_clear(&surface);
-#endif
-   bank_drop(&bank,now);break;}
-   bank_apply(&bank,&snapshot,now);
+   /* Keep event continuity and touch suppression at the send boundary. Only
+    * the target scalar/projection is revalidated; no full mixer or ALSA scan. */
+   if(!surface_drain(&surface,&bank,state,0)||lost_events(surface.seq)){surface_close(&surface,&bank);break;}
+   now=source_now(state);
+   if(!mirror_motor_current(state,&snapshot,&bank,channel,now))continue;
 #ifdef MIRROR_INPUT
    input_sync(&input,&bank);
-   if(!strip_motor_ready(&bank,channel,now))continue;
-#else
-   if(bank_due(&bank,channel,now)<0)continue;
-#endif
-   if(!source_identity(argv[1],fd,&file,state,pid,start,&exe)){reason="source identity changed before output";goto done;}
-   if(!discover(surface.seq,&current)||!address_equal(current,surface.full)||lost_events(surface.seq)){surface_close(&surface,&bank);break;}
-   if(!surface_drain(&surface,&bank,state,0)){surface_close(&surface,&bank);break;}
-   copied=fresh_copy(state,&snapshot,&now);if(copied<0){reason="mirror invalid at output boundary";goto done;}if(!copied){
-#ifdef MIRROR_INPUT
-   if(surface.seq&&(bank.view==BV_DRUM_PADS||bank.assignment==BA_SEND))(void)parent_led_clear(&surface);
-#endif
-   bank_drop(&bank,now);break;}
-   bank_apply(&bank,&snapshot,now);
-#ifdef MIRROR_INPUT
-   input_sync(&input,&bank);if(input_blocked_field(&input,channel,bank_field(&bank,channel)))continue;
-#endif
-#ifdef MIRROR_INPUT
-   if(!input_file_current(argv[2],state,start)||!input_health(&input)){reason="command source unavailable at motor boundary";goto done;}
+   if(input_blocked_field(&input,channel,bank_field(&bank,channel)))continue;
+   if(!input_health(&input)){reason="command source unavailable at motor boundary";goto done;}
 #endif
 #ifdef MIRROR_INPUT
    int emitted=strip_motor_output(&surface,&bank,channel,now);if(emitted<0){surface_close(&surface,&bank);break;}if(!emitted)continue;
@@ -867,7 +877,7 @@ done:
   if(deadline!=UINT64_MAX&&deadline<=UINT64_MAX-10000)deadline+=10000;
   else deadline=0;
   while(deadline&&!input.error&&monotonic_ms()<deadline){
-   if(!source_identity(argv[1],fd,&file,state,pid,start,&exe)||!input_file_current(argv[2],state,start)||fresh_copy(state,&snapshot,&now)!=1)break;
+   if(!source_identity(argv[1],fd,&file,state,pid,start,&exe)||!input_file_current(argv[2],state,start)||fresh_copy_view(state,&snapshot,&now,bank.view==BV_DRUM_PADS)!=1)break;
    bank_apply(&bank,&snapshot,now);input_drain(&input,&bank,&snapshot,now);
    if(input_drained(&input))break;
    poll(NULL,0,10);

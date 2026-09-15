@@ -1,6 +1,6 @@
 # MCU image and release candidate
 
-Runtime source: `ce4ccce`, native transport with the disconnected-CPU repair, CMD30/MMV17.
+Runtime source: `9000390`, native transport with the disconnected-CPU repair and the heavy-project snapshot/meter repair, CMD31/MMV17.
 Qualified combination: MPC Live II, firmware3.9.1 Gen1, full Behringer X-Touch
 in MC/USB mode. Do not infer other MPC or MCU hardware compatibility from the
 Gen1 image header. This is an unofficial experimental integration.
@@ -41,13 +41,13 @@ mkdir -p inputs
 git clone https://github.com/TheKikGen/MPC-LiveXplore.git ../MPC-LiveXplore
 sh firmware/prepare-upstream.sh ../MPC-LiveXplore
 docker build -t mpclearn-build:local .
-# Download mpc3-ce-mcu-ce4ccce.tar.gz from this repository's release.
+# Download mpc3-ce-mcu-9000390.tar.gz from this repository's release.
 # Verify it against the release SHA256SUMS before extracting.
-mkdir -p artifacts/mcu-ce4ccce-r3
-tar -xzf mpc3-ce-mcu-ce4ccce.tar.gz -C artifacts/mcu-ce4ccce-r3
+mkdir -p artifacts/mcu-9000390-r4
+tar -xzf mpc3-ce-mcu-9000390.tar.gz --strip-components=1 -C artifacts/mcu-9000390-r4
 docker run --rm --network none \
   -v "$PWD:/work" -v "$PWD/inputs:/inputs:ro" \
-  -v "$PWD/artifacts/mcu-ce4ccce-r3:/payload:ro" \
+  -v "$PWD/artifacts/mcu-9000390-r4:/payload:ro" \
   mpclearn-build:local sh firmware/build.sh
 ```
 
@@ -55,7 +55,7 @@ docker run --rm --network none \
 It intentionally refuses an arbitrary unqualified runtime. Rebuild that runtime
 with the existing controller build guide and `mirror-input-build.sh`, using the
 exact MPC executable extracted from your own official image and stage
-`/data/mpclearn-model.mcu-perf-r3`, lifetime `manual`.
+`/data/mpclearn-model.mcu-perf-r4`, lifetime `manual`.
 
 The image builder reuses TheKikGen's pinned image tool at
 `9be3e63bf03d3467cf06478b48671894dcc634f4`, then independently decodes the output.
@@ -91,7 +91,8 @@ makes this one-time: later boots do not copy or hash the payload, and removing
 the boot selector to disable MCU remains effective.
 
 An identical existing package is retained, including its session files.
-The known r2 image upgrades into the separate r3 stage, preserving the old stage.
+Known r2 and r3 images upgrade into the separate r4 stage, preserving the old
+stages, and replace their boot helpers with this release's versions.
 A disabled installation stays disabled. Unknown revisions and custom stage
 selections require explicit migration. Conflicting package/helper bytes cause installation to stop; stock firmware
 files and user settings are not repaired or replaced speculatively. A previous
@@ -107,7 +108,7 @@ prevent raw MCU messages from playing instrument notes or bending pitch. Leave
 other MIDI ports configured as usual. The image preserves user settings.
 Global MIDI Learn and the optional Mini/Launch Control mappings remain a
 separate feature; the MCU image does not install a learned profile.
-See [release notes](../docs/releases/v0.1.0-rc.1.md) for qualification.
+See [release notes](../docs/releases/v0.1.0-rc.2.md) for qualification.
 
 ## Hardware qualification
 
@@ -117,7 +118,12 @@ project. The preceding native runtime test confirmed transport and a fader
 with Global MIDI Learn and virtual-input Control disabled. This post-flash
 check does not establish every control, other hardware or sustained workloads.
 
-The r3 runtime repair passed native playback checks with the controller absent
-and after reconnection with simultaneous controls. Its relocated release stage
-and upgrade provisioner are tested separately in the extracted ARM filesystem;
-the newly rebuilt r3 image has not yet been flashed on hardware.
+The r3 image was built from the published site and flashed by the device owner;
+it booted and ran the controller. Under a roughly 40-track synth/drum project
+it clicked during concurrent fader moves. The r4 runtime repairs that load
+(see [performance](../docs/performance.md)); the owner reported no clicks with
+eight faders, unplug/reconnect and Drum Mix on that project. The r4 stage,
+upgrade provisioner and helper replacement are tested in the extracted ARM
+filesystem, and the owner then flashed the r4 image over r3 on the Live II:
+it booted, selected the r4 stage, replaced the boot helpers, connected the
+controller and played the heavy project cleanly.

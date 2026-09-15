@@ -3,19 +3,35 @@
 # one next app. Boot admission delegates here; no blind application retry.
 set -eu
 stage=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+runtime=/run/mpclearn-${stage##*/}
 adapter=$stage/mpclearn-controls
 inspector=$stage/main-button
 settings=/media/az01-internal/Settings/MPC/MPC.settings
 cd "$stage"
 case "$stage" in /data/*) ;; *) echo 'Use the exact staged native package under /data.' >&2;exit 2;; esac
+case "${stage#/data/}" in ''|*/*|.|..) echo 'Manual stage must be a direct child of /data.' >&2;exit 2;; esac
 [ "$(id -u)" -eq 0 ] && [ "$(stat -c %u .)" -eq 0 ] && [ "$(stat -c %a .)" = 700 ] || exit 2
 [ -f session-package.sha256 ] && sha256sum -c session-package.sha256 >/dev/null || exit 1
 grep -Fqx '#define WINDOW_SECONDS 0u' config.h || exit 1
 grep -Fqx "#define OBSERVER_LIBRARY \"$stage/command-observer.so\"" config.h || exit 1
+grep -Fqx "#define OBSERVER_LOG \"$runtime/volume.state\"" config.h || exit 1
+grep -Fqx "#define COMMAND_PATH \"$runtime/command.state\"" config.h || exit 1
 command=${1:-status};case "$command" in start|status|stop|bridge-start|bridge-stop) ;; *) echo 'mcu-session.sh start|status|stop|bridge-start|bridge-stop [--verbose]' >&2;exit 2;; esac
 verbose=${2:-};[ -z "$verbose" ] || [ "$verbose" = --verbose ] || exit 2
 exec 9>session.lock
 flock 9
+# Only live shared pages use RAM; receipts/settings/logs stay in the stage.
+# Refuse aliases and unexpected files rather than replacing another producer.
+runtime_check(){
+ [ ! -L "$runtime" ] && [ -d "$runtime" ] && [ "$(stat -c %u "$runtime")" = 0 ] && [ "$(stat -c %a "$runtime")" = 700 ] && [ "$(stat -f -c %T "$runtime")" = tmpfs ] || return 1
+ for file in "$runtime"/* "$runtime"/.[!.]* "$runtime"/..?*;do
+  [ -e "$file" ] || { [ ! -L "$file" ] || return 1;continue; }
+  case "$file" in "$runtime/command.state"|"$runtime/volume.state") [ ! -L "$file" ] && [ -f "$file" ] && [ "$(stat -c %u "$file")" = 0 ] || return 1;; *) return 1;; esac
+ done
+}
+if [ -e "$runtime" ] || [ -L "$runtime" ];then runtime_check || exit 1
+elif [ "$command" = start ];then mkdir -m 700 "$runtime" && runtime_check || exit 1
+fi
 boot_id=$(cat /proc/sys/kernel/random/boot_id)
 same_boot(){ [ ! -f session.boot-id ] || [ "$(cat session.boot-id)" = "$boot_id" ]; }
 start_tick(){ sed 's/.*) //' "/proc/$1/stat" 2>/dev/null | awk '{print $20}'; }
@@ -34,7 +50,7 @@ identity(){
  [ "$pid" -gt 1 ] || return 1
  [ -n "$pid" ] && [ -n "$tick" ] && [ -r "/proc/$pid/stat" ] && [ "$(start_tick "$pid")" = "$tick" ] && [ "$(readlink "/proc/$pid/exe")" = "$2" ]
 }
-status(){ "$stage/command-client" session-status "$stage/command.state" "$stage/volume.state"; }
+status(){ "$stage/command-client" session-status "$runtime/command.state" "$runtime/volume.state"; }
 bridge_stop(){
  if identity bridge.pid "$stage/mirror-input";then
   kill -TERM "$pid"
@@ -56,7 +72,7 @@ bridge_start(){
  # It never restarts it. The operation lock is not inherited.
  (
   set +e
-  "$stage/mirror-input" "$stage/volume.state" "$stage/command.state" manual $verbose "--held-mask=${handoff_holds:-0}" "--motors=$motor_choice" "--preferences=$stage/surface-preferences" "--stop-adapter-exe=$adapter" &
+  "$stage/mirror-input" "$runtime/volume.state" "$runtime/command.state" manual $verbose "--held-mask=${handoff_holds:-0}" "--motors=$motor_choice" "--preferences=$stage/surface-preferences" "--stop-adapter-exe=$adapter" &
   b=$!;write_identity "$b" bridge.pid || exit 1
   wait "$b";code=$?;printf '%s\n' "$code" > bridge.exit
  ) 9>&- >bridge.log 2>&1 &
@@ -122,7 +138,7 @@ arm_adapter(){
  route && [ "$adapter_pid" = "$unarmed_pid" ] && [ "$adapter_tick" = "$unarmed_tick" ] || return 1
  status >/dev/null && identity bridge.pid "$stage/mirror-input" && authorized || return 1
  read -r app_pid app_tick <mpc.pid
- if "$stage/command-client" new-project-intent command.state "$app_pid" "$app_tick" >/dev/null;then return 1;fi
+ if "$stage/command-client" new-project-intent "$runtime/command.state" "$app_pid" "$app_tick" >/dev/null;then return 1;fi
  exact "$adapter_pid" "$adapter_tick" "$adapter" || return 1
  kill -USR1 "$adapter_pid"
  rm -f manual-adapter-unarmed.pid
@@ -130,9 +146,12 @@ arm_adapter(){
 archive_generation(){
  read -r prior_pid prior_tick <mpc.pid
  archive="history/$prior_pid-$prior_tick";mkdir -p history;mkdir "$archive" || return 1
- for file in mpc.pid mpc.exit mpc.log-status mpc-output.pipe bridge.pid bridge.exit command.state volume.state bridge.log mpc.log manual-adapter.log manual-adapter-unarmed.pid generation.ready generation.failed;do
+ for file in mpc.pid mpc.exit mpc.log-status mpc-output.pipe bridge.pid bridge.exit bridge.log mpc.log manual-adapter.log manual-adapter-unarmed.pid generation.ready generation.failed;do
   [ ! -e "$file" ] || mv "$file" "$archive/" || return 1
  done
+ for file in "$runtime/command.state" "$runtime/volume.state";do [ ! -e "$file" ] || mv "$file" "$archive/" || return 1;done
+ # Pre-tmpfs generation evidence is retained separately during upgrades.
+ for file in command.state volume.state;do [ ! -e "$file" ] || mv "$file" "$archive/legacy-$file" || return 1;done
  echo "Exact departed app and unchanged command receipts retained in $archive."
 }
 archive_session(){
@@ -140,6 +159,7 @@ archive_session(){
  for file in settings-before settings-before.sha256 session.id session.boot-id session.revoked owner.pid owner.log stop-incomplete-status.txt incomplete-before-command.state incomplete-before-volume.state incomplete-before-bridge.log incomplete-before.sha256;do [ ! -e "$file" ] || mv "$file" "$archive/";done
 }
 launch_app(){
+ runtime_check && [ ! -e "$runtime/command.state" ] && [ ! -e "$runtime/volume.state" ] || return 1
  authorized && ! mpc_running && ! systemctl is-active --quiet acvs || return 1
  mkfifo -m 600 mpc-output.pipe || return 1
  tail -c 1048576 <mpc-output.pipe >mpc.log 9>&- &
@@ -173,7 +193,7 @@ owner(){
    if flock -n 9;then
     if authorized;then
      read -r app_pid app_tick <mpc.pid
-     if "$stage/command-client" new-project-intent command.state "$app_pid" "$app_tick" >/dev/null 2>&1;then
+     if "$stage/command-client" new-project-intent "$runtime/command.state" "$app_pid" "$app_tick" >/dev/null 2>&1;then
       if [ "$intent_seen" -eq 0 ];then stop_adapter || :;intent_seen=1;fi
      elif [ "$setup" -ne 2 ];then
       code=0;status >/dev/null 2>&1 || code=$?
@@ -204,7 +224,7 @@ owner(){
   bridge_stop || :
   if [ "$app_code" -ne 0 ] || mpc_running || systemctl is-active --quiet acvs;then flock -u 9;return 0;fi
   read -r departed_pid departed_tick <mpc.pid
-  if ! "$stage/command-client" new-project-intent command.state "$departed_pid" "$departed_tick" >/dev/null;then flock -u 9;return 0;fi
+  if ! "$stage/command-client" new-project-intent "$runtime/command.state" "$departed_pid" "$departed_tick" >/dev/null;then flock -u 9;return 0;fi
   # Exact old app is dead. A failed bridge receipt can now be archived unchanged;
   # it is not a successful settlement. Its process must still be absent.
   if identity bridge.pid "$stage/mirror-input" || { [ -f bridge.pid ] && [ ! -f bridge.exit ]; };then flock -u 9;return 1;fi
@@ -214,7 +234,7 @@ owner(){
    final_mask=$(sed -n "s/^TOUCH_FINAL pid=$old_bridge mask=\\([0-9][0-9]*\\)$/\\1/p" bridge.log)
    case "$final_mask" in ''|*[!0-9]*) ;; *) [ "$final_mask" -le 511 ] && handoff_holds=$final_mask;; esac
   fi
-  authorized && "$stage/command-client" new-project-intent command.state "$departed_pid" "$departed_tick" consume || { flock -u 9;return 1; }
+  authorized && "$stage/command-client" new-project-intent "$runtime/command.state" "$departed_pid" "$departed_tick" consume || { flock -u 9;return 1; }
   archive_generation || { flock -u 9;return 1; }
   app_child=;log_pid=
   if ! authorized || ! launch_app;then flock -u 9;[ -z "$app_child" ] || wait_receipt;return 1;fi
@@ -249,7 +269,7 @@ case "$command" in
   fi
   identity bridge.pid "$stage/mirror-input" && exit 1
   if same_boot && [ -f owner.pid ];then read -r owner_pid owner_tick <owner.pid;[ "$(start_tick "$owner_pid")" != "$owner_tick" ] || { echo 'Previous session owner still finishing.' >&2;exit 1; };fi
-  if [ -e command.state ] || [ -e volume.state ] || [ -e settings-before ];then
+  if [ -e "$runtime/command.state" ] || [ -e "$runtime/volume.state" ] || [ -e command.state ] || [ -e volume.state ] || [ -e settings-before ];then
    [ -f session.id ] && [ -f settings-before.sha256 ] && sha256sum -c settings-before.sha256 >/dev/null || exit 1
   fi
   # Prior-boot locators cannot authorize signals. Preserve them before any
@@ -287,11 +307,11 @@ case "$command" in
    [ -f session.id ] && [ -f settings-before ] && ! mpc_running && ! systemctl is-active --quiet acvs || { echo 'Different MPC/service or no owned session locator; recovery refused.' >&2;exit 1; }
    clean=0
   fi
-  if [ "$clean" -eq 1 ] && [ "$owned_mpc" -eq 1 ];then "$stage/command-client" stop "$stage/command.state" "$stage/volume.state" || clean=0;fi
+  if [ "$clean" -eq 1 ] && [ "$owned_mpc" -eq 1 ];then "$stage/command-client" stop "$runtime/command.state" "$runtime/volume.state" || clean=0;fi
   if [ "$clean" -ne 1 ];then
    echo 'INCOMPLETE: graceful source closure was not certified; preserving evidence before exact-process recovery.' >&2
    status >stop-incomplete-status.txt 2>&1 || :
-   for file in command.state volume.state bridge.log;do [ ! -f "$file" ] || cp -p "$file" "incomplete-before-$file";done
+   for file in "$runtime/command.state" "$runtime/volume.state" "$stage/bridge.log";do [ ! -f "$file" ] || cp -p "$file" "incomplete-before-${file##*/}";done
    : >incomplete-before.sha256
    for file in incomplete-before-command.state incomplete-before-volume.state incomplete-before-bridge.log;do [ ! -f "$file" ] || sha256sum "$file" >>incomplete-before.sha256;done
   fi

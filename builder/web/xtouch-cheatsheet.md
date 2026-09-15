@@ -1,8 +1,8 @@
 # X-Touch cheat sheet
 
 For the full Behringer X-Touch in MC/USB mode on MPC Live II 3.9.1.
-Applies to Community Edition r3 (CMD30/MMV17). See the
-[release notes](https://github.com/zsoltf/mpc-3-community-edition/releases/tag/v0.1.0-rc.1) for tested scope and limitations.
+Applies to Community Edition r4 (CMD31/MMV17). See the
+[release notes](https://github.com/zsoltf/mpc-3-community-edition/releases/tag/v0.1.0-rc.2) for tested scope and limitations.
 
 Turn on MPC, create a blank project or load your User Template or saved
 project, and play. Automatic startup is installed. The X-Touch Mini and a

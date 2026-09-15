@@ -17,6 +17,33 @@ int main(int argc,char **argv){
  int fd=open(argv[1],O_RDONLY);struct stat st;need(fd>=0&&!fstat(fd,&st)&&st.st_size==(off_t)sizeof(MirrorState),"real shared fixture file");
  const MirrorState *state=mmap(NULL,sizeof(*state),PROT_READ,MAP_SHARED,fd,0);close(fd);need(state!=MAP_FAILED,"read-only source map");
  CopiedMirror snapshot;need(copy_mirror(state,&snapshot)&&snapshot.count==12&&snapshot.ready,"actual MMV7 copied fixture topology");
+ /* Reused snapshot capacity is deliberately unspecified outside the counts.
+  * Poison it to expose accidental reliance on the former whole-buffer clear. */
+ CopiedMirror *poisoned=malloc(sizeof(*poisoned));need(poisoned!=NULL,"snapshot allocation");
+ memset(poisoned,0xa5,sizeof(*poisoned));need(copy_mirror(state,poisoned),"copy into poisoned capacity");
+ need(poisoned->count==snapshot.count&&poisoned->pad_count==snapshot.pad_count,"poisoned metadata reset");
+ need(!memcmp(poisoned->tracks,snapshot.tracks,snapshot.count*sizeof(CopiedTrack)),"all active fields initialized");
+ need(poisoned->tracks[12].serial==0xa5a5a5a5,"unused capacity is not cleared");
+ MirrorState *empty=mmap(NULL,sizeof(*empty),PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);need(empty!=MAP_FAILED,"empty source allocation");
+ atomic_store(&empty->revision,2);atomic_store(&empty->ready,1);
+ need(copy_mirror(empty,poisoned)&&!poisoned->count&&!poisoned->pad_count&&!poisoned->selected_serial&&!poisoned->selection.available&&!poisoned->position_available&&!poisoned->effects_available&&!poisoned->io_available&&!poisoned->qlinks_available,"shrinking to empty removes prior metadata");
+ MirrorBank empty_bank;bank_init(&empty_bank);bank_apply(&empty_bank,poisoned,100);need(!empty_bank.faders[0].identity.serial,"old rows cannot populate an empty bank");
+ atomic_store(&empty->revision,3);need(!copy_mirror(empty,poisoned)&&!poisoned->count&&!poisoned->ready,"unstable topology clears metadata and rejects copy");
+ munmap(empty,sizeof(*empty));free(poisoned);
+ /* Exercise final output validation against a private copy of a real producer
+  * file, with only heartbeat/liveness restored for this component check. */
+ int live_fd=open(argv[1],O_RDONLY);need(live_fd>=0,"private producer descriptor");
+ MirrorState *live=mmap(NULL,sizeof(*live),PROT_READ|PROT_WRITE,MAP_PRIVATE,live_fd,0);close(live_fd);
+ need(live!=MAP_FAILED,"private producer state");atomic_store(&live->alive,1);atomic_store(&live->heartbeat,100);
+ CopiedMirror current;need(copy_mirror_view(live,&current,0),"scope-aware fresh copy");
+ MirrorBank checked;bank_init(&checked);bank_apply(&checked,&current,100);
+ need(mirror_motor_current(live,&current,&checked,0,100),"current target passes narrow motor barrier");
+ need(checked.faders[0].identity.incarnation&&checked.faders[0].identity.incarnation<=MIRROR_CELLS,"bound volume cell for barrier check");
+ MirrorCell *cell=live->cells+checked.faders[0].identity.incarnation-1;unsigned rev=atomic_load(&cell->revision);
+ atomic_store(&cell->revision,rev+2);need(!mirror_motor_current(live,&current,&checked,0,100),"changed target deferred without whole snapshot copy");atomic_store(&cell->revision,rev);
+ atomic_fetch_add(&live->revision,2);need(!mirror_motor_current(live,&current,&checked,0,100),"topology change blocks old motor target");atomic_fetch_sub(&live->revision,2);
+ need(!mirror_motor_current(live,&current,&checked,0,1100),"stale batch cannot drive motor");
+ atomic_store(&live->alive,0);need(!mirror_motor_current(live,&current,&checked,0,100),"closed producer blocks motor");munmap(live,sizeof(*live));
  /* Closed source file is read unchanged; policy clock/alive below is synthetic. */
  MirrorBank bank;bank_init(&bank);snapshot.alive=1;snapshot.heartbeat=100;bank_apply(&bank,&snapshot,100);
  for(unsigned i=0;i<8;i++){need(bank.faders[i].identity.serial==i+1,"automatic first eight identities");need(bank_due(&bank,i,100)<0,"automatic initial output waits fresh source barrier");}

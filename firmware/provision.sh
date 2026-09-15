@@ -3,10 +3,12 @@
 set -eu
 payload=/usr/share/mpclearn/mcu
 state=/data/mpclearn-image
-stage=/data/mpclearn-model.mcu-perf-r3
-revision=ce4ccce-mcu-perf-r3
-previous_revision=6d70695-mcu-direct-r2
-previous_stage=/data/mpclearn-model.mcu-direct-r2
+stage=/data/mpclearn-model.mcu-perf-r4
+revision=9000390-mcu-perf-r4
+# Known prior releases upgrade into the separate new stage; their stages stay.
+known_revisions='6d70695-mcu-direct-r2 ce4ccce-mcu-perf-r3'
+known_stages='/data/mpclearn-model.mcu-direct-r2 /data/mpclearn-model.mcu-perf-r3'
+known(){ for item in $2;do [ "$1" != "$item" ] || return 0;done;return 1; }
 [ "$(id -u)" = 0 ] || exit 2
 for path in /data /etc;do [ -d "$path" ] && [ ! -L "$path" ] || exit 2;done
 [ ! -L "$state" ] || exit 2
@@ -17,7 +19,7 @@ installed_revision(){
   installed=$(cat "$state/installed")
   [ -n "$installed" ] || { echo 'Empty image revision; refusing installation.' >&2;return 1; }
  fi
- case "$installed" in ""|"$revision"|"$previous_revision") ;; *) echo 'Unknown image revision; explicit migration required.' >&2;return 1;; esac
+ case "$installed" in ""|"$revision") ;; *) known "$installed" "$known_revisions" || { echo 'Unknown image revision; explicit migration required.' >&2;return 1; };; esac
 }
 installed_revision
 [ "$installed" != "$revision" ] || exit 0
@@ -36,8 +38,8 @@ select_stage=1
 if [ -e /etc/mpclearn-boot-stage ] || [ -L /etc/mpclearn-boot-stage ];then
  [ -f /etc/mpclearn-boot-stage ] && [ ! -L /etc/mpclearn-boot-stage ] || exit 2
  selected=$(cat /etc/mpclearn-boot-stage)
- [ "$selected" = "$previous_stage" ] || [ "$selected" = "$stage" ] || { echo 'Custom stage selected; refusing to change it.' >&2;exit 1; }
-elif [ "$installed" = "$previous_revision" ];then
+ [ "$selected" = "$stage" ] || known "$selected" "$known_stages" || { echo 'Custom stage selected; refusing to change it.' >&2;exit 1; }
+elif [ -n "$installed" ];then
  # A known prior installation with no selector was deliberately disabled.
  select_stage=0
 fi
@@ -62,10 +64,16 @@ boot=/data/mpclearn-boot
 [ ! -L "$boot" ] || exit 2
 mkdir -p "$boot";chown 0:0 "$boot";chmod 700 "$boot"
 for name in mcu-boot.sh mcu-boot-install.sh mcu-session.sh mpclearn-boot.service;do
- # Existing installations retain their proven helper bytes. Refuse a conflicting
- # version rather than altering a running/previously configured session owner.
+ # A known prior release's helpers are replaced by this release's versions;
+ # early boot provisioning runs before any session owner. Helpers that differ
+ # on an installation without our marker are custom and refused unchanged.
  if [ -e "$boot/$name" ] || [ -L "$boot/$name" ];then
-  [ ! -L "$boot/$name" ] && cmp "$payload/$name" "$boot/$name"
+  [ ! -L "$boot/$name" ] || exit 2
+  if ! cmp -s "$payload/$name" "$boot/$name";then
+   [ -n "$installed" ] || { echo "Conflicting boot helper $name; refusing installation." >&2;exit 1; }
+   cp "$payload/$name" "$boot/$name.next";chown 0:0 "$boot/$name.next"
+   chmod 700 "$boot/$name.next";mv "$boot/$name.next" "$boot/$name"
+  fi
  else
   cp "$payload/$name" "$boot/$name.next";chown 0:0 "$boot/$name.next"
   chmod 700 "$boot/$name.next";mv "$boot/$name.next" "$boot/$name"

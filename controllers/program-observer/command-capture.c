@@ -136,7 +136,11 @@ static unsigned trace_enter(unsigned site){
  if(!atomic_load_explicit(&observer_running,memory_order_seq_cst)){
   atomic_store_explicit(lane_in_hook+lane,0,memory_order_seq_cst);return COMMAND_LANES;
  }
- for(unsigned i=0;i<COMMAND_SLOTS;i++)source_requests[i]=atomic_load_explicit(active_request+i,memory_order_seq_cst);
+ /* Meter callbacks publish peaks only; they cannot produce command receipts.
+  * Keep the SC lane/closure handshake, but avoid 32 SC loads on every audio
+  * block for an association table that this callback never consumes. */
+ if(site<ME_STEREO||site>ME_TRACK)
+  for(unsigned i=0;i<COMMAND_SLOTS;i++)source_requests[i]=atomic_load_explicit(active_request+i,memory_order_seq_cst);
  return lane;
 }
 static void trace_leave(unsigned lane){memset(source_requests,0,sizeof(source_requests));atomic_store_explicit(lane_in_hook+lane,0,memory_order_seq_cst);}

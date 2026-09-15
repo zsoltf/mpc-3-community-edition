@@ -677,6 +677,14 @@ static void global_dispatch_fixture(unsigned op,uint32_t target,uint32_t functio
  call(end,GL_AUTO_EMPTY);
 }
 static void *transport_queue_runner(void *unused){(void)unused;transport_queue_component_run();return 0;}
+static void request_meter_bank(unsigned offset){
+ CopiedMirror out;require(copy_mirror(fixture,&out),"meter bank source copy");
+ MirrorInput in={.commands=command_state};MirrorBank bank;bank_init(&bank);bank_apply(&bank,&out,atomic_load(&fixture->heartbeat));
+ if(offset==UINT32_MAX){for(unsigned i=0;i<out.count&&i<MIRROR_BANK;i++)bank.strips[i]=bank_identity(&out,out.tracks+i);}
+ else{bank.offset=offset;bank_apply(&bank,&out,atomic_load(&fixture->heartbeat));}
+ input_meter_interest(&in,&bank,&out,atomic_load(&fixture->heartbeat),1);
+}
+
 static void general_checks(void){
  MirrorState *saved=fixture;CommandState *csaved=command_state;fixture=calloc(1,sizeof(*fixture));command_state=calloc(1,sizeof(*command_state));require(fixture&&command_state,"general state fixture");
  initial(1);command_initialize();observer_running=1;observer_image_bias=0;atomic_store(&command_state->alive,1);component_global_dispatch=global_dispatch_fixture;
@@ -775,7 +783,7 @@ static void general_checks(void){
  /* Same consumer composition, source-owned native meter observation; demand
   * allocation/release is the explicitly substituted boundary in this harness. */
  uint32_t meter=ptr(program_objects[0])+0x2f4,old_meter=word(meter);put(meter,0x68ac3d4);put(meter+0x1c,0x3f000000);put(meter+0x20,0x3e800000);put(meter+0x34,1);
- c=context();c.r[0]=ptr(queue_object)+4;call(&c,COMMAND_DRAIN);require(atomic_load(&fixture->meters.tokens)==1&&tracks[0].meter,"offscreen native meter demand enrolled on owner drain");
+ request_meter_bank(0);c=context();c.r[0]=ptr(queue_object)+4;call(&c,COMMAND_DRAIN);require(atomic_load(&fixture->meters.tokens)==1&&tracks[0].meter,"offscreen native meter demand enrolled on owner drain");
  c=context();c.r[7]=meter;call(&c,ME_STEREO);MeterCell *mc=meter_find(meter);require(mc&&atomic_load(&mc->lanes[0].left)==0x3f000000&&atomic_load(&mc->lanes[0].right)==0x3e800000,"native meter source lanes copy linear amplitude");
  atomic_store(&command_state->stop_requested,1);c=context();c.r[0]=ptr(queue_object)+4;call(&c,COMMAND_DRAIN);require(!atomic_load(&fixture->meters.tokens)&&atomic_load(&fixture->meters.closed),"explicit source stop releases all UI-owner meter demand");
  observer_running=0;free(objects);put(meter,old_meter);put(ptr(root_object)+0x388,0);free(fixture);free(command_state);fixture=saved;mirror_state=saved;command_state=csaved;
@@ -804,14 +812,14 @@ static void bus_membership_checks(void){
  const uint32_t types[]={0x6931f70,0x6932150,0x6931bb0,0x6931d90};
  for(unsigned subtype=0;subtype<4;subtype++)for(unsigned trial=0;trial<6;trial++){
   unsigned category=subtype<3?subtype:2;
-  memset(command_state,0,sizeof(*command_state));initial(2);command_initialize();observer_running=1;observer_image_bias=0;component_dispatch=fake_dispatch;dispatched_calls=0;defer_audio=0;
+  memset(command_state,0,sizeof(*command_state));initial(2);command_initialize();atomic_store(&command_state->alive,1);observer_running=1;observer_image_bias=0;component_dispatch=fake_dispatch;dispatched_calls=0;defer_audio=0;
   uint32_t m=ptr(recording_fixture_audio)+0x260,p=ptr(program_objects[0]),registry[]={ptr(program_objects[1])},buses[3]={0};
   buses[category]=p;put(m,0x6898b34);Context c=context();c.r[0]=m;call(&c,CH_MIXER_BIRTH);
   for(unsigned j=0;j<3;j++){put(m+0x78+12*j,ptr(buses+j));put(m+0x7c+12*j,ptr(buses+j)+4);put(m+0x80+12*j,ptr(buses+j)+4);}
   put(ptr(program_pool)+0x1c,ptr(registry));put(ptr(program_pool)+0x20,ptr(registry)+4);put(ptr(program_pool)+0x24,ptr(registry)+4);
   put(p,types[subtype]);put(types[subtype]+0x28,0x250ba74);put(types[subtype]+0x78,0x1375c68);put(ptr(track_objects[0])+0x64c,7+category);
   for(unsigned j=0;j<2;j++){uint32_t n=ptr(program_objects[j])+0x2f4;put(n,0x68ac3d4);put(n+0x1c,0x3f000000);put(n+0x20,0x3e800000);put(n+0x34,1);seed_fixture(j,0,0x3f000000,1);}
-  load_fixture();
+  load_fixture();request_meter_bank(UINT32_MAX);
   if(trial==1){buses[category]=0;buses[(category+1)%3]=p;}
   if(trial==2)buses[category]=0;
   if(trial==3)channel_owner_death(m);
@@ -839,6 +847,24 @@ static void bus_membership_checks(void){
  observer_running=0;munmap(tables,8192);memset(recording_fixture_audio,0,sizeof(recording_fixture_audio));free(fixture);free(command_state);fixture=saved;mirror_state=saved;command_state=csaved;
  puts("PASS Return/Submix/Output/MasterOutput native-owner membership shared by meter and command admission, mixed ProgramPool demand, wrong-category/lost-member/dead-owner rejection, post-resolve membership/owner loss, and production source/consumer settlement (native objects, allocation and method bodies substituted)");
 }
+static void meter_interest_checks(void){
+ MirrorState *saved=fixture;CommandState *csaved=command_state;
+ fixture=calloc(1,sizeof(*fixture));command_state=calloc(1,sizeof(*command_state));require(fixture&&command_state,"meter interest fixture");
+ initial(12);command_initialize();atomic_store(&command_state->alive,1);observer_running=1;
+ for(unsigned i=0;i<12;i++){uint32_t n=ptr(program_objects[i])+0x2f4;put(n,0x68ac3d4);seed_fixture(i,0,0x3f000000,1);}
+ load_fixture();Context c=context();c.r[0]=ptr(queue_object)+4;call(&c,COMMAND_DRAIN);
+ require(!atomic_load(&fixture->meters.tokens),"no controller interest creates no meter demand");
+ request_meter_bank(0);call(&c,COMMAND_DRAIN);require(atomic_load(&fixture->meters.tokens)==8,"only first visible eight demand meters");
+ unsigned subscription=meter_subscription;call(&c,COMMAND_DRAIN);require(subscription==meter_subscription,"unchanged owner drain does not rebuild subscriptions");
+ request_meter_bank(8);call(&c,COMMAND_DRAIN);require(atomic_load(&fixture->meters.tokens)==4&&!tracks[0].meter&&tracks[8].meter,"bank move releases old and binds remaining four");
+ atomic_store(&fixture->heartbeat,1001);call(&c,COMMAND_DRAIN);require(!atomic_load(&fixture->meters.tokens),"expired bridge lease releases demand");
+ request_meter_bank(0);call(&c,COMMAND_DRAIN);require(atomic_load(&fixture->meters.tokens)==8,"fresh reconnect restores current bank");
+ CopiedMirror out;require(copy_mirror(fixture,&out),"disconnect source");MirrorInput in={.commands=command_state};MirrorBank bank;bank_init(&bank);bank_apply(&bank,&out,1001);input_meter_interest(&in,&bank,&out,1001,0);call(&c,COMMAND_DRAIN);
+ require(!atomic_load(&fixture->meters.tokens),"disconnect releases demand without waiting for source close");
+ atomic_store(&command_state->stop_requested,1);call(&c,COMMAND_DRAIN);require(atomic_load(&fixture->meters.closed),"disabled interest still completes source close");
+ observer_running=0;free(fixture);free(command_state);fixture=saved;mirror_state=saved;command_state=csaved;
+ puts("PASS production meter-interest reader/bank publisher: absent, eight-strip bank, bank switch, expiry, reconnect and closure (native allocation substituted)");
+}
 static void *registration_meter_source(void *unused){
  (void)unused;Context c=context();c.r[7]=ptr(program_objects[0])+0x2f4;call(&c,ME_STEREO);return NULL;
 }
@@ -847,7 +873,7 @@ static void registration_overlap_checks(void){
  for(unsigned closing=0;closing<2;closing++){
   memset(command_state,0,sizeof(*command_state));initial(1);command_initialize();observer_running=1;atomic_store(&command_state->alive,1);
   uint32_t n=ptr(program_objects[0])+0x2f4;put(n,0x68ac3d4);put(n+0x1c,0x3f000000);put(n+0x20,0x3e800000);put(n+0x34,1);seed_fixture(0,0,0x3f000000,1);load_fixture();
-  Context c=context();c.r[0]=ptr(queue_object)+4;call(&c,COMMAND_DRAIN);MeterCell *m=meter_find(n);require(m&&atomic_load(&fixture->meters.tokens)==1,"actual meter admission before simultaneous source enrollment");
+  request_meter_bank(0);Context c=context();c.r[0]=ptr(queue_object)+4;call(&c,COMMAND_DRAIN);MeterCell *m=meter_find(n);require(m&&atomic_load(&fixture->meters.tokens)==1,"actual meter admission before simultaneous source enrollment");
   atomic_store(&pause_at,20);atomic_store(&pause_reached,0);atomic_store(&pause_resume,0);pthread_t first,second;
   require(!pthread_create(&first,NULL,registration_meter_source,NULL),"first native meter source thread");
   while(!atomic_load_explicit(&pause_reached,memory_order_acquire)){struct timespec wait={0,1000000};nanosleep(&wait,NULL);}
@@ -1308,7 +1334,7 @@ int main(int argc,char **argv){
  alarm(30);retired_key_checks();manual_checks();exercise_adjust=4096;replay_checks();
  void *v=mmap((void*)0x6930000,4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED,-1,0);require(v!=(void*)-1,"fixture Drum vtable page");put(0x6930c28,0x250ba74);put(0x6930c78,0x1375c68);
  fixture=command_file(argv[1],sizeof(MirrorState));command_state=command_file(argv[2],sizeof(CommandState));require(fixture!=MAP_FAILED&&command_state!=MAP_FAILED,"exclusive actual shared output files");
- processor_lifecycle_checks();repair_checks();external_close_checks();new_project_checks();heartbeat_checks();channel_checks();jog_checks();master_checks();recording_checks();general_checks();send_destination_checks();bus_membership_checks();registration_overlap_checks();mode_acceptance_checks();io_audio_checks();io_monitor_dispatch_checks();io_sync_dispatch_checks();io_completion_checks();
+ processor_lifecycle_checks();repair_checks();external_close_checks();new_project_checks();heartbeat_checks();channel_checks();jog_checks();master_checks();recording_checks();general_checks();send_destination_checks();bus_membership_checks();meter_interest_checks();registration_overlap_checks();mode_acceptance_checks();io_audio_checks();io_monitor_dispatch_checks();io_sync_dispatch_checks();io_completion_checks();
  initial(1);command_state->magic=COMMAND_MAGIC;command_state->version=COMMAND_VERSION;command_state->bytes=sizeof(*command_state);command_state->capacity=COMMAND_SLOTS;command_state->pid=getpid();uint64_t start=command_process_start(getpid());command_state->start_lo=start;command_state->start_hi=start>>32;command_state->origin_sec=fixture->origin_sec;command_state->origin_nsec=fixture->origin_nsec;command_state->seconds=WINDOW_SECONDS;atomic_store(&command_state->alive,1);
  command_initialize();observer_running=1;observer_image_bias=0;component_dispatch=fake_dispatch;
  seed_fixture(0,0,0x3f000000,1);load_fixture();

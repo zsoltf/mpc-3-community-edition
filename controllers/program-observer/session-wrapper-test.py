@@ -8,11 +8,12 @@ P=pathlib.Path
 assert P('/.dockerenv').exists() and os.getuid()==0
 stage=P('/data/mpclearn-model.wrapper-test');stage.mkdir(parents=True,mode=0o700)
 settings=P('/media/az01-internal/Settings/MPC/MPC.settings');settings.parent.mkdir(parents=True);settings.write_text('original settings\n')
-source=P('/src/mcu-session.sh').read_text().replace('adapter=/data/mpclearn-controls-general1/mpclearn-controls',f'adapter={stage}/adapter').replace('inspector=/data/mpclearn-controls-general1/main-button',f'inspector={stage}/inspector')
+runtime=P('/run/mpclearn-'+stage.name)
+source=P('/src/mcu-session.sh').read_text()
 source=source.replace('owner(){\n exec 9>session.lock','owner(){\n while [ -f pause-owner ];do sleep .05;done\n exec 9>session.lock')
 (stage/'mcu-session.sh').write_text(source);(stage/'mcu-session.sh').chmod(0o700)
 (stage/'mcu').write_text(P('/src/mcu.sh').read_text().replace('stage=/data/mpclearn-model.manual1',f'stage={stage}'));(stage/'mcu').chmod(0o700)
-(stage/'config.h').write_text(f'#define WINDOW_SECONDS 0u\n#define OBSERVER_LIBRARY "{stage}/command-observer.so"\n')
+(stage/'config.h').write_text(f'#define WINDOW_SECONDS 0u\n#define OBSERVER_LIBRARY "{stage}/command-observer.so"\n#define OBSERVER_LOG "{runtime}/volume.state"\n#define COMMAND_PATH "{runtime}/command.state"\n')
 P('/tmp/session-stub.c').write_text(r'''#include <unistd.h>
 #include <signal.h>
 #include <sys/prctl.h>
@@ -26,26 +27,26 @@ static void stop(int sig){(void)sig;stopped=1;}
 static void arm(int sig){(void)sig;int fd=open("armed",O_WRONLY|O_CREAT|O_APPEND,0600);if(fd>=0){write(fd,"1",1);close(fd);}}
 int main(int argc,char **argv){int bridge=strstr(argv[0],"mirror-input")!=0;
 if(bridge&&argc==3&&!strcmp(argv[1],"--surface-status")){unsigned enabled;if(!surface_preferences_read(argv[2],&enabled))return 1;puts(enabled?"on":"off");return 0;}
-if(strstr(argv[0],"adapter")){signal(SIGUSR1,arm);signal(SIGTERM,stop);puts("DISARMED fixture");fflush(stdout);while(!stopped)pause();return 0;}
+if(strstr(argv[0],"mpclearn-controls")){signal(SIGUSR1,arm);signal(SIGTERM,stop);puts("DISARMED fixture");fflush(stdout);while(!stopped)pause();return 0;}
 if(bridge){signal(SIGTERM,stop);printf("BRIDGE_READY pid=%u\n",(unsigned)getpid());for(int i=1;i<argc;i++)printf("ARG %s\n",argv[i]);fflush(stdout);while(!stopped){FILE*f=fopen("mpc.pid","r");int p=0;if(f){fscanf(f,"%d",&p);fclose(f);}if(p>0&&kill(p,0))break;usleep(10000);}printf("TOUCH_FINAL pid=%u mask=3\n",(unsigned)getpid());return stopped?0:1;}
 prctl(PR_SET_NAME,"MPC Main Thread",0,0,0);signal(SIGTERM,stop);
 FILE*f=fopen("launches","a");fputs("1",f);fclose(f);unlink("project-ready");unlink("native-intent");unlink("closed");
-f=fopen("command.state","w");fprintf(f,"%u\n",(unsigned)getpid());fclose(f);f=fopen("volume.state","w");fclose(f);
+f=fopen("/run/mpclearn-mpclearn-model.wrapper-test/command.state","w");fprintf(f,"%u\n",(unsigned)getpid());fclose(f);f=fopen("/run/mpclearn-mpclearn-model.wrapper-test/volume.state","w");fclose(f);
 for(int i=0;i<1100000;i++)putchar('x');puts(" MPC diagnostic tail");fflush(stdout);
 while(!stopped){f=fopen("exit-request","r");if(f){int code=0;fscanf(f,"%d",&code);fclose(f);unlink("exit-request");return code;}usleep(10000);}return 0;}
 ''')
 subprocess.run(['gcc','-D_GNU_SOURCE','/tmp/session-stub.c','-o','/usr/bin/MPC'],check=True)
-for name in ['mirror-input','adapter']:(stage/name).write_bytes(P('/usr/bin/MPC').read_bytes());(stage/name).chmod(0o700)
+for name in ['mirror-input','mpclearn-controls']:(stage/name).write_bytes(P('/usr/bin/MPC').read_bytes());(stage/name).chmod(0o700)
 bin=P('/tmp/session-bin');bin.mkdir()
 def script(p,text):p.write_text('#!/bin/sh\n'+text);p.chmod(0o700)
 script(bin/'setarch','shift;shift;exec "$@"\n')
-script(stage/'inspector','test ! -f route-fail\n')
+script(stage/'main-button','test ! -f route-fail\n')
 script(bin/'systemctl',f'''case "$1" in stop) rm -f {stage}/service-active;; start) touch {stage}/service-active;; is-active) test -f {stage}/service-active;; *) exit 2;; esac\n''')
 script(stage/'command-client',f'''cd {stage}
 case "$1" in
- session-status) test -f command.state -a -f volume.state || exit 5;test ! -f closed || exit 4;test ! -f native-intent || exit 6;test -f project-ready || exit 3;exit 0;;
- new-project-intent) test -f native-intent || exit 1;test "$(cat command.state)" = "$3" || exit 1;test "$(cat native-intent)" = "$3" || exit 1;if test "${{5:-}}" = consume;then test ! -e /proc/$3/exe || exit 1;mv native-intent consumed-intent;fi;;
- stop) touch closed;;
+ session-status) test "$2" = "{runtime}/command.state" -a "$3" = "{runtime}/volume.state" || exit 9;test -f "$2" -a -f "$3" || exit 5;test ! -f closed || exit 4;test ! -f native-intent || exit 6;test -f project-ready || exit 3;exit 0;;
+ new-project-intent) test -f native-intent || exit 1;test "$2" = "{runtime}/command.state" || exit 9;test "$(cat "$2")" = "$3" || exit 1;test "$(cat native-intent)" = "$3" || exit 1;if test "${{5:-}}" = consume;then test ! -e /proc/$3/exe || exit 1;mv native-intent consumed-intent;fi;;
+ stop) test "$2" = "{runtime}/command.state" -a "$3" = "{runtime}/volume.state" || exit 9;touch closed;;
  *) exit 2;; esac
 ''')
 for name in ['mirror-read','command-observer.so']:(stage/name).write_bytes(b'')
@@ -72,9 +73,15 @@ def depart(intent,code=0):
 def cleanup():
  for exe in P('/proc').glob('[0-9]*/exe'):
   try:
-   if os.readlink(exe) in ('/usr/bin/MPC',str(stage/'mirror-input'),str(stage/'adapter')):os.kill(int(exe.parent.name),signal.SIGKILL)
+   if os.readlink(exe) in ('/usr/bin/MPC',str(stage/'mirror-input'),str(stage/'mpclearn-controls')):os.kill(int(exe.parent.name),signal.SIGKILL)
   except FileNotFoundError:pass
 try:
+ # Runtime admission refuses symlinks, unknown entries and unowned state.
+ runtime.symlink_to('/tmp',target_is_directory=True);run('start',1);runtime.unlink()
+ runtime.mkdir(mode=0o700);(runtime/'unexpected').touch();run('start',1);(runtime/'unexpected').unlink()
+ (runtime/'command.state').symlink_to('/tmp/missing-state');run('start',1);(runtime/'command.state').unlink()
+ (runtime/'command.state').write_text('unowned');run('start',1);(runtime/'command.state').unlink()
+ assert not (stage/'launches').exists()
  # Stop wins even before the owner has acquired its launch admission.
  (stage/'pause-owner').touch();started=subprocess.Popen([str(stage/'mcu'),'start'],env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
  until(lambda:(stage/'owner.pid').exists(),'owner launch locator');run('stop',1);(stage/'pause-owner').unlink();started.communicate(timeout=10)
@@ -95,7 +102,9 @@ try:
  assert count('armed')==0 and (stage/'manual-adapter-unarmed.pid').exists() and (stage/'generation.failed').read_text()==arming_failure
  run('bridge-stop');(stage/'route-fail').unlink();run('bridge-start');until(lambda:count('armed')==1,'explicit bridge-start restores missed arming')
  assert not (stage/'generation.failed').exists() and not (stage/'manual-adapter-unarmed.pid').exists()
+ state_inodes=[(runtime/n).stat().st_ino for n in ('command.state','volume.state')]
  run('bridge-stop');run('bridge-start');assert count('armed')==1
+ assert state_inodes==[(runtime/n).stat().st_ino for n in ('command.state','volume.state')]
  run('start');assert count('launches')==1
  print('PASS explicit bridge-start: actual missed chooser arming recovery, route-failure refusal, exact failure cleanup and no duplicate signal (native adapter/protocol substituted)')
  for expected in (2,3):
@@ -112,6 +121,7 @@ try:
   else:
    (stage/'project-ready').touch();until(lambda:count('armed')==expected,'new saved template arms')
  assert len(list((stage/'history').iterdir()))>=2
+ assert len(list((stage/'history').glob('*/command.state')))>=2 and not (stage/'command.state').exists()
  print('PASS actual owner: repeatable accepted exit -> distinct chooser bridge/disarmed adapter -> saved template arm; old receipts/archive and original settings retained (native protocol and MIDI substituted)')
  # Positive marker cannot authorize a crash restart; generic zero exit neither.
  for positive,code in ((True,17),(False,0)):
@@ -122,4 +132,11 @@ try:
  assert (stage/'session.revoked').exists() and (stage/'service-active').exists()
  assert settings.read_text()=='original settings\n'
  print('PASS actual owner: crash and generic exit do not restart; explicit stop revokes before launch and during handoff; exact child waits and settings recovery (native protocol substituted)')
+ # Simulate reboot: only tmpfs mappings vanish. Old locators/settings remain,
+ # and cannot authorize a current process signal or a fabricated close receipt.
+ for name in ('command.state','volume.state'):(runtime/name).unlink(missing_ok=True)
+ (stage/'session.boot-id').write_text('previous-boot\n');run('start')
+ assert (runtime/'command.state').exists() and not (stage/'command.state').exists()
+ (stage/'project-ready').touch();until(lambda:not (stage/'manual-adapter-unarmed.pid').exists(),'reboot session arming');run('stop')
+ print('PASS real tmpfs admission, unchanged mappings on bridge restart, cross-filesystem generation archive, and vanished reboot mappings (boot id and native app substituted)')
 finally:cleanup()

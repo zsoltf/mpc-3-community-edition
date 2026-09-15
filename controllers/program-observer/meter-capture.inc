@@ -1,6 +1,9 @@
 /* Existing UI owner owns native SharedEnableable tokens, never Track/Program
  * retains. Audio/UI source lanes own separate copied envelope records. */
 static uint32_t meter_tokens[METER_CELLS],meter_subscription;
+static uint32_t meter_interest_revision,meter_topology_revision,meter_interest_epoch;
+static unsigned meter_interest_valid,meter_until,meter_seen_deaths;
+static _Atomic unsigned meter_deaths;
 static unsigned meter_hash(uint32_t n){return ((n>>4)*2654435761u)&(METER_HASH-1);}
 static MeterCell *meter_find(uint32_t n){
  unsigned h=meter_hash(n);
@@ -8,7 +11,7 @@ static MeterCell *meter_find(uint32_t n){
  return NULL;
 }
 static void meter_error(unsigned why){atomic_store_explicit(&mirror_state->meters.error,why,memory_order_release);}
-static void meter_initialize(void){memset(meter_tokens,0,sizeof(meter_tokens));meter_subscription=0;}
+static void meter_initialize(void){memset(meter_tokens,0,sizeof(meter_tokens));meter_subscription=0;meter_interest_valid=0;meter_until=0;meter_seen_deaths=0;atomic_store(&meter_deaths,0);}
 static void meter_release(unsigned i){
  uint32_t k=meter_tokens[i];meter_tokens[i]=0;
  atomic_store_explicit(&mirror_state->meters.cells[i].subscription,0,memory_order_release);
@@ -21,6 +24,7 @@ static void meter_release(unsigned i){
  atomic_store_explicit(&mirror_state->meters.tokens,atomic_load(&mirror_state->meters.tokens)-1,memory_order_release);
 }
 static void meter_release_all(void){
+ meter_interest_valid=0;
  unsigned n=atomic_load_explicit(&mirror_state->meters.used,memory_order_acquire);
  for(unsigned i=0;i<n&&i<METER_CELLS;i++)meter_release(i);
  atomic_store_explicit(&mirror_state->meters.master,0,memory_order_release);
@@ -30,7 +34,7 @@ static void meter_release_all(void){
  * native destructor cancels release callbacks, allowing the next UI drain to
  * dispose of a token even when destruction ran on another source thread. */
 static void meter_source(Context *c,unsigned site,unsigned lane,MeterCell *m){
- if(site==ME_DEATH||site==ME_DELETE){atomic_store_explicit(&m->subscription,0,memory_order_release);atomic_store_explicit(&m->live,0,memory_order_release);return;}
+ if(site==ME_DEATH||site==ME_DELETE){atomic_store_explicit(&m->subscription,0,memory_order_release);atomic_store_explicit(&m->live,0,memory_order_release);atomic_fetch_add_explicit(&meter_deaths,1,memory_order_release);return;}
  unsigned sub=atomic_load_explicit(&m->subscription,memory_order_acquire),ep=atomic_load(&m->epoch);
  if(!sub||!atomic_load_explicit(&m->live,memory_order_acquire))return;
  uint32_t n=atomic_load_explicit(&m->address,memory_order_relaxed);
@@ -81,12 +85,30 @@ static void meter_service(Context *c){
   meter_release_all();atomic_store_explicit(&s->closed,1,memory_order_release);return;
  }
  if(atomic_load(&s->error)){meter_release_all();return;}
+ MeterDemand demand;unsigned now=atomic_load_explicit(&mirror_state->heartbeat,memory_order_acquire);
+ if(!meter_demand_read(&command_state->meter_interest,&demand)){if(meter_interest_valid&&now>=meter_until)meter_release_all();return;}
+ if(!demand.enabled||demand.epoch!=epoch||demand.until<=now){
+  if(meter_interest_valid||atomic_load(&s->tokens)||atomic_load(&s->master))meter_release_all();
+  return;
+ }
  if(!ready||depth||loading||reset_pending||!root||!project)return;
  for(unsigned i=0;i<count;i++)if(tracks[i].transition)return;
+ unsigned deaths=atomic_load_explicit(&meter_deaths,memory_order_acquire);
+ unsigned topology=atomic_load_explicit(&mirror_state->revision,memory_order_acquire);
+ if(meter_interest_valid&&meter_interest_revision==demand.revision&&meter_topology_revision==topology&&meter_interest_epoch==epoch&&meter_seen_deaths==deaths)return;
  if(word(root+0x24c)!=project||word(project+0xa94)!=pool||!typed(pool,0x68ad2c4)){meter_error(ME_IDENTITY);return;}
  uint32_t pp=word(project+0xa90);if(!typed(pp,0x68ad07c)){meter_error(ME_IDENTITY);return;}
  uint32_t begin=word(pp+0x1c),end=word(pp+0x20),cap=word(pp+0x24),tb=word(pool+0x34),te=word(pool+0x38);
  if((begin&&!pointer(begin))||end<begin||cap<end||(end-begin)%4||(end-begin)/4>MIRROR_CELLS||te<tb||(te-tb)/4!=count||(count&&!pointer(tb))){meter_error(ME_IDENTITY);return;}
+ /* Retire the previous bank before requesting the next. Each service pass
+  * ends with at most eight channel demands; a departing cell whose owner is
+  * shared with a newly demanded strip is released by the wanted sweep below. */
+ unsigned existing=atomic_load(&s->used);
+ for(unsigned i=0;i<existing;i++)if(meter_tokens[i]){
+  MeterCell *cell=s->cells+i;unsigned keep=0,owner_id=atomic_load(&cell->owner),kind=atomic_load(&cell->owner_kind);
+  for(unsigned j=0;j<demand.count;j++)if(owner_id==(kind==CO_TRACK?demand.track_owner[j]:demand.program_owner[j]))keep=1;
+  if(!keep||!atomic_load_explicit(&cell->live,memory_order_acquire))meter_release(i);
+ }
  unsigned wanted[MIRROR_TRACKS+1],nw=0,changed=0;
  uint32_t a=word(root+0x2e4);unsigned master=0;
  if(pointer(a)&&a<UINT32_MAX-0x400&&typed(a+0x120,0x68ac3bc)&&typed(a+0x260,0x6898b34))master=meter_bind(a+0x128,channel_owner_id(a+0x260),CO_MIXER,0);
@@ -94,7 +116,9 @@ static void meter_service(Context *c){
  for(unsigned i=0;i<count;i++){
   Track *t=tracks+i;unsigned id=0;
   if(word(tb+i*4)!=t->track||!typed(t->track,0x6935554)||word(t->track+0x648)!=t->program||word(t->track+0x64c)!=t->kind){meter_error(ME_IDENTITY);return;}
-  if(t->program&&t->program_owner&&channel_owner_id(t->program)==t->program_owner){
+  unsigned interested=0;
+  for(unsigned j=0;j<demand.count;j++)if(demand.serial[j]==t->serial&&demand.track_owner[j]==t->track_owner&&demand.program_owner[j]==t->program_owner)interested=1;
+  if(interested&&t->program&&t->program_owner&&channel_owner_id(t->program)==t->program_owner){
    if(!program_member(pp,t)||word(t->program)!=observer_image_bias+t->vptr){meter_error(ME_IDENTITY);return;}
    /* Exact Channel Mixer selection: type4 uses Track point1, others Program
     * point5. Do not substitute an invented pre/post-fader name. */
@@ -105,6 +129,7 @@ static void meter_service(Context *c){
  unsigned used=atomic_load(&s->used);
  for(unsigned i=0;i<used;i++){unsigned j;for(j=0;j<nw;j++)if(wanted[j]==i+1)break;if(j==nw)meter_release(i);}
  if(changed)export_topology();
+ meter_interest_revision=demand.revision;meter_topology_revision=atomic_load_explicit(&mirror_state->revision,memory_order_acquire);meter_interest_epoch=epoch;meter_until=demand.until;meter_seen_deaths=deaths;meter_interest_valid=1;
 }
 static int meter_topology_boundary(unsigned site){
  return site==M_RESET||site==M_CREATE_ENTER||site==M_ROOT_DESTROY||site==M_PROJECT_DESTROY||site==M_PROJECT_CLEAR||site==M_POOL_CLEAR||site==M_POOL_DESTROY||site==M_TRACK_DESTROY||site==M_REMOVE_ENTER||site==M_REPLACE_SIMPLE_PRE||site==M_REPLACE_FULL_PRE;

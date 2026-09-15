@@ -23,7 +23,7 @@ static void diagnostic_status(const CommandState *s){
  printf(",\"admission\":{\"packed\":%u,\"category\":\"%s\",\"raw_result\":%u,\"site\":%u,\"thread_token\":null,\"lane\":null,\"quality\":\"coherent_failure_sample_no_thread_pair\"}",packed,guard<sizeof(names)/sizeof(*names)?names[guard]:"unknown",packed&255,packed>>16);
 }
 static void status(const CommandState *s){
- printf("{\"format\":\"CMD30\",\"pid\":%u,\"raw_alive\":%u,\"closed\":%u,\"error\":%u,\"trace_error\":%u,\"published\":%u,\"consumed\":%u,\"reclaimed\":%u,\"pending_count\":%u,\"capacity\":%u,\"call_return_is_ack\":false,\"history\":\"retained current generation per slot; totals are counts\",\"requests\":[",s->pid,atomic_load(&s->alive),atomic_load(&s->closed),atomic_load(&s->error),atomic_load(&s->trace_error),atomic_load(&s->published),atomic_load(&s->consumed),atomic_load(&s->reclaimed),command_pending(s),COMMAND_SLOTS);
+ printf("{\"format\":\"CMD31\",\"pid\":%u,\"raw_alive\":%u,\"closed\":%u,\"error\":%u,\"trace_error\":%u,\"published\":%u,\"consumed\":%u,\"reclaimed\":%u,\"pending_count\":%u,\"capacity\":%u,\"call_return_is_ack\":false,\"history\":\"retained current generation per slot; totals are counts\",\"requests\":[",s->pid,atomic_load(&s->alive),atomic_load(&s->closed),atomic_load(&s->error),atomic_load(&s->trace_error),atomic_load(&s->published),atomic_load(&s->consumed),atomic_load(&s->reclaimed),command_pending(s),COMMAND_SLOTS);
  unsigned first=1;
  for(unsigned at=0;at<COMMAND_SLOTS;at++){
   const CommandSlot *slot=s->slots+at;unsigned seq=atomic_load_explicit(&slot->published,memory_order_acquire);CommandRequest r;
@@ -218,7 +218,7 @@ static int session(const char *command_path,const char *mirror_path,int stop){
   }
   result=!atomic_load(&c->error)&&!atomic_load(&c->trace_error)&&!atomic_load(&m->error)?0:1;
  }else result=healthy?(atomic_load(&c->new_project_intent)?6:copy.ready?0:3):atomic_load(&c->closed)?4:1;
- printf("{\"format\":\"CMD30\",\"pid\":%u,\"process_current\":%s,\"fresh\":%s,\"healthy\":%s,\"state\":\"%s\",\"manual\":%s,\"closed\":%u,\"error\":%u,\"trace_error\":%u,\"mirror_error\":%u,\"published\":%u,\"reclaimed\":%u,\"pending\":%s,\"elapsed_ms\":%u,\"clock_limit_ms\":%u,\"volume_cells\":%u,\"volume_capacity\":%u,\"owners_used\":%u,\"owners_capacity\":%u,\"fields_used\":%u,\"fields_capacity\":%u",c->pid,process?"true":"false",fresh?"true":"false",healthy&&!stop?"true":"false",atomic_load(&c->closed)?"closed":healthy?(copy.ready?"ready":"awaiting_project"):"unavailable",c->seconds?"false":"true",atomic_load(&c->closed),atomic_load(&c->error),atomic_load(&c->trace_error),atomic_load(&m->error),atomic_load(&c->published),atomic_load(&c->reclaimed),!command_idle(c)?"true":"false",now,command_tick_limit(c->seconds),atomic_load(&m->allocated),MIRROR_CELLS,atomic_load(&m->channel.owners_used),CHANNEL_OWNERS,atomic_load(&m->channel.fields_used),CHANNEL_FIELDS);printf(",\"meter_error\":%u,\"meter_tokens\":%u,\"meter_cells\":%u,\"meter_capacity\":%u",atomic_load(&m->meters.error),atomic_load(&m->meters.tokens),atomic_load(&m->meters.used),METER_CELLS);printf(",\"pad_error\":%u,\"pad_owners\":%u,\"pad_capacity\":%u,\"pad_parents\":%u",atomic_load(&m->pads.error),atomic_load(&m->pads.used),PAD_OWNERS,atomic_load(&m->pads.parents_used));printf(",\"new_project_intent\":%u",atomic_load(&c->new_project_intent));diagnostic_status(c);printf(",\"effects\":");effects_json(&copy);printf(",\"io\":");io_json(&copy);puts("}");
+ printf("{\"format\":\"CMD31\",\"pid\":%u,\"process_current\":%s,\"fresh\":%s,\"healthy\":%s,\"state\":\"%s\",\"manual\":%s,\"closed\":%u,\"error\":%u,\"trace_error\":%u,\"mirror_error\":%u,\"published\":%u,\"reclaimed\":%u,\"pending\":%s,\"elapsed_ms\":%u,\"clock_limit_ms\":%u,\"volume_cells\":%u,\"volume_capacity\":%u,\"owners_used\":%u,\"owners_capacity\":%u,\"fields_used\":%u,\"fields_capacity\":%u",c->pid,process?"true":"false",fresh?"true":"false",healthy&&!stop?"true":"false",atomic_load(&c->closed)?"closed":healthy?(copy.ready?"ready":"awaiting_project"):"unavailable",c->seconds?"false":"true",atomic_load(&c->closed),atomic_load(&c->error),atomic_load(&c->trace_error),atomic_load(&m->error),atomic_load(&c->published),atomic_load(&c->reclaimed),!command_idle(c)?"true":"false",now,command_tick_limit(c->seconds),atomic_load(&m->allocated),MIRROR_CELLS,atomic_load(&m->channel.owners_used),CHANNEL_OWNERS,atomic_load(&m->channel.fields_used),CHANNEL_FIELDS);printf(",\"meter_error\":%u,\"meter_tokens\":%u,\"meter_cells\":%u,\"meter_capacity\":%u",atomic_load(&m->meters.error),atomic_load(&m->meters.tokens),atomic_load(&m->meters.used),METER_CELLS);printf(",\"pad_error\":%u,\"pad_owners\":%u,\"pad_capacity\":%u,\"pad_parents\":%u",atomic_load(&m->pads.error),atomic_load(&m->pads.used),PAD_OWNERS,atomic_load(&m->pads.parents_used));printf(",\"new_project_intent\":%u",atomic_load(&c->new_project_intent));diagnostic_status(c);printf(",\"effects\":");effects_json(&copy);printf(",\"io\":");io_json(&copy);puts("}");
 unmap:munmap((void*)m,sizeof(*m));close(mfd);
 done:munmap(c,sizeof(*c));close(fd);return result;
 }
@@ -244,7 +244,7 @@ static int processor_watch(const char *path,const char *key_arg,const char *seco
  if(!header(s)||!start||command_process_start(s->pid)!=start||!command_process_exact(s->pid)||!file_current(path,fd,&st)||now>UINT32_MAX-(uint32_t)seconds*1000u||!command_writer_enter(s))goto done;
  if(!processor_begin(s,now,(uint32_t)key,(uint32_t)seconds*1000)){command_writer_leave(s);goto done;}
  uint32_t generation=atomic_load(&s->processor_generation);command_writer_leave(s);result=0;
- printf("Passive processor window CMD30 generation=%u key=%u seconds=%lu; rolling register-only, enrolled threads, lifetime unqualified\n",generation,(uint32_t)key,seconds);
+ printf("Passive processor window CMD31 generation=%u key=%u seconds=%lu; rolling register-only, enrolled threads, lifetime unqualified\n",generation,(uint32_t)key,seconds);
 done:munmap(s,sizeof(*s));close(fd);return result;
 }
 static int processor_end(const char *path){
@@ -261,12 +261,12 @@ static void processor_print(FILE *out,uint32_t sequence,const uint32_t w[PROCESS
 }
 static void processor_metadata(FILE *out,const CommandState *s){
  uint32_t count=atomic_load(&s->processor_count),loss=0;uint64_t drops=0;for(unsigned i=0;i<COMMAND_LANES;i++){loss|=atomic_load(s->processor_loss+i);drops+=atomic_load(s->processor_dropped+i);}
- fprintf(out,"{\"type\":\"status\",\"format\":\"CMD30\",\"quality\":\"passive_registers_lifetime_unqualified_enrolled_threads_only\",\"metadata_quality\":\"independent_atomic_counters\",\"generation\":%u,\"until\":%u,\"loss_flags\":%u,\"writer_or_frame_drops\":%llu,\"open_getters\":%u,\"reserved\":%u,\"retained_from\":%u,\"retention_is_not_stream_loss\":true}",atomic_load(&s->processor_generation),atomic_load(&s->processor_until),loss,(unsigned long long)drops,processor_open_total(s),count,count>PROCESSOR_OBSERVATIONS?count-PROCESSOR_OBSERVATIONS+1:1);
+ fprintf(out,"{\"type\":\"status\",\"format\":\"CMD31\",\"quality\":\"passive_registers_lifetime_unqualified_enrolled_threads_only\",\"metadata_quality\":\"independent_atomic_counters\",\"generation\":%u,\"until\":%u,\"loss_flags\":%u,\"writer_or_frame_drops\":%llu,\"open_getters\":%u,\"reserved\":%u,\"retained_from\":%u,\"retention_is_not_stream_loss\":true}",atomic_load(&s->processor_generation),atomic_load(&s->processor_until),loss,(unsigned long long)drops,processor_open_total(s),count,count>PROCESSOR_OBSERVATIONS?count-PROCESSOR_OBSERVATIONS+1:1);
 }
 static int processor_status(const char *path){
  int fd=-1;struct stat st;CommandState *s=map_file(path,sizeof(*s),0,&fd,&st);
- if(s==MAP_FAILED){fputs("processor diagnostics require a matched CMD30 file\n",stderr);return 1;}
- if(!header(s)){munmap(s,sizeof(*s));close(fd);fputs("processor diagnostics require CMD30\n",stderr);return 1;}
+ if(s==MAP_FAILED){fputs("processor diagnostics require a matched CMD31 file\n",stderr);return 1;}
+ if(!header(s)){munmap(s,sizeof(*s));close(fd);fputs("processor diagnostics require CMD31\n",stderr);return 1;}
  fputs("{\"metadata\":",stdout);processor_metadata(stdout,s);fputs(",\"events\":[",stdout);
  unsigned count=atomic_load(&s->processor_count),first=1,begin=count>PROCESSOR_OBSERVATIONS?count-PROCESSOR_OBSERVATIONS:0;
  for(unsigned at=begin;at<count;at++){uint32_t w[PROCESSOR_WORDS];if(!processor_read(s,at+1,w))continue;if(!first)fputc(',',stdout);processor_print(stdout,at+1,w);first=0;}
@@ -310,7 +310,7 @@ static volatile sig_atomic_t processor_stream_stop;
 static void processor_stream_signal(int sig){(void)sig;processor_stream_stop=1;}
 static int processor_stream(const char *path,const char *seconds_arg){
  char *end;unsigned long seconds=strtoul(seconds_arg,&end,10);if(!*seconds_arg||*end||seconds<1||seconds>300)return 2;
- int fd=-1,result=1;struct stat st;CommandState *s=map_file(path,sizeof(*s),0,&fd,&st);if(s==MAP_FAILED){fputs("processor-stream requires a matched CMD30 file\n",stderr);return 1;}
+ int fd=-1,result=1;struct stat st;CommandState *s=map_file(path,sizeof(*s),0,&fd,&st);if(s==MAP_FAILED){fputs("processor-stream requires a matched CMD31 file\n",stderr);return 1;}
  uint64_t start=((uint64_t)s->start_hi<<32)|s->start_lo;uint32_t began=command_now(s->origin_sec,s->origin_nsec);
  if(!header(s)||!start||began==UINT32_MAX||command_process_start(s->pid)!=start||!command_process_exact(s->pid)||!file_current(path,fd,&st))goto done;
  int output_flags;if(!processor_output_begin(stdout,&output_flags))goto done;

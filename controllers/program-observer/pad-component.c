@@ -135,6 +135,7 @@ static void pad_mixed_controls(void){
 }
 int main(void){
  alarm(30);void *v=mmap((void*)0x6930000,4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED,-1,0);require(v!=MAP_FAILED,"fixture native type page");put(0x6930c28,0x250ba74);put(0x6930c78,0x1375c68);pad_setup();
+ CopiedMirror lazy;memset(&lazy,0xa5,sizeof(lazy));require(copy_mirror_view(fixture,&lazy,0)&&!lazy.pad_count&&lazy.pads[0].serial==0xa5a5a5a5,"normal mixer does not inspect or clear 128 pad rows");
  CopiedMirror s;require(copy_mirror(fixture,&s)&&s.pad_count==128&&s.pads[127].available&&s.pads[127].bits==0x3f000000,"all untouched offscreen pad values come from constructor register capture despite poisoned native memory");
  MirrorBank bank;bank_init(&bank);bank_view(&bank,BV_DRUM_PADS,0);bank_apply(&bank,&s,1);bank.offset=120;bank_apply(&bank,&s,1);ChannelWire w=channel_wire(&s,s.pads+127,CF_VOLUME);require(!memcmp(w.name,"H16",3)&&!s.pads[127].fields[CF_NAME].available&&!s.pads[127].fields[CF_COLOR].available&&!w.led[3],"native pad labels, unsupported metadata/selection absent");
  require(bank.strips[7].pad_index==127&&bank_due(&bank,7,10)==8192,"last bank selects offscreen H16 motor feedback");

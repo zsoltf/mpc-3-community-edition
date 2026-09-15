@@ -4,7 +4,7 @@ Development stays in the private mpclearn project. The clean release checkout
 is a publication snapshot for **zsoltf/mpc-3-community-edition**, not a replacement
 for the development repository. Its local location is
 `artifacts/mpc-3-community-edition` under the main mpclearn checkout. Release
-attachments are in `artifacts/community-release-v0.1.0-rc.1` alongside it.
+attachments are in `artifacts/community-release-v0.1.0-rc.2` alongside it.
 Never push the private repository's history.
 
 ## 1. Create the GitHub repository
@@ -54,19 +54,18 @@ Reference: [GitHub Pages custom workflows](https://docs.github.com/en/pages/gett
 
 Open **Releases > Draft a new release**:
 
-- New tag: `v0.1.0-rc.1`, target: **main**.
-- Title: `MPC 3 Community Edition v0.1.0-rc.1`.
-- Copy the body from [release notes](releases/v0.1.0-rc.1.md).
+- New tag: `v0.1.0-rc.2`, target: **main**.
+- Title: `MPC 3 Community Edition v0.1.0-rc.2`.
+- Copy the body from [release notes](releases/v0.1.0-rc.2.md).
 - Check **Set as a pre-release**.
 - Attach only the prepared website ZIP, runtime payload archive and SHA256SUMS.
   GitHub supplies source archives automatically.
 - Do not attach an Akai firmware image, personal recovery image, public/private
   SSH keys, MPC.settings, projects or private research exports.
 
-Save a draft while preparing. The release notes distinguish the earlier r2
-flash/boot acceptance from the tested r3 runtime fix. The rebuilt r3 image
-still needs physical flash/boot acceptance. Keep the experimental pre-release label while community testing
-expands hardware and long-session coverage.
+Save a draft while preparing. The release notes record the r4 flash, boot and
+upgrade on the owner's Live II. Keep the experimental pre-release label while
+community testing expands hardware and long-session coverage.
 
 ## Later updates
 

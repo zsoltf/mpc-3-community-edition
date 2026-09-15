@@ -1,12 +1,12 @@
 {
-  "release": "v0.1.0-rc.1",
-  "image_revision": "r3",
+  "release": "v0.1.0-rc.2",
+  "image_revision": "r4",
   "firmware": "3.9.1 Gen1",
-  "runtime_format": "CMD30/MMV17",
+  "runtime_format": "CMD31/MMV17",
   "runtime_checksums": "firmware/runtime.sha256",
-  "runtime_stage": "/data/mpclearn-model.mcu-perf-r3",
+  "runtime_stage": "/data/mpclearn-model.mcu-perf-r4",
   "qualified_hardware": "MPC Live II + full X-Touch MC/USB",
-  "image_flash_tested": false,
-  "prior_image_acceptance": "r2: flash, boot, User Template and blank project confirmed by device owner.",
-  "runtime_acceptance": "r3 performance repair: clean disconnected playback and reconnected playback with concurrent faders/pan confirmed on the unchanged MPC process."
+  "image_flash_tested": true,
+  "prior_image_acceptance": "r4: flashed over r3 on MPC Live II, booted, upgraded into the r4 stage and connected the controller; r3 and r2 earlier confirmed flash, boot and projects.",
+  "runtime_acceptance": "r4 heavy-project repair: on the roughly 40-track project that clicked with r3, the owner reported no clicks with eight concurrent faders, unplug/reconnect and Drum Mix, first in place and then on the flashed r4 image; bridge 4 to 8% of one core."
 }

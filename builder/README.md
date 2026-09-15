@@ -1,7 +1,7 @@
 # Browser MCU image creator
 
 This static browser app creates a personal MPC3.9.1 Gen1 USB image containing
-the MPC Learn MCU runtimece4ccce. It is limited to the tested MPC
+the MPC Learn MCU runtime 9000390. It is limited to the tested MPC
 Live II and full X-Touch in MC/USB mode. It creates and verifies an image; it
 does not connect to or flash an MPC.
 

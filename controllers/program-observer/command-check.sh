@@ -19,7 +19,7 @@ python3 - "$fixture_dir/command.json" <<'PY'
 import json,sys
 j=json.load(open(sys.argv[1]))
 assert j['error']==0 and not j['trace_error'] and j['closed']
-assert j['format']=='CMD30' and j['published']==33 and j['reclaimed']==33
+assert j['format']=='CMD31' and j['published']==33 and j['reclaimed']==33
 r=j['requests'];assert len(r)==1 and r[0]['seq']==33 and r[0]['rejected']==4 and r[0]['reclaimed']
 assert not r[0]['dispatched'] and not r[0]['matching_body_completed'] and not r[0]['client_settled'] and not r[0]['sealed'] and not j['events']
 assert not j['snapshot_atomic'] and j['pending_count']==0

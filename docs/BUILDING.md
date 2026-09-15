@@ -47,7 +47,7 @@ Build and run the release component tests:
 
 ```sh
 ./controllers/program-observer/mirror-input-build.sh \
-  "$PWD/build/MPC" /data/mpclearn-model.mcu-perf-r3 600
+  "$PWD/build/MPC" /data/mpclearn-model.mcu-perf-r4 600
 ./controllers/program-observer/mirror-input-check.sh
 ```
 
@@ -59,7 +59,7 @@ After checks, rebuild with an unlimited runtime lifetime:
 
 ```sh
 ./controllers/program-observer/mirror-input-build.sh \
-  "$PWD/build/MPC" /data/mpclearn-model.mcu-perf-r3 manual
+  "$PWD/build/MPC" /data/mpclearn-model.mcu-perf-r4 manual
 ```
 
 The build writes `controllers/program-observer/package/mirror-input/`.

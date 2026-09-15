@@ -1,4 +1,4 @@
-/* Continuous coalesced input over bounded CMD30; MMV17 remains the musical-state owner. */
+/* Continuous coalesced input over bounded CMD31; MMV17 remains the musical-state owner. */
 #ifndef MPC_MIRROR_INPUT_CORE_H
 #define MPC_MIRROR_INPUT_CORE_H
 #include "command-state.h"
@@ -53,6 +53,25 @@ typedef struct {
  InputGlobalEvent global_events[INPUT_JOG_EVENTS];unsigned global_head,global_count;
  unsigned error,submitted,settled,refused,next_strip;
 } MirrorInput;
+static inline void input_meter_interest(MirrorInput *in,const MirrorBank *bank,const CopiedMirror *s,uint32_t now,int connected){
+ CommandState *c=in->commands;if(!c)return;MeterInterest *d=&c->meter_interest;
+ uint32_t serial[METER_BANK]={0},track[METER_BANK]={0},program[METER_BANK]={0};unsigned n=0;
+ unsigned enabled=connected&&bank->ready&&s->ready&&bank->view!=BV_DRUM_PADS;
+ if(enabled)for(unsigned i=0;i<MIRROR_BANK;i++){
+  const MotorIdentity *id=bank->strips+i;if(!id->serial||id->pad_owner)continue;
+  serial[n]=id->serial;track[n]=id->track_owner;program[n]=id->program_owner;n++;
+ }
+ unsigned changed=atomic_load(&d->enabled)!=enabled||atomic_load(&d->epoch)!=s->epoch||atomic_load(&d->count)!=n;
+ for(unsigned i=0;i<n;i++)changed|=atomic_load(d->serial+i)!=serial[i]||atomic_load(d->track_owner+i)!=track[i]||atomic_load(d->program_owner+i)!=program[i];
+ unsigned until=atomic_load(&d->until);if(!changed&&(!enabled||(until>now&&until-now>500)))return;
+ if(!command_writer_enter(c))return;
+ unsigned rev=atomic_load(&d->revision);if(rev>UINT32_MAX-2){atomic_store(&d->until,0);command_writer_leave(c);return;}
+ atomic_store_explicit(&d->revision,rev+1,memory_order_release);
+ atomic_store(&d->enabled,enabled);atomic_store(&d->epoch,s->epoch);atomic_store(&d->count,n);
+ for(unsigned i=0;i<n;i++){atomic_store(d->serial+i,serial[i]);atomic_store(d->track_owner+i,track[i]);atomic_store(d->program_owner+i,program[i]);}
+ atomic_store(&d->until,enabled&&now<=UINT32_MAX-1000?now+1000:0);
+ atomic_store_explicit(&d->revision,rev+2,memory_order_release);command_writer_leave(c);
+}
 static inline void input_effects_interest(MirrorInput *in,const MirrorBank *bank,const CopiedMirror *s,uint32_t now,int connected){
  CommandState *c=in->commands;if(!c)return;EffectsInterest *d=&c->effects_interest;
  unsigned enabled=connected&&bank->assignment==BA_EFFECT&&bank->ready&&s->selection.available,serial=enabled?bank->selected.serial:0;

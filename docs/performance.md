@@ -51,3 +51,79 @@ profiling tools when finished.
 The measurements above are bounded Live II tests. They do not establish
 all-feature stress behavior, long-session stability, other hardware, or a
 physical flash/boot of the rebuilt r3 image.
+
+## Report after the live website flash
+
+The device owner successfully built and flashed r3 from the published website.
+A roughly seven-track project with synths and drums then produced CPU spikes
+and audible clicks during simultaneous X-Touch movements; moving all eight
+faders produced clicks on each reported attempt. The MPC audio-load display
+was around50% before the spikes. This heavier workload is an open performance
+issue; earlier clean playback tests do not establish its acceptance. SSH was restored for a same-process comparison. A 99Hz cpu-clock profile
+measured the original connected bridge at about14% of one core while idle,
+with one-second movement peaks35-36%. MPC CPU increased as well; bridge cost
+alone has not been established as the entire cause. The saved X-TOUCH_INT
+input had Track, Global and Control disabled.
+
+The ARM snapshot is788052 bytes. Every matched input event both initialized
+it and called a reader that cleared its entire capacity again. The candidate
+removes the duplicate initialization and clears only metadata plus populated
+rows. It still reads current source fields for every event and preserves
+identity, revision, lifetime and command-settlement checks. Rows outside
+count/pad_count are unspecified and must never be consumed. Poisoned-buffer,
+shrinking-topology and existing ARM input/motor regressions passed.
+
+With the candidate bridge and unchanged MPC PID1453, a21.28-second native
+/proc sample measured bridge9.45% of one core and5784KiB RSS; MPC68.47% and
+1087384KiB RSS. The profile showed reduced clearing cost. These are idle
+measurements, not acceptance of the concurrent-control audio workload.
+Local raw evidence is in build/full-load-profile (not distributed).
+
+The candidate still clicked during the owner's eight-fader test, despite
+sampled bridge movement peaks decreasing to20.2% of one core. Physical fader
+movement with the bridge stopped was reported clean. A subsequent snapshot
+showed Playing=0: idle/movement native CPU comparisons did not yet establish
+continuous playback, so the MPC-side increase cannot be attributed to command
+overhead alone. Preserve this distinction when using these early captures.
+
+## Heavy-project repair (CMD31 candidate)
+
+Source commit 02d9abf batches the bridge's source snapshot per MIDI input batch,
+refreshes it once per tick, validates only the target scalar before each motor
+message, copies pads only in Drum Mix, keeps identity and ALSA discovery at
+their 100 ms cadences, limits meter demand to the visible eight strips plus
+master, skips the command-association scan in meter-only hooks, and maps the
+two live state files on tmpfs under `/run` instead of the ext4 `/data`
+partition.
+
+The candidate package was installed on the same Live II and the same roughly
+40-track synth/drum project that clicked with r3. A one-second `/proc` sampler
+(local raw evidence in `build/fable-performance`, not distributed) recorded
+338 seconds with the project loaded, including a period of stationary playback
+and the owner's instructed test of ten seconds still, fifteen to twenty
+seconds of all eight faders, then a fader and pan together, all during
+playback. Playing state was read from the observer with each sample.
+
+| Measurement (one core = 100%)            | r3 bridge, Sep 14 | CMD31 candidate, Sep 15 |
+|------------------------------------------|-------------------|-------------------------|
+| Bridge idle, connected                   | about 14%         | 4 to 5%                 |
+| Bridge peak during eight-fader movement  | 35 to 36%         | 6%, capture peak 8%     |
+| MPC process, stationary playback         | 136 to 144%       | 137 to 148%, peak 185%  |
+| MPC process, movement window             | 150 to 179%       | 137%, peak 142%         |
+| Audio Processing thread, movement window | not isolated      | 25%, peak 27%           |
+| Minor faults per second, movement window | not isolated      | 0 on bridge, MPC, audio |
+| Meter tokens with project loaded         | 40                | 8                       |
+
+The MPC-side CPU rise that accompanied fader movement on r3 did not appear in
+this capture. The session status after the test showed 3276 requests published
+and 3276 reclaimed with no pending or error state. The device owner reported no
+clicks during this eight-fader test. The movement windows are inferred from the
+instruction time; the sampler does not observe fader events. This capture is
+one project and one passage, not an all-features stress test, a long-session
+guarantee, a controller-absent or reconnect comparison, or a flashed image.
+
+The r4 release package is built from commit 9000390 for stage
+`/data/mpclearn-model.mcu-perf-r4`. Its bridge, client, reader, adapter,
+button helper and session script are byte-identical to the tested candidate;
+its observer differs only in the compiled stage path (three bytes) and the
+resulting build-id note. `firmware/runtime.sha256` pins those nine files.
