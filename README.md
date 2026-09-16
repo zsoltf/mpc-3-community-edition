@@ -50,7 +50,7 @@ firmware restores the stock system files.
 
 ## Status
 
-Release candidate, current image r5. Tested on one MPC Live II with one
+Release v0.1.0-rc.3, a release candidate. Tested on one MPC Live II with one
 X-Touch and one mouse; long sessions and other hardware are not covered. Known
 limit: a fast wheel spin on some sliders overshoots. Details are in the
 [release notes](docs/releases/v0.1.0-rc.3.md).
