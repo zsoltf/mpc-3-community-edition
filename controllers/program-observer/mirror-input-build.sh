@@ -8,7 +8,7 @@ if [ "$#" -ne 3 ];then echo 'mirror-input-build.sh /local/exact/MPC /native/owne
 mkdir -p package/mirror-input
 cp package/command/* package/mirror-input/
 docker run --rm --network none -v "$PWD/..:/controllers:ro" -v "$PWD:/src:ro" -v "$PWD/../stop-route.h:/stop-route.h:ro" -v "$PWD/package/mirror-input:/out" mpclearn-controls-build sh -ec '
-arm-linux-gnueabihf-gcc -std=c11 -O2 -Wall -Wextra -Werror -marm -mfpu=neon -DMIRROR_INPUT /src/mirror-motor.c -o /out/mirror-input -L/usr/lib/arm-linux-gnueabihf -lasound -lm
+arm-linux-gnueabihf-gcc -std=c11 -O2 -Wall -Wextra -Werror -marm -mfpu=neon -DMIRROR_INPUT -DX_TOUCH_BLOCKING_ENABLED=0 /src/mirror-motor.c -o /out/mirror-input -L/usr/lib/arm-linux-gnueabihf -lasound -lm
 arm-linux-gnueabihf-gcc -std=c11 -O2 -Wall -Wextra -Werror -marm -mfpu=neon /src/mirror-input-test.c -o /out/mirror-input-test -L/usr/lib/arm-linux-gnueabihf -lasound -lm
 arm-linux-gnueabihf-gcc -std=c11 -O2 -Wall -Wextra -Werror -marm -mfpu=neon -DVOLUME_MIRROR -DMIRROR_COMMAND -DCOMMAND_COMPONENT -no-pie -I/src/package/mirror-input /src/mirror-input-producer-test.c /src/component.S /src/gate.S /src/transport-queue.c -o /out/mirror-input-producer-test -pthread -ldl
 arm-linux-gnueabihf-gcc -std=c11 -O2 -Wall -Wextra -Werror -marm -mfpu=neon /src/mirror-motor-test.c -o /out/mirror-motor-regression -L/usr/lib/arm-linux-gnueabihf -lasound -lm

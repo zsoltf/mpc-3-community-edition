@@ -323,6 +323,9 @@ static void assignment_checks(void){
  }
  free(c);puts("PASS production assignment request targets/MCU LEDs/LCD, channel Track/selected Send Flip, real Channel selection settlement and fixed bank paging/cancellation (native snapshot/call and ALSA output substituted)");
 }
+/* Raw MCU input replay. The X-Touch Scrub mode is a Surface field, so the
+ * integration helper carries it beside the decoded event. */
+static unsigned raw_data_wheel;
 static void raw_input(snd_midi_event_t *codec,const unsigned char bytes[3],snd_seq_addr_t address,MirrorInput *in,MirrorBank *bank,CopiedMirror *s,uint32_t now){
  snd_seq_event_t e;need(snd_midi_event_encode(codec,bytes,3,&e)==3,"actual ALSA raw input codec");e.source=address;unsigned kind,channel;int value;
  need(surface_event(&e,address,&kind,&channel,&value)==1,"physical MCU event classifier");
@@ -330,7 +333,7 @@ static void raw_input(snd_midi_event_t *codec,const unsigned char bytes[3],snd_s
   Surface surface={.source=3,.full=address};unsigned before=output_count,published=atomic_load(&in->commands->published),settled=atomic_load(&in->commands->slots[0].settled);
   need(surface_pitch(&surface,in,bank,s,channel,value,now)&&output_count==before,"default production pitch handler emits no raw echo");
   need(atomic_load(&in->commands->published)==published&&atomic_load(&in->commands->slots[0].settled)==settled,"servo output is neither request publication nor source settlement");
- }else if(kind==12)input_stop_button(in,s,channel,value,now);else if(kind==7)input_master_touch(in,s,value);else if(kind==10)input_master_pitch(in,s,value,now);else if(kind==8||kind==9)surface_jog(in,s,kind,channel,value,now);else need(0,"unexpected integration MIDI kind");
+ }else if(kind==12)input_stop_button(in,s,channel,value,now);else if(kind==7)input_master_touch(in,s,value);else if(kind==10)input_master_pitch(in,s,value,now);else if(kind==8||kind==9)surface_jog(in,s,kind,channel,value,now,raw_data_wheel);else need(0,"unexpected integration MIDI kind");
 }
 static void toggle_midi_checks(void){
  CommandState *commands=calloc(1,sizeof(*commands));need(commands!=NULL,"toggle command fixture");MirrorInput in;MirrorBank bank;CopiedMirror snapshot;
@@ -401,6 +404,291 @@ static void jog_policy_checks(void){
  }
 
  snd_midi_event_free(codec);free(c);puts("PASS actual MCU jog/Shift/FF framing -> ordered pointer-free requests; separate native no-op evidence/epochs/closure; unsent reset/disconnect and held-release policy (native events/ALSA output substituted)");
+}
+/* One data-wheel flight's three producer events: dispatch, the step the observer
+ * says it actually passed to the app's focus controller, and return. */
+static void wheel_evidence(CommandState *c,unsigned request,int delivered,uint32_t tick){
+ unsigned at=command_find(c,request);need(at<COMMAND_SLOTS,"data-wheel fixture slot identity");
+ CommandSlot *slot=c->slots+at;CommandRequest r;need(command_request_read(slot,request,&r),"data-wheel fixture request");
+ CommandLane *l=slot->lanes+1;
+ if(atomic_load(&l->sequence)!=request){atomic_store(&l->published,0);atomic_store(&l->sequence,request);}
+ atomic_store(&l->token,123);
+ const unsigned kinds[3]={CE_DISPATCH,CE_WHEEL_STEP,CE_RETURN};
+ for(unsigned n=0;n<3;n++){
+  CommandEvent e={.kind=kinds[n],.request=request,.tick=tick+n,.token=123,.controller=JOG_DATA,.bits=n==1?(uint32_t)(int32_t)delivered:r.bits,.revision=r.epoch,.reserved=JOG_DATA};
+  unsigned k=atomic_load(&l->published);command_event_store(l->events+k,&e);atomic_store(&l->published,k+1);
+ }
+ atomic_store(&c->consumed,atomic_load(&c->consumed)+1);
+ atomic_store(&slot->dispatched,request);atomic_store(&slot->returned,request);atomic_store(&slot->processed,request);
+ atomic_store_explicit(&slot->done,request,memory_order_release);atomic_store_explicit(&slot->sealed,request,memory_order_release);
+}
+/* One press flight's three producer events: dispatch, the observer's boolean
+ * call receipt, and return. */
+static void press_evidence(CommandState *c,unsigned request,unsigned delivered,uint32_t tick){
+ unsigned at=command_find(c,request);need(at<COMMAND_SLOTS,"press fixture slot identity");
+ CommandSlot *slot=c->slots+at;CommandRequest r;need(command_request_read(slot,request,&r),"press fixture request");
+ CommandLane *l=slot->lanes+1;
+ if(atomic_load(&l->sequence)!=request){atomic_store(&l->published,0);atomic_store(&l->sequence,request);}
+ atomic_store(&l->token,123);
+ const unsigned kinds[3]={CE_DISPATCH,CE_WHEEL_STEP,CE_RETURN};
+ for(unsigned n=0;n<3;n++){
+  CommandEvent e={.kind=kinds[n],.request=request,.tick=tick+n,.token=123,.controller=JOG_PRESS,.bits=n==1?delivered:r.bits,.revision=r.epoch,.reserved=JOG_PRESS};
+  unsigned k=atomic_load(&l->published);command_event_store(l->events+k,&e);atomic_store(&l->published,k+1);
+ }
+ atomic_store(&c->consumed,atomic_load(&c->consumed)+1);
+ atomic_store(&slot->dispatched,request);atomic_store(&slot->returned,request);atomic_store(&slot->processed,request);
+ atomic_store_explicit(&slot->done,request,memory_order_release);atomic_store_explicit(&slot->sealed,request,memory_order_release);
+}
+/* X-Touch Scrub selects between the existing scrub behaviour and the wheel
+ * acting as the MPC data wheel. Nothing about the physical wheel changes; only
+ * where its detents are routed, and the mode lives in the connected Surface. */
+/* One Duplicate Sequence flight's three producer events: the begin, the record
+ * of the two slots the observer resolved, and the end. */
+static void duplicate_evidence(CommandState *c,unsigned request,uint32_t source,uint32_t destination,uint32_t result,uint32_t tick,unsigned with_state){
+ unsigned at=command_find(c,request);need(at<COMMAND_SLOTS,"duplicate fixture slot identity");
+ CommandSlot *slot=c->slots+at;CommandRequest r;need(command_request_read(slot,request,&r),"duplicate fixture request");
+ CommandLane *l=slot->lanes+1;
+ if(atomic_load(&l->sequence)!=request){atomic_store(&l->published,0);atomic_store(&l->sequence,request);}
+ atomic_store(&l->token,123);
+ const unsigned kinds[3]={CE_GLOBAL_BEGIN,CE_GLOBAL_STATE,CE_GLOBAL_END};
+ for(unsigned n=0;n<3;n++){
+  if(n==1&&!with_state)continue;
+  CommandEvent e={.kind=kinds[n],.request=request,.tick=tick+n,.token=123,.program=0x90000,.controller=GLOBAL_SEQ_DUPLICATE,
+   .counter=n==1?source:0,.bits=n==0?r.bits:n==1?destination:result,.revision=r.epoch,.reserved=GLOBAL_SEQ_DUPLICATE};
+  unsigned k=atomic_load(&l->published);command_event_store(l->events+k,&e);atomic_store(&l->published,k+1);
+ }
+ atomic_store(&c->consumed,atomic_load(&c->consumed)+1);
+ atomic_store(&slot->dispatched,request);atomic_store(&slot->returned,request);atomic_store(&slot->processed,request);
+ atomic_store_explicit(&slot->done,request,memory_order_release);atomic_store_explicit(&slot->sealed,request,memory_order_release);
+}
+/* The X-Touch Replace button (note 85) as Duplicate Sequence: one press is one
+ * global request against the enrolled Editor, in either wheel mode, and the
+ * settlement is the observer's own three-event record of what it submitted. */
+static void sequence_duplicate_bridge_checks(void){
+ CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"duplicate bridge state");
+ MirrorInput in;MirrorBank b;CopiedMirror s;snd_seq_addr_t address={32,0};
+ snd_midi_event_t *codec;need(!snd_midi_event_new(32,&codec),"duplicate raw codec");
+ const unsigned char down[3]={0x90,85,127},up[3]={0x80,85,0};
+ snd_seq_event_t ev;unsigned kind,channel;int value;
+ need(snd_midi_event_encode(codec,down,3,&ev)==3,"Replace raw MIDI");ev.source=address;
+ need(surface_event(&ev,address,&kind,&channel,&value)==1&&kind==11&&channel==85&&value,"Replace classifies as a general button press");
+ need(snd_midi_event_encode(codec,up,3,&ev)==3,"Replace raw release");ev.source=address;
+ need(surface_event(&ev,address,&kind,&channel,&value)==1&&kind==11&&channel==85&&!value,"and its release classifies with the same kind");
+ reset_fixture(c,&in,&b,&s,2);s.editor_owner=77;s.zoom_owner=88;in.jog_epoch=s.epoch;
+ Surface surface={.source=3,.full=address};
+ surface_general_press(&surface,&in,&s,85,1,200);
+ need(in.global_count==1&&in.global_events[0].operation==GLOBAL_SEQ_DUPLICATE&&in.global_events[0].owner==77&&!in.global_events[0].bits&&!in.wheel_press&&!in.wheel_delta,"one Replace press queues one Duplicate Sequence operation against the enrolled Editor and no wheel work");
+ surface_general_press(&surface,&in,&s,85,1,201);
+ need(in.global_count==1,"a repeated down report is not a second duplicate");
+ surface_general_press(&surface,&in,&s,85,0,202);
+ need(in.global_count==1,"the release queues nothing");
+ surface.data_wheel=1;surface_general_press(&surface,&in,&s,85,1,203);surface_general_press(&surface,&in,&s,85,0,204);
+ need(in.global_count==2&&in.global_events[1].operation==GLOBAL_SEQ_DUPLICATE&&!in.wheel_press,"Replace means the same thing in data-wheel mode");
+ surface.data_wheel=0;in.jog_shift=1;surface_general_press(&surface,&in,&s,85,1,205);surface_general_press(&surface,&in,&s,85,0,206);
+ need(in.global_count==3&&in.global_events[2].operation==GLOBAL_SEQ_DUPLICATE,"Shift does not give the button a second meaning");
+ in.jog_shift=0;input_jog_discard(&in);need(!in.global_count,"a reload or disconnect clears queued duplicates with the rest of the jog gesture");
+ /* One press, published, settled and reclaimed on the real protocol. */
+ reset_fixture(c,&in,&b,&s,2);s.editor_owner=77;in.jog_epoch=s.epoch;
+ Surface one={.source=3,.full=address};
+ surface_general_press(&one,&in,&s,85,1,300);surface_general_press(&one,&in,&s,85,0,301);
+ input_pump(&in,&b,&s,302);
+ CommandRequest r;unsigned seq=atomic_load(&c->published);
+ need(seq==1&&command_request_read(c->slots+command_find(c,seq),seq,&r),"the press publishes exactly one request");
+ need(r.reserved==GLOBAL_SEQ_DUPLICATE&&r.global_owner==77&&r.project_owner==s.project_owner&&!r.bits&&!r.track_owner&&!r.program_owner&&!r.pad_owner&&!r.field_incarnation&&r.epoch==s.epoch,"it is a Duplicate Sequence request naming the enrolled Editor and this Project and no other target");
+ duplicate_evidence(c,seq,1,2,1,302,1);s.heartbeat=310;input_pump(&in,&b,&s,310);
+ need(!in.error&&in.settled==1&&atomic_load(&c->slots[command_find(c,seq)].settled)==seq,"the begin/slot-record/end receipt settles the duplicate request");
+ reclaim_fixture(c,seq);input_pump(&in,&b,&s,311);
+ /* The receipt is checked, not assumed: a missing record, two equal slots and
+  * a result that is not a boolean are each refused. */
+ const unsigned char equal_slots=1,missing=2,bad_result=3;
+ for(unsigned bad=equal_slots;bad<=bad_result;bad++){
+  reset_fixture(c,&in,&b,&s,2);s.editor_owner=77;in.jog_epoch=s.epoch;
+  Surface bad_surface={.source=3,.full=address};
+  surface_general_press(&bad_surface,&in,&s,85,1,320);surface_general_press(&bad_surface,&in,&s,85,0,321);
+  input_pump(&in,&b,&s,322);unsigned bad_seq=atomic_load(&c->published);
+  duplicate_evidence(c,bad_seq,bad==equal_slots?2:1,2,bad==bad_result?2:1,322,bad!=missing);
+  s.heartbeat=330;input_pump(&in,&b,&s,330);
+  need(in.error==C_TRACE_AMBIGUOUS&&!in.settled,"a duplicate receipt that names one slot twice, omits the slot record or carries a non-boolean result is refused");
+ }
+ snd_midi_event_free(codec);free(c);
+ puts("PASS X-Touch Replace is Duplicate Sequence: note 85 classification, one queued operation per press edge with no wheel work, the same meaning in both wheel modes and under Shift, reload clearing, publication as one global request naming only the enrolled Editor and Project, settlement on the observer's begin/slot-record/end receipt, and refusal of a receipt that omits the slot record, names one slot twice or carries a non-boolean result (native calls and ALSA hardware substituted)");
+}
+static void data_wheel_checks(void){
+ CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"data-wheel policy state");MirrorInput in;MirrorBank b;CopiedMirror s;reset_fixture(c,&in,&b,&s,2);
+ snd_midi_event_t *codec;need(!snd_midi_event_new(32,&codec),"data-wheel ALSA codec");snd_seq_addr_t address={32,0};
+ Surface surface={.source=3,.full=address};
+ unsigned char scrub_down[3]={0x90,101,127},scrub_up[3]={0x80,101,0};
+ unsigned char forward[3]={0xb0,60,1},back[3]={0xb0,60,65},shift_down[3]={0x90,70,127};
+ snd_seq_event_t e;unsigned kind,note;int down;
+ /* The Scrub button is a physical general button like Zoom, not a new class. */
+ need(snd_midi_event_encode(codec,scrub_down,3,&e)==3,"Scrub raw MIDI");e.source=address;
+ need(surface_event(&e,address,&kind,&note,&down)==1&&kind==11&&note==101&&down,"Scrub enters the general intent classifier as note 101");
+ {unsigned char fs1[3]={0x90,102,127},fs2[3]={0x90,103,127},fs1_up[3]={0x80,102,0};snd_seq_event_t f;unsigned fk,fn;int fd;
+  need(snd_midi_event_encode(codec,fs1,3,&f)==3,"footswitch 1 raw MIDI");f.source=address;
+  need(surface_event(&f,address,&fk,&fn,&fd)==1&&fk==12&&fn==94&&fd,"footswitch 1 enters as the transport Play relay");
+  need(snd_midi_event_encode(codec,fs2,3,&f)==3,"footswitch 2 raw MIDI");f.source=address;
+  need(surface_event(&f,address,&fk,&fn,&fd)==1&&fk==11&&fn==95&&fd,"footswitch 2 enters as the Record toggle");
+  need(snd_midi_event_encode(codec,fs1_up,3,&f)==3,"footswitch 1 release raw MIDI");f.source=address;
+  need(surface_event(&f,address,&fk,&fn,&fd)==1&&fk==12&&fn==94&&!fd,"footswitch 1 release is the Play relay release");}
+ need(!surface.data_wheel,"a fresh session starts in scrub mode");
+ surface_general_press(&surface,&in,&s,note,down,100);need(surface.data_wheel,"Scrub press selects data-wheel mode");
+ surface_general_press(&surface,&in,&s,note,down,101);need(surface.data_wheel,"a repeated down report is not a second toggle");
+ need(snd_midi_event_encode(codec,scrub_up,3,&e)==3,"Scrub release raw MIDI");e.source=address;
+ need(surface_event(&e,address,&kind,&note,&down)==1&&!down,"Scrub release classification");
+ surface_general_press(&surface,&in,&s,note,down,102);need(surface.data_wheel,"release is not a toggle");
+ need(!in.global_count&&!in.jog_count&&!in.wheel_delta,"the mode toggle publishes no command of its own");
+ /* The Scrub LED shows the mode through the same state table as Zoom. */
+ /* The Scrub LED shows scrub mode, which is what the button leaves when it is
+  * lit; data-wheel mode is the unlit state. Zoom is a scrub-mode toggle, so in
+  * data-wheel mode its LED is off whatever zoom_mode holds. */
+ surface.zoom_mode=1;
+ need(channel_output(&surface,&b,&s,s.heartbeat)&&!observed_led[101]&&!observed_led[100],"data-wheel mode clears the Scrub LED and the Zoom LED");
+ surface_general_press(&surface,&in,&s,101,1,103);surface_general_press(&surface,&in,&s,101,0,104);
+ need(!surface.data_wheel&&channel_output(&surface,&b,&s,s.heartbeat)&&observed_led[101]==127&&observed_led[100]==127,"scrub mode lights the Scrub LED and restores the Zoom LED");
+ surface.zoom_mode=0;need(channel_output(&surface,&b,&s,s.heartbeat)&&!observed_led[100],"zoom off clears its own LED in scrub mode");
+ /* Scrub mode: the wheel still produces bar/beat/pulse navigation. */
+ raw_data_wheel=0;raw_input(codec,forward,address,&in,&b,&s,110);
+ need(in.jog_count==1&&in.jog_events[in.jog_head].operation==JOG_BEAT&&!in.wheel_delta,"scrub mode still queues a native transport jog");
+ raw_input(codec,shift_down,address,&in,&b,&s,111);raw_input(codec,forward,address,&in,&b,&s,111);
+ need(in.jog_count==2&&in.jog_events[(in.jog_head+1)%INPUT_JOG_EVENTS].operation==JOG_PULSE&&!in.wheel_delta,"Shift still selects pulses in scrub mode");
+ input_jog_discard(&in);
+ /* Data-wheel mode: every detent is one step, opposite detents cancel, and
+  * Shift is ignored for the wheel because nothing here feeds the app's coarse
+  * flag. Shift keeps the rest of its roles, so it stays held here. */
+ raw_data_wheel=1;in.jog_shift=1;
+ raw_input(codec,forward,address,&in,&b,&s,120);raw_input(codec,forward,address,&in,&b,&s,121);
+ need(in.wheel_delta==2&&!in.jog_count,"data-wheel mode accumulates detents and queues no transport jog");
+ raw_input(codec,back,address,&in,&b,&s,122);
+ need(in.wheel_delta==1,"opposite detents cancel in the data-wheel accumulator");
+ need(!in.jog_count,"Shift is ignored for the wheel in data-wheel mode");
+ in.jog_shift=0;
+ /* One request per pump, one alive at a time, and nothing for an empty
+  * accumulator. */
+ input_pump(&in,&b,&s,130);
+ CommandRequest r;need(in.submitted==1&&command_request_read(c->slots,1,&r)&&r.reserved==JOG_DATA&&(int32_t)r.bits==1,"one data-wheel request carries the accumulated signed count");
+ need(!r.project_owner&&!r.track_owner&&!r.program_owner&&!r.global_owner&&!r.field_incarnation&&!r.pad_owner&&r.epoch==s.epoch,"the data-wheel request names no Track, Program, Project or pad target");
+ need(!in.wheel_delta,"publication empties the accumulator");
+ unsigned published=atomic_load(&c->published);
+ input_pump(&in,&b,&s,131);need(atomic_load(&c->published)==published,"an empty accumulator publishes nothing");
+ raw_input(codec,forward,address,&in,&b,&s,132);raw_input(codec,forward,address,&in,&b,&s,132);
+ input_pump(&in,&b,&s,133);
+ need(atomic_load(&c->published)==published&&in.wheel_delta==2,"a second request waits for the first flight and keeps collecting detents");
+ /* Settlement of the new field: the producer's three events, then the seal. */
+ wheel_evidence(c,1,1,120);s.heartbeat=140;input_pump(&in,&b,&s,140);
+ need(!in.error&&in.settled==1&&atomic_load(&c->slots[0].settled)==1,"the dispatch/step/return receipt settles the data-wheel request");
+ need(atomic_load(&c->published)==published,"settlement alone does not release the next request");
+ reclaim_fixture(c,1);input_pump(&in,&b,&s,141);
+ need(atomic_load(&c->published)==published+1&&!in.wheel_delta&&!in.error,"the collected detents publish once the producer reclaims the slot");
+ need(command_request_read(c->slots+command_find(c,published+1),published+1,&r)&&(int32_t)r.bits==2,"and carry the count accumulated while the first was in flight");
+ /* A suppressed step is a completed request, not a failure: the observer may
+  * legally deliver fewer steps than published, never more and never opposite. */
+ wheel_evidence(c,2,0,141);s.heartbeat=145;input_pump(&in,&b,&s,145);
+ need(!in.error&&in.settled==2,"a zero delivered step still settles the request");
+ reclaim_fixture(c,2);input_pump(&in,&b,&s,146);
+ raw_input(codec,forward,address,&in,&b,&s,147);input_pump(&in,&b,&s,147);
+ wheel_evidence(c,3,2,147);s.heartbeat=150;input_pump(&in,&b,&s,150);
+ need(in.error==C_TRACE_AMBIGUOUS&&in.settled==2,"a delivered step larger than the published count is refused");
+ /* A project reload clears unsent detents with the rest of the jog gesture. */
+ reset_fixture(c,&in,&b,&s,2);raw_data_wheel=1;
+ raw_input(codec,forward,address,&in,&b,&s,200);need(in.wheel_delta==1,"accumulator collects before the reload");
+ s.epoch=2;raw_input(codec,forward,address,&in,&b,&s,201);
+ need(in.wheel_delta==1&&in.jog_epoch==2,"an epoch change discards the old detents and keeps only the new one");
+ raw_input(codec,back,address,&in,&b,&s,202);need(!in.wheel_delta,"and the accumulator stays signed across the reload");
+ raw_input(codec,forward,address,&in,&b,&s,203);input_jog_discard(&in);need(!in.wheel_delta,"disconnect and not-ready both clear the accumulator");
+ /* A hard flick banks more detents than one native call may carry. The bridge
+  * publishes at most that count and keeps the rest, so the total travel is
+  * complete and monotonic instead of being clamped away by the observer. */
+ reset_fixture(c,&in,&b,&s,2);raw_data_wheel=1;
+ for(unsigned i=0;i<10;i++)raw_input(codec,forward,address,&in,&b,&s,300);
+ need(in.wheel_delta==10,"ten detents inside one pump bank as ten");
+ input_pump(&in,&b,&s,301);
+ need(command_request_read(c->slots,1,&r)&&(int32_t)r.bits==WHEEL_MAX_STEPS&&in.wheel_delta==10-WHEEL_MAX_STEPS,"the first request carries one native call's worth and the remainder stays banked");
+ wheel_evidence(c,1,WHEEL_MAX_STEPS,301);s.heartbeat=310;input_pump(&in,&b,&s,310);need(!in.error&&in.settled==1,"the first burst request settles");
+ reclaim_fixture(c,1);input_pump(&in,&b,&s,311);
+ need(command_request_read(c->slots+command_find(c,2),2,&r)&&(int32_t)r.bits==WHEEL_MAX_STEPS&&in.wheel_delta==10-2*WHEEL_MAX_STEPS,"the next request carries the next four");
+ wheel_evidence(c,2,WHEEL_MAX_STEPS,311);s.heartbeat=320;input_pump(&in,&b,&s,320);reclaim_fixture(c,2);input_pump(&in,&b,&s,321);
+ need(command_request_read(c->slots+command_find(c,3),3,&r)&&(int32_t)r.bits==10-2*WHEEL_MAX_STEPS&&!in.wheel_delta,"and the last request carries the remaining two, so nothing is dropped");
+ /* The cursor cluster belongs to whichever mode is selected, never to both. */
+ reset_fixture(c,&in,&b,&s,2);s.editor_owner=77;s.zoom_owner=88;raw_data_wheel=1;
+ Surface cursor={.source=3,.full=address};
+ const unsigned cluster[5]={96,97,98,99,100};
+ for(unsigned i=0;i<5;i++){
+  unsigned char bytes[3]={0x90,(unsigned char)cluster[i],127};snd_seq_event_t ev;
+  need(snd_midi_event_encode(codec,bytes,3,&ev)==3,"cursor cluster raw MIDI");ev.source=address;
+  unsigned k,n;int d;need(surface_event(&ev,address,&k,&n,&d)==1&&k==11&&n==cluster[i]&&d,"cursor cluster classification");
+ }
+ for(unsigned i=0;i<4;i++){surface_general_press(&cursor,&in,&s,96+i,1,400);surface_general_press(&cursor,&in,&s,96+i,0,401);}
+ need(in.global_count==4&&in.global_events[0].operation==GLOBAL_KEY_UP&&in.global_events[1].operation==GLOBAL_KEY_DOWN&&in.global_events[2].operation==GLOBAL_KEY_LEFT&&in.global_events[3].operation==GLOBAL_KEY_RIGHT&&!in.wheel_delta,"scrub mode keeps the ordinary arrow keys");
+ surface_general_press(&cursor,&in,&s,100,1,402);surface_general_press(&cursor,&in,&s,100,0,403);
+ need(cursor.zoom_mode&&in.global_count==4,"scrub mode keeps note 100 as the Zoom toggle");
+ for(unsigned i=0;i<4;i++){surface_general_press(&cursor,&in,&s,96+i,1,404);surface_general_press(&cursor,&in,&s,96+i,0,405);}
+ need(in.global_count==8&&in.global_events[4].operation==GLOBAL_ZOOM_UP&&in.global_events[7].operation==GLOBAL_ZOOM_IN&&!in.wheel_delta,"zoom mode keeps the zoom arrows");
+ cursor.zoom_mode=0;input_jog_discard(&in);
+ surface_general_press(&cursor,&in,&s,101,1,410);surface_general_press(&cursor,&in,&s,101,0,411);
+ need(cursor.data_wheel,"Scrub selects data-wheel mode for the cursor cluster too");
+ surface_general_press(&cursor,&in,&s,96,1,412);surface_general_press(&cursor,&in,&s,96,0,413);
+ need(in.wheel_delta==-1&&!in.global_count,"cursor up is one data-wheel step (up-arrow decrements, matching list navigation) and no key");
+ surface_general_press(&cursor,&in,&s,97,1,414);surface_general_press(&cursor,&in,&s,97,0,415);
+ need(!in.wheel_delta&&!in.global_count,"cursor down returns the accumulator to zero on the same single-flight lane");
+ surface_general_press(&cursor,&in,&s,98,1,416);surface_general_press(&cursor,&in,&s,98,0,417);
+ surface_general_press(&cursor,&in,&s,99,1,418);surface_general_press(&cursor,&in,&s,99,0,419);
+ need(in.global_count==2&&in.global_events[0].operation==GLOBAL_KEY_BACKTAB&&in.global_events[1].operation==GLOBAL_KEY_TAB,"left and right move focus with Shift+Tab and Tab");
+ /* The centre button is the data wheel's own push through the focus
+  * controller, not a synthetic keyboard Return: on this firmware an injected
+  * Return does nothing to a focused item. */
+ surface_general_press(&cursor,&in,&s,100,1,420);surface_general_press(&cursor,&in,&s,100,0,421);
+ need(in.wheel_press&&in.global_count==2,"the centre button is the data wheel's push and queues no key");
+ need(!cursor.zoom_mode,"note 100 does not touch zoom while the wheel is the data wheel");
+ surface_general_press(&cursor,&in,&s,100,1,422);surface_general_press(&cursor,&in,&s,100,0,423);
+ need(in.wheel_press==1,"a second push before the first is published stays one pending press");
+ input_pump(&in,&b,&s,430);
+ need(!in.error&&command_request_read(c->slots,1,&r)&&r.reserved==GLOBAL_KEY_BACKTAB&&r.global_owner==77&&!r.bits,"the data-mode cursor keys publish as ordinary global key requests against the enrolled Editor");
+ unsigned press_seq=atomic_load(&c->published);
+ need(command_request_read(c->slots+command_find(c,press_seq),press_seq,&r)&&r.reserved==JOG_PRESS&&r.bits==FOCUS_PRESS_BUTTON,"the centre push publishes one JOG_PRESS request carrying the device-measured button id");
+ need(!r.project_owner&&!r.track_owner&&!r.program_owner&&!r.global_owner&&!r.field_incarnation&&!r.pad_owner&&r.epoch==s.epoch,"the press request names no Track, Program, Project or pad target");
+ need(!in.wheel_press,"publication clears the pending press");
+ unsigned settled_before=in.settled;
+ surface_general_press(&cursor,&in,&s,100,1,431);surface_general_press(&cursor,&in,&s,100,0,432);
+ input_pump(&in,&b,&s,433);
+ need(atomic_load(&c->published)==press_seq&&in.wheel_press,"a second press waits for the first flight, one request per pump");
+ press_evidence(c,press_seq,1,430);s.heartbeat=440;input_pump(&in,&b,&s,440);
+ need(!in.error&&in.settled==settled_before+1&&atomic_load(&c->slots[command_find(c,press_seq)].settled)==press_seq,"the dispatch/call/return receipt settles the press request");
+ reclaim_fixture(c,press_seq);input_pump(&in,&b,&s,441);
+ need(atomic_load(&c->published)==press_seq+1&&!in.wheel_press&&!in.error,"the waiting press publishes once the producer reclaims the slot");
+ /* A suppressed press is a completed request; a second call flag is not. */
+ press_evidence(c,press_seq+1,0,441);s.heartbeat=450;input_pump(&in,&b,&s,450);
+ need(!in.error&&in.settled==settled_before+2,"a press the observer suppressed still settles");
+ reclaim_fixture(c,press_seq+1);input_pump(&in,&b,&s,451);
+ surface_general_press(&cursor,&in,&s,100,1,452);surface_general_press(&cursor,&in,&s,100,0,453);
+ input_pump(&in,&b,&s,454);
+ press_evidence(c,press_seq+2,2,454);s.heartbeat=460;input_pump(&in,&b,&s,460);
+ need(in.error==C_TRACE_AMBIGUOUS&&in.settled==settled_before+2,"a call receipt that is not a boolean is refused");
+ /* Single flight is shared with the data-wheel steps: both act on the one
+  * active focus controller. */
+ reset_fixture(c,&in,&b,&s,2);s.editor_owner=77;raw_data_wheel=1;
+ Surface both={.source=3,.full=address};both.data_wheel=1;
+ raw_input(codec,forward,address,&in,&b,&s,500);input_pump(&in,&b,&s,501);
+ unsigned step_seq=atomic_load(&c->published);
+ need(command_request_read(c->slots+command_find(c,step_seq),step_seq,&r)&&r.reserved==JOG_DATA,"a data-wheel step publishes first");
+ surface_general_press(&both,&in,&s,100,1,502);surface_general_press(&both,&in,&s,100,0,503);
+ input_pump(&in,&b,&s,504);
+ need(atomic_load(&c->published)==step_seq&&in.wheel_press,"a press waits while a data-wheel step is in flight");
+ wheel_evidence(c,step_seq,1,504);s.heartbeat=510;input_pump(&in,&b,&s,510);
+ reclaim_fixture(c,step_seq);input_pump(&in,&b,&s,511);
+ unsigned press_after=atomic_load(&c->published);
+ need(press_after==step_seq+1&&command_request_read(c->slots+command_find(c,press_after),press_after,&r)&&r.reserved==JOG_PRESS&&!in.wheel_press,"and publishes once the step is reclaimed");
+ raw_input(codec,forward,address,&in,&b,&s,512);input_pump(&in,&b,&s,513);
+ need(atomic_load(&c->published)==press_after&&in.wheel_delta==1,"a data-wheel step then waits while the press is in flight");
+ press_evidence(c,press_after,1,513);s.heartbeat=520;input_pump(&in,&b,&s,520);
+ need(!in.error,"the press settles against the same three-event receipt");
+ reclaim_fixture(c,press_after);input_pump(&in,&b,&s,521);
+ need(atomic_load(&c->published)==press_after+1&&!in.wheel_delta&&!in.error,"and the banked detent publishes once the press is reclaimed");
+ input_jog_discard(&in);need(!in.wheel_press&&!in.wheel_delta,"a reload or disconnect clears a pending press with the rest of the jog gesture");
+ /* Reconnect: the mode is session state and is not persisted. */
+ Surface reconnect={.source=3,.full=address};reconnect.data_wheel=1;
+ surface_close(&reconnect,&b);need(!reconnect.data_wheel,"a controller reconnect returns the wheel to scrub mode");
+ raw_data_wheel=0;snd_midi_event_free(codec);free(c);
+ puts("PASS X-Touch Scrub selects data-wheel mode: note 101 classification, footswitch 1/2 as Play relay and Record toggle, press dedup, Scrub/Zoom LED sense, unchanged scrub and Shift routing, signed accumulation and cancellation, one bounded request per pump with single flight and a banked remainder, dispatch/step/return settlement, oversized-step refusal, cursor cluster in both modes with the centre button publishing the data wheel's push as one JOG_PRESS request per press against the same single flight, reload clearing and reconnect reset (native calls and ALSA hardware substituted)");
 }
 static void stop_type_checks(void){
  CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"Stop/Type state");MirrorInput in;MirrorBank b;CopiedMirror s;reset_fixture(c,&in,&b,&s,2);
@@ -607,7 +895,7 @@ static void qlink_mode_routing_checks(void){
  need(bank.assignment==BA_QLINK&&!bank.flip&&!bank.qlink_page,"actual EQ enters first Q-Link bank");
  surface_navigation(&input,&bank,&snapshot,1,111);need(bank.qlink_page==1&&!input.mode_delta&&!atomic_load(&c->published),"ordinary Bank Right selects logical9-16 without native mode command");
  snapshot.heartbeat=112;bank_apply(&bank,&snapshot,112);surface_assignment(&surface,&input,&bank,&snapshot,50,113);need(bank.flip,"ordinary Flip retained on Q-Link page");
- surface_jog(&input,&snapshot,7,70,1,114);unsigned page=bank.qlink_page,offset=bank.offset;
+ surface_jog(&input,&snapshot,7,70,1,114,0);unsigned page=bank.qlink_page,offset=bank.offset;
  input.qlinks[3].pending=1;surface_navigation(&input,&bank,&snapshot,1,115);surface_navigation(&input,&bank,&snapshot,1,116);surface_navigation(&input,&bank,&snapshot,0,117);
  need(input.mode_delta==1&&bank.qlink_page==page&&bank.offset==offset&&bank.flip&&!input.qlinks[3].pending&&!atomic_load(&c->published),"actual Shift Bank coalesces signed presses without changing bank/Flip; revokes only unsent Q-Link value");
  surface_navigation(&input,&bank,&snapshot,0,118);need(!input.mode_delta&&!atomic_load(&c->published),"opposite unsent mode directions cancel");
@@ -615,9 +903,9 @@ static void qlink_mode_routing_checks(void){
  input_mode_submit(&input,&bank,&snapshot,121);CommandRequest r;
  need(command_request_read(c->slots,1,&r)&&r.reserved==QLINK_MODE&&(int32_t)r.bits==-2&&r.global_owner==snapshot.qlinks.mode_controller&&r.field_incarnation==3&&r.before_bits==8,"physical surface directions publish signed count with native controller identity, not a guessed selected ID");
  need(input.flights[0].flight==1&&!input.mode_delta,"published mode request retains existing flight owner");
- surface_jog(&input,&snapshot,7,70,0,122);surface_navigation(&input,&bank,&snapshot,0,123);
+ surface_jog(&input,&snapshot,7,70,0,122,0);surface_navigation(&input,&bank,&snapshot,0,123);
  need(bank.qlink_page==0&&bank.flip&&input.flights[0].flight==1&&!input.mode_delta,"ordinary bank switch after Shift release preserves published mode obligation and Flip");
- snapshot.heartbeat=124;bank_apply(&bank,&snapshot,124);surface_jog(&input,&snapshot,7,70,1,125);snapshot.qlinks.mode_valid=0;surface_navigation(&input,&bank,&snapshot,1,126);
+ snapshot.heartbeat=124;bank_apply(&bank,&snapshot,124);surface_jog(&input,&snapshot,7,70,1,125,0);snapshot.qlinks.mode_valid=0;surface_navigation(&input,&bank,&snapshot,1,126);
  need(!input.mode_delta&&atomic_load(&c->published)==1,"unavailable mode copy never creates a mode request");
  memset(&input,0,sizeof(input));free(c);following.enabled=1;motor_follow_reset(&following);
  puts("PASS actual EQ/Shift/Bank/Flip surface routing and signed mode coalescing/publication; bank-only navigation, cancellation and retained flight; native selected mode/callbacks not simulated here");
@@ -705,9 +993,9 @@ static void native_text_wire_checks(void){
  puts("PASS native-observed Q-Link/Effects text formatter and LCD bytes: decimals/signs, tiny values, infinity, enums, output destinations/properties and empty Q16 (native strings supplied; no physical device)");
 }
 int main(int argc,char **argv){
- if(argc==2&&!strcmp(argv[1],"--policy")){alarm(20);native_text_wire_checks();binding_sync_checks();binding_reversal_checks();qlink_mode_routing_checks();input_page_checks();following_reenable_checks();milestone_checks();drum_channel_checks();drum_surface_checks();policy_checks();toggle_midi_checks();assignment_checks();effects_policy_checks();jog_policy_checks();stop_type_checks();stop_relay_checks();master_policy_checks();return 0;}
+ if(argc==2&&!strcmp(argv[1],"--policy")){alarm(20);native_text_wire_checks();binding_sync_checks();binding_reversal_checks();qlink_mode_routing_checks();input_page_checks();following_reenable_checks();milestone_checks();drum_channel_checks();drum_surface_checks();policy_checks();toggle_midi_checks();assignment_checks();effects_policy_checks();jog_policy_checks();data_wheel_checks();sequence_duplicate_bridge_checks();stop_type_checks();stop_relay_checks();master_policy_checks();return 0;}
  if(argc!=3)return 2;
- alarm(20);native_text_wire_checks();binding_sync_checks();binding_reversal_checks();qlink_mode_routing_checks();input_page_checks();following_reenable_checks();milestone_checks();drum_channel_checks();drum_surface_checks();policy_checks();toggle_midi_checks();assignment_checks();effects_policy_checks();jog_policy_checks();stop_type_checks();stop_relay_checks();master_policy_checks();
+ alarm(20);native_text_wire_checks();binding_sync_checks();binding_reversal_checks();qlink_mode_routing_checks();input_page_checks();following_reenable_checks();milestone_checks();drum_channel_checks();drum_surface_checks();policy_checks();toggle_midi_checks();assignment_checks();effects_policy_checks();jog_policy_checks();data_wheel_checks();sequence_duplicate_bridge_checks();stop_type_checks();stop_relay_checks();master_policy_checks();
  char *defaults[]={"mirror-input","/volume","/command"};need(servo_arguments(3,defaults)==3&&servo_disabled,"separate-process composition uses default no-echo policy");
  int fd=open(argv[1],O_RDONLY|O_CLOEXEC);struct stat st;need(fd>=0&&!fstat(fd,&st)&&st.st_size==sizeof(MirrorState),"actual producer mirror file");
  const MirrorState *state=mmap(NULL,sizeof(*state),PROT_READ,MAP_SHARED,fd,0);need(state!=MAP_FAILED,"actual read-only mirror mapping");

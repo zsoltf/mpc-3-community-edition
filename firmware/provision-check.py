@@ -10,7 +10,7 @@ with tempfile.TemporaryDirectory(prefix='mpclearn-provision-') as tmp:
     root=pathlib.Path(tmp)/'root';root.mkdir()
     run(['debugfs','-R',f'rdump / {root}',str(image)])
     shutil.copy('/usr/bin/qemu-arm',root/'qemu-arm')
-    stage=root/'data/mpclearn-model.mouse-r5'
+    stage=root/'data/mpclearn-model.v0_2_0'
     boot=root/'data/mpclearn-boot'
     state=root/'data/mpclearn-image'
     selection=root/'etc/mpclearn-boot-stage'
@@ -20,9 +20,9 @@ with tempfile.TemporaryDirectory(prefix='mpclearn-provision-') as tmp:
     def provision(): return run(['chroot',str(root),'/bin/sh','/usr/libexec/mpclearn/provision.sh'])
     def hashes(): return {p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in stage.iterdir() if p.is_file()}
     provision()
-    assert selection.read_text()=='/data/mpclearn-model.mouse-r5\n'
+    assert selection.read_text()=='/data/mpclearn-model.v0_2_0\n'
     assert stage.stat().st_mode&0o777==0o700 and selection.stat().st_mode&0o777==0o600
-    run(['chroot',str(root),'/bin/sh','-c','cd /data/mpclearn-model.mouse-r5 && sha256sum -c session-package.sha256'])
+    run(['chroot',str(root),'/bin/sh','-c','cd /data/mpclearn-model.v0_2_0 && sha256sum -c session-package.sha256'])
     baseline=hashes();(stage/'session-test-sentinel').write_text('preserve current session\n')
     provision();assert all(hashes()[k]==v for k,v in baseline.items())
     selection.unlink();provision();assert not selection.exists(), 'repeat boot re-enabled disabled MCU'
@@ -38,19 +38,19 @@ with tempfile.TemporaryDirectory(prefix='mpclearn-provision-') as tmp:
 
     # Upgrade each known prior image into the separate new stage, preserving
     # old data and replacing that release's boot helpers with this release's.
-    new_revision='4d060dc-mouse-r5\n'
-    for old_revision,old_name in [('6d70695-mcu-direct-r2\n','mcu-direct-r2'),('ce4ccce-mcu-perf-r3\n','mcu-perf-r3'),('9000390-mcu-perf-r4\n','mcu-perf-r4')]:
+    new_revision='81f3086-v0_2_0\n'
+    for old_revision,old_name in [('6d70695-mcu-direct-r2\n','mcu-direct-r2'),('ce4ccce-mcu-perf-r3\n','mcu-perf-r3'),('9000390-mcu-perf-r4\n','mcu-perf-r4'),('4d060dc-mouse-r5\n','mouse-r5')]:
         old_stage=root/('data/mpclearn-model.'+old_name);old_stage.mkdir(exist_ok=True)
         (old_stage/'previous-session').write_bytes(b'old-stage-untouched\n')
         shutil.rmtree(stage);(state/'installed').write_text(old_revision)
         (boot/'mcu-session.sh').write_bytes(b'#!/bin/sh\n# prior release helper\n')
         selection.write_text('/data/mpclearn-model.'+old_name+'\n');provision()
-        assert selection.read_text()=='/data/mpclearn-model.mouse-r5\n'
+        assert selection.read_text()=='/data/mpclearn-model.v0_2_0\n'
         assert (state/'installed').read_text()==new_revision
         assert (old_stage/'previous-session').read_bytes()==b'old-stage-untouched\n'
         assert all(hashes()[k]==v for k,v in baseline.items())
         assert all((boot/name).read_bytes()==helpers[name] and (boot/name).stat().st_mode&0o777==0o700 for name in helpers)
-    old_revision='9000390-mcu-perf-r4\n'
+    old_revision='4d060dc-mouse-r5\n'
     # A differing helper on an installation without our marker is custom: refused unchanged.
     (state/'installed').unlink();selection.unlink();shutil.rmtree(stage)
     (boot/'mcu-session.sh').write_bytes(b'#!/bin/sh\n# custom helper\n')
@@ -62,10 +62,10 @@ with tempfile.TemporaryDirectory(prefix='mpclearn-provision-') as tmp:
     provision();assert not selection.exists() and (state/'installed').read_text()==new_revision
     provision();assert not selection.exists()
     # Resume after a selector switch but before writing the completion marker.
-    (state/'installed').write_text(old_revision);selection.write_text('/data/mpclearn-model.mouse-r5\n')
+    (state/'installed').write_text(old_revision);selection.write_text('/data/mpclearn-model.v0_2_0\n')
     provision();assert (state/'installed').read_text()==new_revision
     # Unknown revision and custom selection must not be silently repointed.
-    for marker,selected in [('', '/data/mpclearn-model.mouse-r5\n'), ('\n', '/data/mpclearn-model.mouse-r5\n'), ('unknown-version\n','/data/mpclearn-model.mouse-r5\n'), (old_revision,'/data/my-custom-stage\n'), (None,'/data/my-custom-stage\n')]:
+    for marker,selected in [('', '/data/mpclearn-model.v0_2_0\n'), ('\n', '/data/mpclearn-model.v0_2_0\n'), ('unknown-version\n','/data/mpclearn-model.v0_2_0\n'), (old_revision,'/data/my-custom-stage\n'), (None,'/data/my-custom-stage\n')]:
         if marker is None: (state/'installed').unlink()
         else: (state/'installed').write_text(marker)
         selection.write_text(selected)
@@ -78,5 +78,5 @@ with tempfile.TemporaryDirectory(prefix='mpclearn-provision-') as tmp:
     (state/'installed').unlink();selection.unlink();(stage/'mirror-input').write_bytes(b'conflicting package')
     failed=subprocess.run(['chroot',str(root),'/bin/sh','/usr/libexec/mpclearn/provision.sh'],capture_output=True,timeout=120)
     assert failed.returncode and not selection.exists() and not (state/'installed').exists()
-    print('PASS: shipped ARM provisioner fresh install, same-package migration, rerun, disabled-state preservation, r2, r3 and r4 upgrades with helper replacement, custom-helper refusal, disabled upgrade, interrupted upgrade, settings/project preservation and conflict refusal')
+    print('PASS: shipped ARM provisioner fresh install, same-package migration, rerun, disabled-state preservation, r2, r3, r4 and r5 upgrades with helper replacement, custom-helper refusal, disabled upgrade, interrupted upgrade, settings/project preservation and conflict refusal')
     print('Boundary: extracted rootfs directories replace mounted /data and /etc; actual systemd ordering, boot and flash remain untested.')

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>X-Touch setup and cheat sheet - MPC 3 Community Edition</title>
+  <title>X-Touch guide - MPC 3 Community Edition</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <script>try{const t=localStorage.getItem('theme');if(t==='dark'||t==='light')document.documentElement.dataset.theme=t;}catch(e){}</script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -12,7 +12,7 @@
   <style>
     :root {
       color-scheme: light;
-      --bg: #f6f6f4; --surface: #ffffff; --figure: #ffffff; --ink: #111315; --ink-2: #4a4f55; --ink-3: #7c828a;
+      --bg: #f6f6f4; --surface: #ffffff; --ink: #111315; --ink-2: #4a4f55; --ink-3: #7c828a;
       --line: #e3e4e1; --line-2: #eeefec; --accent: #d6362a; --accent-soft: #fdeceb; --accent-ink: #7a1f17;
       --btn-hover: #fbfbfa; --btn-line-hover: #c9cbc6; --primary: #111315; --primary-ink: #ffffff; --primary-hover: #000000;
       --header: rgba(246,246,244,.85);
@@ -44,6 +44,7 @@
     a:hover { color: var(--accent); }
     a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
     code { font-family: var(--mono); font-size: .86em; background: var(--line-2); padding: 2px 6px; border-radius: 6px; }
+    kbd { font-family: var(--mono); font-size: .82em; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; background: var(--surface); white-space: nowrap; }
     .wrap { width: min(1040px, 100% - 40px); margin-inline: auto; }
     main { width: min(880px, 100% - 40px); margin: 0 auto; padding-bottom: 8px; }
     @media (max-width: 640px) { .wrap, main { width: calc(100% - 32px); } }
@@ -54,12 +55,11 @@
     .brand:hover { color: var(--ink); }
     .brand .mark { width: 26px; height: 26px; border-radius: 7px; background: var(--primary); display: grid; place-items: center; }
     .brand .mark i { display: block; width: 10px; height: 10px; border-radius: 2px; background: var(--accent); }
-    .brand .short { display: none; }
     .brand .tag { font-family: var(--mono); font-size: 12px; font-weight: 500; color: var(--ink-3); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; }
-    .top nav { display: flex; align-items: center; gap: 22px; font-size: 14px; font-weight: 500; }
+    .brand .short { display: none; }
+    .top nav { display: flex; align-items: center; gap: 20px; font-size: 14px; font-weight: 500; }
     .top nav a { text-decoration: none; color: var(--ink-2); white-space: nowrap; }
     .top nav a:hover { color: var(--ink); }
-    .top nav .btn { padding: 8px 14px; }
     .theme { width: 36px; height: 36px; padding: 0; justify-content: center; border-color: transparent; background: transparent; color: var(--ink-2); }
     .theme:hover { background: var(--line-2); border-color: transparent; }
     .theme svg { width: 18px; height: 18px; }
@@ -67,79 +67,73 @@
     :root[data-theme="dark"] .theme .sun { display: block; }
     :root[data-theme="dark"] .theme .moon { display: none; }
     @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .theme .sun { display: block; } :root:not([data-theme="light"]) .theme .moon { display: none; } }
-    @media (max-width: 640px) { .top nav a:not(.btn) { display: none; } .brand .full { display: none; } .brand .short { display: inline; } .brand .tag { display: none; } }
+    @media (max-width: 640px) { .top nav { gap: 14px; } .top nav a { font-size: 13px; } .brand .full { display: none; } .brand .short { display: inline; } .brand .tag { display: none; } }
 
     .btn, button { appearance: none; font: inherit; font-size: 14px; font-weight: 500; line-height: 1.2; border: 1px solid var(--line); border-radius: var(--radius-s); padding: 10px 16px; background: var(--surface); color: var(--ink); cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 8px; }
     .btn:hover, button:hover { border-color: var(--btn-line-hover); background: var(--btn-hover); color: var(--ink); }
-    .btn.primary { background: var(--primary); border-color: var(--primary); color: var(--primary-ink); }
-    .btn.primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); color: var(--primary-ink); }
 
-    header { padding: 56px 0 28px; }
+    header { padding: 40px 0 8px; }
     .label { font-family: var(--mono); font-size: 12px; font-weight: 500; color: var(--accent); letter-spacing: .04em; text-transform: uppercase; }
-    h1 { font-size: clamp(30px, 4vw, 42px); font-weight: 700; letter-spacing: -.03em; line-height: 1.1; margin: 8px 0 12px; }
-    .lede { color: var(--ink-2); margin: 0; font-size: 17px; max-width: 60ch; }
-    .tools { display: flex; gap: 10px 16px; align-items: center; flex-wrap: wrap; margin-top: 20px; font-size: 14px; }
+    h1 { font-size: clamp(28px, 3.6vw, 38px); font-weight: 700; letter-spacing: -.03em; line-height: 1.1; margin: 6px 0 10px; }
+    .lede { color: var(--ink-2); margin: 0; font-size: 16px; max-width: 66ch; }
+    .tools { display: flex; gap: 10px 16px; align-items: center; flex-wrap: wrap; margin-top: 18px; font-size: 14px; }
+    .toc { display: flex; flex-wrap: wrap; gap: 6px 8px; margin: 22px 0 0; padding: 0; list-style: none; font-size: 13px; }
+    .toc a { text-decoration: none; color: var(--ink-2); border: 1px solid var(--line); border-radius: 999px; padding: 5px 11px; background: var(--surface); }
+    .toc a:hover { color: var(--accent); border-color: var(--btn-line-hover); }
 
-    section { padding: 28px 0; border-top: 1px solid var(--line); }
-    section.figure { padding: 0 0 28px; border-top: 0; }
-    figure { margin: 0; background: var(--figure); color: #111315; border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px 20px 16px; }
-    .figure-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-    figure svg { width: 100%; min-width: 640px; height: auto; display: block; }
-    figcaption { display: grid; grid-template-columns: auto 1fr; gap: 0 14px; margin-top: 12px; font-size: 13px; color: #4a4f55; }
-    figcaption b { font-family: var(--mono); font-weight: 500; color: var(--ink-3); font-size: 12px; letter-spacing: .04em; }
-    .key { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 10px 0 0; padding: 0; list-style: none; font-size: 13px; color: #4a4f55; }
-    .key li::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 7px; vertical-align: -1px; border: 1px solid #111315; }
-    .key li.on::before { background: #111315; }
-    .key li.off::before { border-color: #e3e4e1; background: #fff; }
-    .key li.lcd::before { background: #d6362a; border-color: #d6362a; }
-
-    h2 { font-size: 22px; font-weight: 700; letter-spacing: -.02em; margin: 0 0 14px; }
+    section { padding: 28px 0 8px; }
+    h2 { font-size: 22px; font-weight: 700; letter-spacing: -.02em; margin: 0 0 6px; }
+    h2 + p { margin-top: 0; }
     h3 { margin: 22px 0 8px; font-size: 15px; font-weight: 600; }
     p, li { line-height: 1.55; }
     p { color: var(--ink-2); }
     p strong, li strong { color: var(--ink); }
-    ol { padding-left: 22px; color: var(--ink-2); }
-    ol li { margin-bottom: 8px; }
-    .notice { border-radius: var(--radius-s); padding: 14px 16px; color: var(--accent-ink); background: var(--accent-soft); font-size: 15px; }
+    ol, ul { padding-left: 22px; color: var(--ink-2); margin: 8px 0 0; }
+    ol li, ul li { margin-bottom: 8px; }
+    .notice { border-radius: var(--radius-s); padding: 14px 16px; color: var(--accent-ink); background: var(--accent-soft); font-size: 15px; margin-top: 14px; }
     .notice strong { color: inherit; }
-    table { width: 100%; border-collapse: collapse; font-size: 14.5px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
-    th, td { text-align: left; vertical-align: top; border-bottom: 1px solid var(--line-2); padding: 10px 14px; line-height: 1.45; }
+    .steps { list-style: none; counter-reset: step; padding: 0; margin: 12px 0 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+    .steps > li { counter-increment: step; display: grid; grid-template-columns: 36px 1fr; gap: 14px; padding: 16px 20px; border-top: 1px solid var(--line); margin: 0; }
+    .steps > li:first-child { border-top: 0; }
+    .steps > li::before { content: counter(step); width: 28px; height: 28px; border-radius: 50%; background: var(--primary); color: var(--primary-ink); font-family: var(--mono); font-size: 12px; font-weight: 500; display: grid; place-items: center; margin-top: 1px; }
+    .steps b { display: block; color: var(--ink); margin-bottom: 2px; }
+    .steps span { color: var(--ink-2); font-size: 15px; }
+    table { width: 100%; border-collapse: collapse; font-size: 14.5px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; margin-top: 12px; }
+    th, td { text-align: left; vertical-align: top; border-bottom: 1px solid var(--line-2); padding: 9px 14px; line-height: 1.45; }
     th { font-family: var(--mono); font-size: 12px; font-weight: 500; color: var(--ink-3); letter-spacing: .04em; text-transform: uppercase; background: var(--line-2); }
-    td:first-child { color: var(--ink); font-weight: 600; white-space: nowrap; }
+    td:first-child { color: var(--ink); font-weight: 600; white-space: nowrap; width: 34%; }
     td { color: var(--ink-2); }
     tr:last-child td { border-bottom: 0; }
-    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px; }
-    .compact { margin: 0; padding-left: 20px; color: var(--ink-2); }
-    .compact li { margin-bottom: 6px; }
-    footer { margin: 12px 0 0; padding: 28px 0 40px; border-top: 1px solid var(--line); font-size: 13px; color: var(--ink-3); display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px 24px; }
+    td small { display: block; color: var(--ink-3); font-weight: 400; font-size: 12.5px; }
+    .two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 24px; }
+    footer { margin: 28px 0 0; padding: 28px 0 40px; border-top: 1px solid var(--line); font-size: 13px; color: var(--ink-3); display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px 24px; }
     footer nav { display: flex; flex-wrap: wrap; gap: 6px 18px; }
     footer nav a { color: var(--ink-2); text-decoration: none; }
     footer nav a:hover { color: var(--accent); }
     footer p { margin: 0; max-width: 60ch; }
-    @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } td:first-child { white-space: normal; } table { display: block; overflow-x: auto; } }
+    @media (max-width: 720px) { .two { grid-template-columns: 1fr; } td:first-child { white-space: normal; width: auto; } table { display: block; overflow-x: auto; } }
     @media print {
-      body { color: black; background: white; }
+      body { color: black; background: white; font-size: 11pt; }
       main { width: auto; margin: 0; }
-      header, section { border: 0; padding: 0; margin: 0 0 18pt; }
+      header, section { border: 0; padding: 0; margin: 0 0 14pt; }
       h2, h3, tr { break-inside: avoid; }
-      th, td { border-color: #bbb; padding: 5pt; color: black; }
-      p, li, .compact { color: black; }
+      th, td { border-color: #bbb; padding: 4pt 6pt; color: black; }
+      p, li, span { color: black; }
       a { color: black; text-decoration: none; }
-      .top, .tools, footer { display: none; }
+      .top, .tools, .toc, footer { display: none; }
       .notice { background: white; border: 1px solid #777; color: black; }
-      code { background: none; padding: 0; }
-      figure, table { box-shadow: none; border: 0; }
+      code, kbd { background: none; padding: 0; border: 0; }
+      table, .steps { box-shadow: none; border: 1px solid #bbb; }
     }
   </style>
+</head>
 <body>
 <div class="top">
   <div class="wrap">
-    <a class="brand" href="./"><span class="mark"><i></i></span><span class="full">MPC 3 Community Edition</span><span class="short">MPC 3 CE</span> <span class="tag">v0.1.0-rc.3</span></a>
+    <a class="brand" href="./"><span class="mark"><i></i></span><span class="full">MPC 3 Community Edition</span><span class="short">MPC 3 CE</span> <span class="tag">v0.2.0</span></a>
     <nav aria-label="Pages">
-      <a href="#quick-start">Setup</a>
-      <a href="#cheat-sheet">Controls</a>
+      <a href="./">Image builder</a>
       <a href="https://github.com/zsoltf/mpc-3-community-edition" rel="noopener noreferrer">GitHub</a>
-      <a class="btn primary" href="./#builder">Build the image</a>
       <button class="theme" type="button" id="themeToggle" aria-label="Switch color theme" title="Switch color theme">
         <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
         <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
@@ -149,185 +143,174 @@
 </div>
 <main>
   <header>
-
-    <span class="label">Mackie Control feature &middot; full X-Touch, MC/USB mode</span>
-    <h1>Setup and cheat sheet</h1>
-    <p class="lede">The controller connects on its own once a project is created or loaded. No Global MIDI Learn mapping is needed.</p>
+    <span class="label">Mackie Control</span>
+    <h1>X-Touch guide</h1>
+    <p class="lede">Only the full-size <strong>Behringer X-Touch</strong> in MC mode over USB is supported right now. X-Touch Compact, One and Extender, other Mackie Control surfaces and HUI are not. The controller connects on its own once a project is loaded and follows the MPC: motor faders, names, colors and meters track whatever changes on the screen.</p>
     <nav class="tools" aria-label="Guide actions">
       <button type="button" onclick="window.print()">Print or save as PDF</button>
-      <a href="xtouch-cheatsheet.md" download>Download the text cheat sheet</a>
+      <a href="xtouch-cheatsheet.md" download>Text cheat sheet</a>
     </nav>
+    <ul class="toc" aria-label="Sections">
+      <li><a href="#setup">Setup</a></li>
+      <li><a href="#strips">Channel strips</a></li>
+      <li><a href="#views">Views</a></li>
+      <li><a href="#plugins">Plug-ins and Q-Links</a></li>
+      <li><a href="#transport">Transport</a></li>
+      <li><a href="#jog">Jog wheel and cursor keys</a></li>
+      <li><a href="#limits">Not available</a></li>
+    </ul>
   </header>
 
-  <section class="figure">
-  <figure>
-    <div class="figure-scroll">
-    <svg id="panel" viewBox="0 0 1000 330" role="img" aria-labelledby="panel-title panel-desc">
-      <title id="panel-title">Behringer X-Touch top panel</title>
-      <desc id="panel-desc">Schematic of the X-Touch. Controls that MPC 3 Community Edition drives or reads are drawn in black; unassigned controls are light grey.</desc>
-    </svg>
-    </div>
-    <figcaption><b>Fig. 1</b><span>What the MPC drives on a full X-Touch in MC/USB mode. Scribble strips show track names, values and colors from the project; motor faders and meters follow it. The tables below list every assignment.</span></figcaption>
-    <ul class="key"><li class="on">Assigned</li><li class="lcd">Driven by MPC state</li><li class="off">Unassigned</li></ul>
-  </figure>
-  </section>
-
-  <section id="quick-start">
-    <h2>Quick start</h2>
-    <ol>
-      <li>Power off the X-Touch. Hold channel 1 <strong>Select</strong> while powering it on. Set encoder 1 to <strong>MC</strong> and encoder 2 to <strong>USB</strong>, then press <strong>Select</strong> to save.</li>
-      <li>Connect the X-Touch USB port directly to the MPC.</li>
-      <li>With the MPC on AC power, copy the generated image to the root of a USB drive and use the MPC firmware update flow. Its filename must end in <code>-update.img</code>; remove any browser-added <code>(1)</code> suffix.</li>
-      <li>After the configured MPC boots, create a blank project or load your User Template or a saved project. The controller connects when project creation or loading completes.</li>
+  <section id="setup">
+    <h2>Setup</h2>
+    <ol class="steps">
+      <li><div><b>Put the X-Touch in MC mode over USB.</b><span>Power it off. Hold channel 1 <kbd>Select</kbd> while powering on. Set encoder 1 to <strong>MC</strong> and encoder 2 to <strong>USB</strong>, then press <kbd>Select</kbd> to save. Connect its USB port directly to the MPC.</span></div></li>
+      <li><div><b>Keep raw controller messages away from instruments.</b><span>On the MPC, open Preferences &gt; MIDI/Sync and turn off <strong>Track, Global and Control</strong> for the <code>X-TOUCH_INT</code> input. The Community Edition reads the controller on its own; no Global MIDI Learn or XMM profile is involved. Your other MIDI ports stay as they are.</span></div></li>
+      <li><div><b>Load a project.</b><span>After the Community Edition image boots, create a blank project or load a saved one or your User Template. The controller connects when loading completes. Unplugging and replugging it reconnects.</span></div></li>
     </ol>
-    <p id="compatibility" class="notice"><strong>MIDI input setup:</strong> In MPC Preferences &gt; MIDI/Sync, turn off <strong>Track, Global and Control</strong> for the <code>X-TOUCH_INT</code> input. The MCU bridge receives these controls independently; this keeps controller messages from playing notes or bending pitch on instrument tracks. Leave your other MIDI ports configured as usual. <strong>MCU support does not require Global MIDI Learn or an XMM profile.</strong> The image preserves your MIDI settings. Global MIDI Learn and optional Mini/Launch Control mappings are a separate feature.</p>
+    <p class="notice"><strong>Shift</strong> on the X-Touch is the modifier for every combination on this page. Motor following can be turned off with <kbd>Shift</kbd>+<kbd>Flip</kbd>; the setting is remembered.</p>
   </section>
 
-  <section id="cheat-sheet" class="long">
-    <h2>Tracks and mixing</h2>
+  <section id="strips">
+    <h2>Channel strips</h2>
+    <p>Eight strips show the current view. In the normal mixer that is eight tracks with names, colors and meters on the scribble strips.</p>
     <table>
       <thead><tr><th>Control</th><th>Action</th></tr></thead>
       <tbody>
-        <tr><td>Channel Left / Right</td><td>Select previous / next MPC track. Also changes the parent track in Send, Drum Mix, I/O and Q-Link views.</td></tr>
-        <tr><td>Bank Left / Right</td><td>Fixed banks of eight strips. Changes pad banks in Drum Mix, parameter pages in Plug-In, and Q-Links 1-8 / 9-16 in EQ. Send has no banking.</td></tr>
-        <tr><td>Strip Select</td><td>Select the visible track in the normal mixer. In Send and Drum Mix, lit Select buttons identify the parent track; pad selection is unavailable.</td></tr>
-        <tr><td>Eight faders</td><td>Track volume in the normal mixer, or the active page target. Flip can exchange targets.</td></tr>
-        <tr><td>Master fader</td><td>Global master output level.</td></tr>
-        <tr><td>Eight encoders</td><td>Pan in the normal mixer, or active-page controls. Push centers ordinary pan.</td></tr>
-        <tr><td>Mute / Solo</td><td>Toggle strip mute / solo; controls the pad in Drum Mix.</td></tr>
-        <tr><td>Rec/Rdy</td><td>Toggle track recording arm where available. Pad arm is unavailable.</td></tr>
-        <tr><td>Track</td><td>Return to the normal track mixer with track names and volume readouts.</td></tr>
-        <tr><td>Shift + Track</td><td>Open the selected track's native type chooser. Choose on the MPC. This does not create a track.</td></tr>
-        <tr><td>Instrument</td><td>The top assignment button beside EQ opens the native Add Track chooser. Choose Drum, MIDI or another type on the MPC.</td></tr>
-        <tr><td>Audio Inst</td><td>The separate mixer-view button filters Instrument tracks. It does not open Add Track.</td></tr>
-        <tr><td>Pan</td><td>Pan assignment and pan value presentation.</td></tr>
-        <tr><td>Send</td><td>Selected track's four sends on faders and corresponding return levels on encoders.</td></tr>
-        <tr><td>Flip</td><td>Exchange fader and encoder targets in mixer, Send, Drum Mix, plug-in parameter and Q-Link pages.</td></tr>
-        <tr><td>Shift + Flip</td><td>Toggle motor following On/Off. The preference persists; control input remains available while following is Off.</td></tr>
-        <tr><td>Name/Value</td><td>Switch label/value display. Editing a control temporarily shows its value.</td></tr>
+        <tr><td>Fader</td><td>Track volume, or the control the current view puts on faders. <small>MPC dB scale: 0 dB default, +6 dB maximum. MIDI track volume is 0 to 127.</small></td></tr>
+        <tr><td>Encoder</td><td>Pan, or the current view's encoder control. Push centers pan.</td></tr>
+        <tr><td>Select</td><td>Select that track. In Send and Drum Mix the lit Select shows the parent track.</td></tr>
+        <tr><td>Mute / Solo</td><td>Toggle mute or solo. In Drum Mix they act on the pad.</td></tr>
+        <tr><td>Rec</td><td>Toggle record arm where the track supports it.</td></tr>
+        <tr><td>Master fader</td><td>Master output level.</td></tr>
+        <tr><td>Flip</td><td>Swap what is on faders and encoders in the current view.</td></tr>
+        <tr><td>Name/Value</td><td>Show names or values on the scribble strips. Editing a control shows its value briefly.</td></tr>
+        <tr><td>Channel &lt; &gt;</td><td>Previous or next track. Also moves the parent track in Send, Drum Mix, I/O and Q-Link views.</td></tr>
+        <tr><td>Bank &lt; &gt;</td><td>Previous or next bank of eight. In Drum Mix: pad banks. In plug-in pages: parameter pages. In EQ: Q-Links 1 to 8 or 9 to 16.</td></tr>
       </tbody>
     </table>
-    <p>Audio levels use MPC's dB scale: 0 dB default and +6 dB maximum. MIDI track volume is 0-127. MIDI pan/sends and CV volume are unavailable. Motors follow MPC state without requiring an initial fader touch.</p>
   </section>
 
-  <section>
-    <h2>Mixer views</h2>
-    <table>
-      <thead><tr><th>Button</th><th>View</th></tr></thead>
-      <tbody>
-        <tr><td>MIDI Tracks</td><td>MIDI tracks</td></tr>
-        <tr><td>Audio Tracks</td><td>Audio tracks</td></tr>
-        <tr><td>Audio Inst</td><td>Instrument tracks</td></tr>
-        <tr><td>Busses</td><td>Submixes</td></tr>
-        <tr><td>Outputs</td><td>Outputs</td></tr>
-        <tr><td>Global View / User</td><td>All channel types</td></tr>
-        <tr><td>Inputs</td><td>Selected-track I/O</td></tr>
-        <tr><td>Aux</td><td>Drum Mix for the selected Drum track; press again to leave.</td></tr>
-        <tr><td>Shift + Aux</td><td>Returns mixer</td></tr>
-        <tr><td>Shift + Audio Inst</td><td>Alias for Drum Mix</td></tr>
-        <tr><td>Shift + Inputs</td><td>Diagnostic input-type filter; its population is not qualified.</td></tr>
-      </tbody>
-    </table>
-    <p>Drum Mix shows pads A01-H16. Faders control volume, encoders control pan, and Flip swaps them. A non-Drum parent leaves the strips blank. Pad names, colors, meters, Select and Arm are unavailable.</p>
-  </section>
-
-  <section class="long">
-    <h2>Plug-In, effects and Q-Links</h2>
-    <table>
-      <thead><tr><th>Control</th><th>Action</th></tr></thead>
-      <tbody>
-        <tr><td>Plug-In</td><td>Show four inserts for the selected track. Press again from parameters to return to slots.</td></tr>
-        <tr><td>Push occupied-slot encoder</td><td>Open its parameter pages.</td></tr>
-        <tr><td>Shift + push occupied-slot encoder</td><td>Toggle insert bypass from the slot list.</td></tr>
-        <tr><td>Push empty-slot encoder</td><td>Open MPC's native Add Effect chooser; finish on MPC.</td></tr>
-        <tr><td>Shift + Plug-In while editing</td><td>Open MPC's native Replace Effect chooser; finish on MPC.</td></tr>
-        <tr><td>Turn parameter encoder</td><td>Adjust the displayed parameter.</td></tr>
-        <tr><td>Push parameter encoder</td><td>Toggle a parameter with two declared states. Continuous parameters do not reset.</td></tr>
-        <tr><td>Bank Left / Right in parameters</td><td>Previous / next authored group or parameter page.</td></tr>
-        <tr><td>Flip in parameters</td><td>Parameters on faders; bank track volumes on encoders.</td></tr>
-        <tr><td>EQ</td><td>Q-Links 1-8 on encoders. EQ effects remain ordinary inserts.</td></tr>
-        <tr><td>Bank Left / Right on EQ</td><td>Switch Q-Links 1-8 / 9-16.</td></tr>
-        <tr><td>Shift + Bank Left / Right on EQ</td><td>Previous / next MPC Q-Link mode.</td></tr>
-        <tr><td>Flip on EQ</td><td>Q-Links on faders; bank track volumes on encoders.</td></tr>
-      </tbody>
-    </table>
-    <p>Q-Link encoder push has no reset/toggle assignment. Presets, reliable parameter-default reset and synth-instance parameter pages are unavailable. Chooser navigation stays on MPC. Add/Replace chooses an installed effect; it does not install plug-ins.</p>
-  </section>
-
-  <section>
-    <h2>Inputs: selected-track I/O</h2>
-    <p>Turn encoders through MPC's applicable choices. Faders retain track volumes; encoder push and Flip do not change routing. Unavailable fields show N/A/dashes.</p>
+  <section id="views">
+    <h2>Views</h2>
+    <p>The assignment and view buttons choose what the eight strips show.</p>
+    <div class="two">
+      <table>
+        <thead><tr><th>Button</th><th>Strips show</th></tr></thead>
+        <tbody>
+          <tr><td>Track</td><td>The normal track mixer.</td></tr>
+          <tr><td>Pan</td><td>Pan values.</td></tr>
+          <tr><td>Send</td><td>The selected track's four sends on faders, return levels on encoders.</td></tr>
+          <tr><td>Aux</td><td>Drum Mix for the selected Drum track: pads A01 to H16, volume on faders, pan on encoders. Press again to leave.</td></tr>
+          <tr><td>Inputs</td><td>The selected track's I/O on the encoders, see below.</td></tr>
+          <tr><td>Plug-In</td><td>The selected track's four inserts, see the next section.</td></tr>
+          <tr><td>EQ</td><td>Q-Links on the encoders.</td></tr>
+        </tbody>
+      </table>
+      <table>
+        <thead><tr><th>Button</th><th>Mixer filter</th></tr></thead>
+        <tbody>
+          <tr><td>MIDI Tracks</td><td>MIDI tracks.</td></tr>
+          <tr><td>Audio Tracks</td><td>Audio tracks.</td></tr>
+          <tr><td>Audio Inst</td><td>Instrument tracks.</td></tr>
+          <tr><td>Busses</td><td>Submixes.</td></tr>
+          <tr><td>Outputs</td><td>Outputs.</td></tr>
+          <tr><td>Global View / User</td><td>All channel types.</td></tr>
+          <tr><td>Shift + Aux</td><td>Returns.</td></tr>
+          <tr><td>Instrument</td><td>Opens the MPC's Add Track chooser; pick the type on the MPC.</td></tr>
+          <tr><td>Shift + Track</td><td>Opens the selected track's type chooser on the MPC.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <h3>Inputs view: the selected track's I/O on the encoders</h3>
     <table>
       <thead><tr><th>Encoder</th><th>Field</th><th>Encoder</th><th>Field</th></tr></thead>
       <tbody>
         <tr><td>1</td><td>Monitor</td><td>5</td><td>Audio Out</td></tr>
         <tr><td>2</td><td>MIDI In Port</td><td>6</td><td>MIDI Out Port</td></tr>
         <tr><td>3</td><td>MIDI In Channel</td><td>7</td><td>MIDI Out Channel</td></tr>
-        <tr><td>4</td><td>Send To Track</td><td>8</td><td>Audio In</td></tr>
+        <tr><td>4</td><td>Send To Track (internal MIDI routing)</td><td>8</td><td>Audio In</td></tr>
       </tbody>
     </table>
-    <p>Send To Track is internal MIDI routing, separate from the four audio sends on the Send page.</p>
+    <p>Turn an encoder to step through the MPC's choices for that field. Faders keep track volume; fields that do not apply show dashes.</p>
   </section>
 
-  <section class="long">
-    <h2>Transport, editing and automation</h2>
+  <section id="plugins">
+    <h2>Plug-ins and Q-Links</h2>
     <table>
       <thead><tr><th>Control</th><th>Action</th></tr></thead>
       <tbody>
-        <tr><td>Play</td><td>Play from the current position.</td></tr>
-        <tr><td>Stop</td><td>Stop immediately. A distinct press while already stopped returns to the beginning and remains stopped.</td></tr>
-        <tr><td>Record</td><td>Native MPC recording toggle.</td></tr>
-        <tr><td>Rewind / Fast Forward</td><td>Move backward / forward in beats; holding repeats.</td></tr>
-        <tr><td>Jog wheel</td><td>Move by beats.</td></tr>
-        <tr><td>Shift + jog wheel</td><td>Fine movement in pulses/ticks.</td></tr>
-        <tr><td>Cycle</td><td>Toggle loop.</td></tr>
-        <tr><td>Click</td><td>Toggle metronome.</td></tr>
-        <tr><td>Save</td><td>Native Save action.</td></tr>
-        <tr><td>Undo</td><td>Native Undo, including edits MPC puts in its undo history.</td></tr>
-        <tr><td>Shift + Undo</td><td>Redo.</td></tr>
-        <tr><td>Read/Off</td><td>Automation Read.</td></tr>
-        <tr><td>Write</td><td>Automation Write.</td></tr>
-        <tr><td>Group</td><td>Automation Off.</td></tr>
-        <tr><td>Cursor arrows</td><td>Native context-dependent navigation.</td></tr>
-        <tr><td>Zoom</td><td>Toggle arrows between ordinary navigation and horizontal/vertical zoom.</td></tr>
-        <tr><td>Enter / Cancel</td><td>Native context-dependent key actions; not qualified for every popup. Use MPC for chooser selection/cancel.</td></tr>
-        <tr><td>Shift</td><td>Modifier for the combinations listed on this page.</td></tr>
+        <tr><td>Plug-In</td><td>Show the selected track's four insert slots. Press again while editing parameters to return to the slots.</td></tr>
+        <tr><td>Push an occupied slot's encoder</td><td>Open that insert's parameter pages. <kbd>Shift</kbd>+push toggles bypass instead.</td></tr>
+        <tr><td>Push an empty slot's encoder</td><td>Open the MPC's Add Effect chooser; finish on the MPC.</td></tr>
+        <tr><td>Shift + Plug-In while editing</td><td>Open the Replace Effect chooser; finish on the MPC.</td></tr>
+        <tr><td>Turn a parameter encoder</td><td>Adjust that parameter. Push toggles a two-state parameter.</td></tr>
+        <tr><td>Bank &lt; &gt; in parameters</td><td>Previous or next parameter page.</td></tr>
+        <tr><td>Flip in parameters</td><td>Parameters on faders, track volumes on encoders.</td></tr>
+        <tr><td>EQ</td><td>Q-Links 1 to 8 on the encoders. <kbd>Bank</kbd> switches to 9 to 16. <kbd>Shift</kbd>+<kbd>Bank</kbd> changes the MPC's Q-Link mode. <kbd>Flip</kbd> puts Q-Links on faders.</td></tr>
       </tbody>
     </table>
-    <p>The position display uses bars/beats/ticks. SMPTE switching is unavailable.</p>
   </section>
 
-  <section>
-    <div class="grid">
-      <div>
-        <h2>F-button shortcuts</h2>
-        <table>
-          <thead><tr><th>Button</th><th>MPC page</th></tr></thead>
-          <tbody>
-            <tr><td>F1</td><td>Main</td></tr><tr><td>F2</td><td>Arrange</td></tr>
-            <tr><td>F3</td><td>Clip</td></tr><tr><td>F4</td><td>Track Mix</td></tr>
-            <tr><td>F5</td><td>Pad Mix</td></tr><tr><td>F6</td><td>Track Edit</td></tr>
-            <tr><td>F7</td><td>Sample Edit</td></tr><tr><td>F8</td><td>Step Sequencer</td></tr>
-          </tbody>
-        </table>
-        <p>F6 is Track Edit. Shift + Track opens the current track's type chooser.</p>
-      </div>
-      <div>
-        <h2>Known limits</h2>
-        <ul class="compact">
-          <li>Unassigned: SMPTE/Beats, Option, Control, Alt, Trim, Touch, Latch, Marker, Nudge, Drop, Replace, transport-area Solo, Scrub and footswitch inputs.</li>
-          <li>Channel Solo buttons do work. Unlisted modifier combinations add no implied action.</li>
-          <li>Only the full X-Touch is qualified. Discovery currently depends on X-Touch device/port names; colors and motor policy are hardware-specific.</li>
-          <li>Other MCU devices need a device profile and hardware checks. HUI is unavailable.</li>
-          <li>Controller chooser navigation, synth/preset navigation, plug-in presets, Q-Link push reset, SMPTE display and pad Select/Arm are unavailable.</li>
-        </ul>
-      </div>
+  <section id="transport">
+    <h2>Transport and editing</h2>
+    <div class="two">
+      <table>
+        <thead><tr><th>Button</th><th>Action</th></tr></thead>
+        <tbody>
+          <tr><td>Play</td><td>Play from the current position.</td></tr>
+          <tr><td>Stop</td><td>Stop. Press again while stopped to return to the start.</td></tr>
+          <tr><td>Record</td><td>The MPC's record toggle.</td></tr>
+          <tr><td>Rewind / Fast Fwd</td><td>Move by beats; hold to repeat.</td></tr>
+          <tr><td>Cycle</td><td>Loop on or off.</td></tr>
+          <tr><td>Click</td><td>Metronome on or off.</td></tr>
+        </tbody>
+      </table>
+      <table>
+        <thead><tr><th>Button</th><th>Action</th></tr></thead>
+        <tbody>
+          <tr><td>Save</td><td>Save the project.</td></tr>
+          <tr><td>Undo</td><td>Undo. <kbd>Shift</kbd>+<kbd>Undo</kbd> is Redo.</td></tr>
+          <tr><td>Read/Off</td><td>Automation Read.</td></tr>
+          <tr><td>Write</td><td>Automation Write.</td></tr>
+          <tr><td>Group</td><td>Automation Off.</td></tr>
+          <tr><td>Enter / Cancel</td><td>The MPC's Enter and Cancel keys. Not every popup accepts them; use the screen when in doubt.</td></tr>
+          <tr><td>Footswitch 1 / 2</td><td>Play / Record, for hands-free looping. Check the X-Touch footswitch polarity setting if a switch reads as pressed at rest.</td></tr>
+        </tbody>
+      </table>
     </div>
+    <p>The position display shows bars, beats and ticks.</p>
   </section>
+
+  <section id="jog">
+    <h2>Jog wheel and cursor keys</h2>
+    <p>The <kbd>Scrub</kbd> button switches the jog wheel and the cursor cluster between two modes. Its LED is lit in scrub mode. The mode resets to scrub when a project loads or the controller reconnects.</p>
+    <table>
+      <thead><tr><th>Control</th><th>Scrub mode (LED on)</th><th>Data-wheel mode (LED off)</th></tr></thead>
+      <tbody>
+        <tr><td>Jog wheel</td><td>Move the position by beats. <kbd>Shift</kbd>+jog moves by ticks.</td><td>The MPC data wheel: one detent is one step on the focused control, on lists, fields and sliders alike.</td></tr>
+        <tr><td>Up / Down</td><td>Cursor up / down.</td><td>One data-wheel step up / down, like the MPC's plus and minus.</td></tr>
+        <tr><td>Left / Right</td><td>Cursor left / right.</td><td>Previous / next control, like Shift+Tab and Tab.</td></tr>
+        <tr><td>Center (Zoom)</td><td>Toggle the arrows between cursor moves and zoom.</td><td>No action yet. Select/confirm from the controller is planned.</td></tr>
+      </tbody>
+    </table>
+    <p>In data-wheel mode a fast spin is delivered in short bursts of up to four steps so the MPC's own acceleration behaves. Total travel is kept, so a hard flick can keep moving for a moment after your hand stops.</p>
+  </section>
+
+  <section id="limits">
+    <h2>Not available</h2>
+    <ul>
+      <li>Pad names, colors, meters, Select and Arm in Drum Mix; MIDI pan and sends; CV track volume.</li>
+      <li>Chooser navigation from the controller: Add Track, Add Effect and Replace Effect open on the MPC and finish there.</li>
+      <li>Plug-in presets, parameter reset to default, and parameter pages for synth instances.</li>
+      <li>SMPTE display, HUI, and any controller other than the full-size X-Touch.</li>
+    </ul>
+  </section>
+
   <footer>
     <nav aria-label="Community">
       <a href="./">Image builder</a>
-      <a href="https://github.com/zsoltf/mpc-3-community-edition/releases" rel="noopener noreferrer">Release notes</a>
+      <a href="https://github.com/zsoltf/mpc-3-community-edition/releases" rel="noopener noreferrer">Releases</a>
       <a href="https://github.com/zsoltf/mpc-3-community-edition/issues" rel="noopener noreferrer">Report a result or bug</a>
       <a href="https://github.com/zsoltf/mpc-3-community-edition" rel="noopener noreferrer">GitHub</a>
     </nav>
@@ -335,90 +318,6 @@
   </footer>
 </main>
 <script>
-
-// Fig. 1: the X-Touch top panel as a control map. on=assigned, lcd=driven by MPC state, off=unassigned.
-(function drawPanel() {
-  const svg = document.querySelector('#panel');
-  const NS = 'http://www.w3.org/2000/svg';
-  const ink = '#141414', off = '#cfd3d6', red = '#d6362a';
-  function el(name, attrs, text) {
-    const node = document.createElementNS(NS, name);
-    for (const k in attrs) node.setAttribute(k, attrs[k]);
-    if (text != null) node.textContent = text;
-    svg.appendChild(node); return node;
-  }
-  const stroke = on => ({stroke: on ? ink : off, fill: 'none', 'stroke-width': on ? 1.4 : 1});
-  function box(x, y, w, h, on, label, r) {
-    el('rect', Object.assign({x, y, width: w, height: h, rx: r == null ? 2 : r}, stroke(on)));
-    if (label) el('text', {x: x + w / 2, y: y + h / 2 + 3, 'text-anchor': 'middle', 'font-size': 7.5, 'font-family': 'ui-monospace, Menlo, monospace', fill: on ? ink : off}, label);
-  }
-  function knob(cx, cy, r, on) {
-    el('circle', Object.assign({cx, cy, r}, stroke(on)));
-    el('line', {x1: cx, y1: cy - r + 2, x2: cx, y2: cy - r + 7, stroke: on ? ink : off, 'stroke-width': 1.5});
-    for (let i = 0; i < 11; i++) { const a = Math.PI * (0.75 + i * 1.5 / 10); el('circle', {cx: cx + Math.cos(a) * (r + 5), cy: cy + Math.sin(a) * (r + 5), r: 1.1, fill: on && i < 7 ? red : off}); }
-  }
-  el('rect', {x: 0.5, y: 0.5, width: 999, height: 329, rx: 8, fill: '#fff', stroke: ink, 'stroke-width': 1});
-  el('text', {x: 16, y: 20, 'font-size': 9, 'font-family': 'ui-monospace, Menlo, monospace', fill: '#8a9095', 'letter-spacing': 1.5}, 'X-TOUCH  MC / USB');
-  const names = ['Kick', 'Snare', 'HiHat', 'Bass', 'Keys', 'Lead', 'Pad', 'Vocal'];
-  const meters = [8, 6, 4, 9, 5, 6, 3, 10];
-  for (let i = 0; i < 8; i++) {
-    const x = 20 + i * 70;
-    // meter bridge
-    for (let k = 0; k < 12; k++) el('rect', {x: x + 26, y: 46 - k * 2.2, width: 8, height: 1.2, fill: k < meters[i] ? (k > 9 ? red : ink) : off});
-    // scribble strip
-    el('rect', {x, y: 52, width: 60, height: 24, rx: 2, fill: red, stroke: 'none'});
-    el('text', {x: x + 30, y: 62, 'text-anchor': 'middle', 'font-size': 8, 'font-family': 'ui-monospace, Menlo, monospace', fill: '#fff'}, names[i]);
-    el('text', {x: x + 30, y: 72, 'text-anchor': 'middle', 'font-size': 7, 'font-family': 'ui-monospace, Menlo, monospace', fill: '#fff'}, ['0.0dB', '-2.5dB', '-6.0dB', '-1.0dB', '-4.5dB', '-3.0dB', '-9.0dB', '+1.5dB'][i]);
-    knob(x + 30, 100, 11, true);
-    box(x + 8, 122, 44, 12, true, 'REC');
-    box(x + 8, 138, 44, 12, true, 'SOLO');
-    box(x + 8, 154, 44, 12, true, 'MUTE');
-    box(x + 8, 170, 44, 12, true, 'SELECT');
-    // fader
-    el('rect', {x: x + 28, y: 192, width: 4, height: 122, rx: 2, fill: '#f3f4f5', stroke: ink, 'stroke-width': 1});
-    const pos = [0.74, 0.62, 0.48, 0.70, 0.55, 0.60, 0.36, 0.80][i];
-    el('rect', {x: x + 19, y: 192 + (1 - pos) * 100, width: 22, height: 22, rx: 2, fill: '#fff', stroke: ink, 'stroke-width': 1.4});
-    el('line', {x1: x + 22, y1: 203 + (1 - pos) * 100, x2: x + 38, y2: 203 + (1 - pos) * 100, stroke: ink, 'stroke-width': 1});
-  }
-  // master section
-  const mx = 590;
-  el('line', {x1: mx - 12, y1: 30, x2: mx - 12, y2: 316, stroke: '#eceef0'});
-  // assignment (all assigned) and display
-  const assign = [['TRACK', 1], ['PAN', 1], ['EQ', 1], ['SEND', 1], ['PLUG-IN', 1], ['INST', 1]];
-  assign.forEach(([l, on], i) => box(mx + (i % 3) * 46, 36 + Math.floor(i / 3) * 16, 42, 12, on, l));
-  // timecode display (bars/beats/ticks)
-  el('rect', {x: mx + 150, y: 34, width: 120, height: 28, rx: 2, fill: '#fff', stroke: ink, 'stroke-width': 1.2});
-  el('text', {x: mx + 210, y: 53, 'text-anchor': 'middle', 'font-size': 13, 'font-family': 'ui-monospace, Menlo, monospace', fill: ink, 'letter-spacing': 2}, '004.03.480');
-  el('text', {x: mx + 150, y: 72, 'font-size': 7, 'font-family': 'ui-monospace, Menlo, monospace', fill: ink}, 'BARS  BEATS  TICKS');
-  box(mx + 290, 34, 40, 12, false, 'SMPTE');
-  box(mx + 290, 50, 40, 12, true, 'NAME/VAL');
-  // function keys
-  for (let i = 0; i < 8; i++) box(mx + i * 45, 84, 41, 12, true, 'F' + (i + 1));
-  // modify (unassigned) / automation / utility
-  [['SHIFT', 1], ['OPTION', 0], ['CONTROL', 0], ['ALT', 0]].forEach(([l, on], i) => box(mx + i * 45, 104, 41, 12, on, l));
-  [['READ', 1], ['WRITE', 1], ['TRIM', 0], ['TOUCH', 0], ['LATCH', 0], ['GROUP', 1]].forEach(([l, on], i) => box(mx + i * 45, 124, 41, 12, on, l));
-  [['SAVE', 1], ['UNDO', 1], ['CANCEL', 1], ['ENTER', 1]].forEach(([l, on], i) => box(mx + i * 45, 144, 41, 12, on, l));
-  // views / banks
-  [['MIDI', 1], ['INPUTS', 1], ['AUDIO', 1], ['AUD INST', 1], ['AUX', 1], ['BUSES', 1], ['OUTPUTS', 1], ['USER', 1]].forEach(([l, on], i) => box(mx + i * 45, 168, 41, 12, on, l));
-  [['FLIP', 1], ['GLOBAL', 1], ['BANK <', 1], ['BANK >', 1], ['CH <', 1], ['CH >', 1]].forEach(([l, on], i) => box(mx + i * 45, 188, 41, 12, on, l));
-  // transport
-  [['MARKER', 0], ['NUDGE', 0], ['CYCLE', 1], ['DROP', 0], ['REPLACE', 0], ['CLICK', 1], ['SOLO', 0]].forEach(([l, on], i) => box(mx + i * 45, 212, 41, 12, on, l));
-  [['REW', 1], ['FF', 1], ['STOP', 1], ['PLAY', 1], ['REC', 1]].forEach(([l, on], i) => box(mx + i * 56, 232, 52, 18, on, l, 3));
-  // arrows / zoom / scrub / jog
-  box(mx + 20, 262, 22, 14, true, '↑'); box(mx + 20, 296, 22, 14, true, '↓'); box(mx - 4, 279, 22, 14, true, '←'); box(mx + 44, 279, 22, 14, true, '→'); box(mx + 20, 279, 22, 14, true, 'ZOOM');
-  box(mx + 90, 262, 40, 12, false, 'SCRUB');
-  el('circle', {cx: mx + 200, cy: 288, r: 30, fill: '#fff', stroke: ink, 'stroke-width': 1.4});
-  el('circle', {cx: mx + 200, cy: 288, r: 9, fill: 'none', stroke: ink, 'stroke-width': 1});
-  el('circle', {cx: mx + 214, cy: 274, r: 2.5, fill: ink});
-  el('text', {x: mx + 200, y: 326, 'text-anchor': 'middle', 'font-size': 7.5, 'font-family': 'ui-monospace, Menlo, monospace', fill: ink}, 'JOG: BEATS  SHIFT: TICKS');
-  // master fader
-  el('rect', {x: mx + 300, y: 200, width: 4, height: 114, rx: 2, fill: '#f3f4f5', stroke: ink, 'stroke-width': 1});
-  el('rect', {x: mx + 291, y: 230, width: 22, height: 22, rx: 2, fill: '#fff', stroke: ink, 'stroke-width': 1.4});
-  el('line', {x1: mx + 294, y1: 241, x2: mx + 310, y2: 241, stroke: ink, 'stroke-width': 1});
-  el('text', {x: mx + 302, y: 326, 'text-anchor': 'middle', 'font-size': 7.5, 'font-family': 'ui-monospace, Menlo, monospace', fill: ink}, 'MASTER');
-  el('text', {x: 20, y: 326, 'font-size': 7.5, 'font-family': 'ui-monospace, Menlo, monospace', fill: ink}, 'CHANNELS 1-8: VOLUME  PAN  REC  SOLO  MUTE  SELECT  METER  NAME  COLOR');
-})();
-
 document.querySelector('#themeToggle').onclick = () => {
   const root = document.documentElement;
   const dark = root.dataset.theme === 'dark' || (!root.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches);

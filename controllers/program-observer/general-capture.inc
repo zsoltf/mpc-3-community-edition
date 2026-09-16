@@ -135,13 +135,16 @@ static unsigned global_resolve(Context *c,const CommandRequest *r,uint32_t *targ
   *target=g;*function=observer_image_bias+0x238f5d8;
  }else if(command_toggle(r->reserved)){
   uint32_t property;unsigned value;return global_toggle_target(r,target,function,&property,&value);
- }else if((r->reserved==GLOBAL_TRACK_NEW||r->reserved==GLOBAL_TRACK_TYPE||command_transport(r->reserved)||command_history(r->reserved)||r->reserved==GLOBAL_SAVE||command_page(r->reserved)||command_key(r->reserved))){
+ }else if((r->reserved==GLOBAL_TRACK_NEW||r->reserved==GLOBAL_TRACK_TYPE||command_transport(r->reserved)||command_history(r->reserved)||r->reserved==GLOBAL_SAVE||command_page(r->reserved)||command_key(r->reserved)||command_sequence_duplicate(r->reserved))){
   if(r->reserved==GLOBAL_TRACK_TYPE&&!type_open_selected(r))return C_IDENTITY;
   GeneralState *s=&mirror_state->general;uint32_t editor=atomic_load(&s->editor);
   if(atomic_load(&s->editor_root)!=root||r->global_owner!=atomic_load(&s->editor_owner)||channel_owner_id(editor)!=r->global_owner||root<0xd0||word(root-0xd0+0x904)!=editor||!typed(editor,0x695395c)||!typed(editor+0x230,0x6953b1c)||word(editor+0x37c)!=root)return C_IDENTITY;
   if(command_transport(r->reserved)){
    uint32_t holder,checked_editor;return transport_current(r,target,function,&holder,&checked_editor);
-  }else {*target=editor;*function=observer_image_bias+(command_key(r->reserved)?0xbc18ec:0x2c70f20);}
+  /* Duplicate Sequence names the application's own CopySequence Confirm, the
+   * one native entry this operation calls, so the identity re-check before and
+   * after the call covers the entry as well as the receiver. */
+  }else {*target=editor;*function=observer_image_bias+(command_key(r->reserved)?0xbc18ec:command_sequence_duplicate(r->reserved)?SEQ_DUP_CONFIRM_RVA:0x2c70f20);}
  }else{
   uint32_t controls=word(root+0x388),z=pointer(controls)&&controls<UINT32_MAX-0x80?word(controls+0x78):0;
   if(!pointer(z)||z!=atomic_load(&mirror_state->general.zoom)||channel_owner_id(z)!=r->global_owner||r->global_owner!=atomic_load(&mirror_state->general.zoom_owner))return C_IDENTITY;
@@ -149,9 +152,204 @@ static unsigned global_resolve(Context *c,const CommandRequest *r,uint32_t *targ
  }
  return 0;
 }
+/* Synthetic key presses in the shape of the application's own keyboard path.
+ *
+ * The X-Touch cursor cluster's Enter, Tab and Shift+Tab reach JUCE through the
+ * entry a real USB keyboard reaches, ComponentPeer::handleKeyPress (bc18ec).
+ * Calling only that entry was not enough on the device. MPC 3.9.1's peer
+ * keyboard handler bc1cfc does three more things around the same call, and
+ * JUCE's Tab traversal inside bc18ec runs only when the focused-component slot
+ * is set, so a press that skips them reaches nothing. Verified by disassembly
+ * of bc1cfc and its blocks bc2110..bc22b0, bc239c and bc23f4:
+ *
+ *  - Shift is a real modifier word, not a KeyPress field: a modifier keysym
+ *    going down edits ModifierKeys::currentModifiers at G+0x10 in place
+ *    (bc23fc orr #1) and the handler then tells the peer through
+ *    ComponentPeer::handleModifierKeysChange (b899b8) whenever that word
+ *    differs from the value it sampled on entry (bc2258..bc2274).
+ *  - The keysDown bitmap at 6b221a8, one bit per keysym, is set before the
+ *    delivery (bc1e24) and cleared on release (bc21cc). JUCE reads it for
+ *    KeyPress::isKeyCurrentlyDown, so a key delivered without it is a key the
+ *    application can never observe as held.
+ *  - ComponentPeer::handleKeyUpOrDown (b74600) brackets the press (bc23a4),
+ *    once with true and once with false; a release delivers that call alone.
+ *  - handleKeyPress is then handed {keyCode, currentModifiers & ~0x70,
+ *    textCharacter} by pointer (bc2288..bc22ac). That by-pointer triple is the
+ *    shape this lane already used.
+ *
+ * xkb_state_update_key is deliberately NOT called. That is the keyboard
+ * device's own xkb state for translating future scancodes, and this lane has
+ * no device and no scancode; every value the application reads back from a
+ * press is the modifier word, the bitmap and the peer callbacks above.
+ *
+ * G is the JUCE peer static table at 6b220a8: the modifier word at +0x10,
+ * Component::currentlyFocusedComponent at +0x50 and juce::Desktop's own
+ * singleton pointer at +0x44, all decoded from the application's own
+ * pc-relative literals rather than restated.
+ *
+ * The receiver is the application's own top-level peer, not the enrolled
+ * Editor's. Calling Component::getPeer (b740bc) on the Editor returned null on
+ * the device, so every injected key was refused at the identity pin and none of
+ * the sequence above ever ran: b740bc tests the heavyweight flag at
+ * component+0x68, walks parentComponent at +0xc and tail-calls
+ * ComponentPeer::getPeerFor (b74074), which returns null for a component with
+ * no desktop-attached ancestor. The MpcEditor this lane enrolls (vtable
+ * 695395c, juce::Component at offset 0 through ComponentStack) is not such a
+ * component in the running application.
+ *
+ * bc1cfc resolves its receiver instead through Desktop::getInstance (b73474),
+ * Desktop::findComponentAt (b9a904) at the cursor position and then the same
+ * b740bc. This lane takes the same objects minus the cursor: b73474 only reads
+ * [G+0x44] and constructs when it is null, so the slot is read and never
+ * constructed, and b9a904's own desktopComponents list at [desktop+0x34] with
+ * the count at [desktop+0x3c] supplies the top-level component whose peer
+ * b740bc returns. The cursor lookup is deliberately not replicated: its point
+ * comes from [G+0x2c], the lazily created cursor object that exists only while
+ * a pointer device is present (docs/mpc-app-map.md#mouse-pointer-gate), which
+ * would make the X-Touch keys depend on a plugged-in mouse.
+ *
+ * The identity pin 688e864 is unchanged and was verified against the image:
+ * juce::LinuxFbComponentPeer (typeinfo 68c8870) is the image's only
+ * juce::ComponentPeer subclass, derives from it publicly at offset 0, and
+ * 688e864 is its primary vtable (offset-to-top 0, typeinfo 68c8870), so a live
+ * peer's first word is exactly that address plus the load bias. The lane also
+ * requires [peer+4], the component getPeerFor matches on, to be the same
+ * top-level component.
+ *
+ * bc18ec targets the focused component and only falls back to [peer+4] when it
+ * is null, so this receiver is the one the application's own keyboard path
+ * would have used for the same press.
+ *
+ * Every word this borrows is put back: the bit is cleared and the modifier
+ * word is restored before the operation completes, with the application told
+ * again if the restore changed it. The whole cost is one command's worth of
+ * loads, four native calls and two stores, on the owner thread inside the
+ * existing lane. */
+#define KEY_STATICS_RVA 0x6b220a8u
+#define KEY_MODIFIERS_OFFSET 0x10u
+#define KEY_FOCUS_OFFSET 0x50u
+/* juce::Desktop's singleton pointer, the slot b73474 reads and only writes when
+ * it is null; the desktopComponents vector b9a904 walks lives inside it. */
+#define KEY_DESKTOP_OFFSET 0x44u
+#define KEY_DESKTOP_LIST 0x34u
+#define KEY_DESKTOP_COUNT 0x3cu
+/* juce::Component::flags, bit 0 hasHeavyweightPeerFlag, and the component a
+ * juce::ComponentPeer names at +4. */
+#define KEY_COMPONENT_FLAGS 0x68u
+#define KEY_COMPONENT_HEAVYWEIGHT 1u
+#define KEY_PEER_COMPONENT 0x4u
+#define KEY_PEER_VTABLE_RVA 0x688e864u
+#define KEY_DOWN_BITMAP_RVA 0x6b221a8u
+/* One bit per 16-bit keysym: the handler indexes it with keysym>>3. */
+#define KEY_DOWN_BITMAP_BYTES 0x2000u
+#define KEY_PEER_RVA 0xb740bcu
+#define KEY_PEER_LENGTH 0x170u
+/* ComponentPeer::getPeerFor, the body b740bc tail-calls; guarded with it so the
+ * whole called path is install-time verified, not only its entry. */
+#define KEY_PEER_FOR_RVA 0xb74074u
+#define KEY_PEER_FOR_LENGTH 0x48u
+#define KEY_PRESS_RVA 0xbc18ecu
+#define KEY_PRESS_LENGTH 0x378u
+#define KEY_UP_DOWN_RVA 0xb74600u
+#define KEY_UP_DOWN_LENGTH 0x24cu
+#define KEY_MODIFIERS_CHANGED_RVA 0xb899b8u
+#define KEY_MODIFIERS_CHANGED_LENGTH 0xa8u
+/* Exact 3.9.1 program headers: RX segment [0,6875d04), RW segment
+ * [6877010,6bd6078). module_ranges carries p_filesz only, so these three
+ * writable addresses, which live past the writable segment's file image, are
+ * qualified here the way wheel-capture.inc qualifies the focus slot. */
+_Static_assert(KEY_STATICS_RVA+KEY_MODIFIERS_OFFSET>=0x6877010u&&KEY_STATICS_RVA+KEY_MODIFIERS_OFFSET+4u<=0x6bd6078u,"JUCE modifier word inside the writable segment");
+_Static_assert(KEY_STATICS_RVA+KEY_FOCUS_OFFSET>=0x6877010u&&KEY_STATICS_RVA+KEY_FOCUS_OFFSET+4u<=0x6bd6078u,"focused component slot inside the writable segment");
+_Static_assert(KEY_STATICS_RVA+KEY_DESKTOP_OFFSET>=0x6877010u&&KEY_STATICS_RVA+KEY_DESKTOP_OFFSET+4u<=0x6bd6078u,"Desktop singleton slot inside the writable segment");
+_Static_assert(KEY_DOWN_BITMAP_RVA>=0x6877010u&&KEY_DOWN_BITMAP_RVA+KEY_DOWN_BITMAP_BYTES<=0x6bd6078u,"keysDown bitmap inside the writable segment");
+_Static_assert(KEY_PEER_RVA+KEY_PEER_LENGTH<=0x6875d04u,"peer lookup inside the executable segment");
+_Static_assert(KEY_PEER_FOR_RVA+KEY_PEER_FOR_LENGTH<=0x6875d04u,"peer table lookup inside the executable segment");
+_Static_assert(KEY_PRESS_RVA+KEY_PRESS_LENGTH<=0x6875d04u,"handleKeyPress inside the executable segment");
+_Static_assert(KEY_UP_DOWN_RVA+KEY_UP_DOWN_LENGTH<=0x6875d04u,"handleKeyUpOrDown inside the executable segment");
+_Static_assert(KEY_MODIFIERS_CHANGED_RVA+KEY_MODIFIERS_CHANGED_LENGTH<=0x6875d04u,"handleModifierKeysChange inside the executable segment");
 #ifdef COMMAND_COMPONENT
 static void (*component_global_dispatch)(unsigned,uint32_t,uint32_t,unsigned);
+/* The exact juce::KeyPress triple the production path builds, so the regression
+ * reads what the native injection is given rather than a restated constant. */
+static uint32_t component_global_key[3];
+/* The four native calls of the key lane, substituted one for one so the
+ * regression observes the real sequence, its arguments and the borrowed words
+ * at each call rather than a restatement of them. */
+static uint32_t (*component_key_peer)(uint32_t component);
+static void (*component_key_modifiers_changed)(uint32_t peer);
+static void (*component_key_up_down)(uint32_t peer,unsigned down);
+static unsigned (*component_key_press)(uint32_t peer,const uint32_t *key);
 #endif
+/* Two stores into the application's own writable statics, both put back before
+ * the operation completes. */
+static void global_key_store(uint32_t a,uint32_t v){*(volatile uint32_t*)(uintptr_t)a=v;}
+static unsigned char global_key_byte(uint32_t a){return *(const volatile unsigned char*)(uintptr_t)a;}
+static void global_key_byte_store(uint32_t a,unsigned char v){*(volatile unsigned char*)(uintptr_t)a=v;}
+static uint32_t global_key_peer(uint32_t component){
+#ifdef COMMAND_COMPONENT
+ return component_key_peer(component);
+#else
+ return ((uint32_t (*)(void*))(uintptr_t)(observer_image_bias+KEY_PEER_RVA))((void*)(uintptr_t)component);
+#endif
+}
+/* The application's own first desktop component, read out of the juce::Desktop
+ * the application already built. Nothing is constructed and nothing is called:
+ * a null singleton, an empty list or a component that is not on the desktop
+ * leaves the operation refused at C_IDENTITY. */
+static uint32_t global_key_desktop_component(void){
+ uint32_t desktop=word(observer_image_bias+KEY_STATICS_RVA+KEY_DESKTOP_OFFSET);
+ if(!pointer(desktop)||desktop>UINT32_MAX-0x40)return 0;
+ uint32_t list=word(desktop+KEY_DESKTOP_LIST),count=word(desktop+KEY_DESKTOP_COUNT);
+ if(!count||count>0x40||!pointer(list)||list>UINT32_MAX-4)return 0;
+ uint32_t top=word(list);
+ if(!pointer(top)||top>UINT32_MAX-0x70||!(global_key_byte(top+KEY_COMPONENT_FLAGS)&KEY_COMPONENT_HEAVYWEIGHT))return 0;
+ return top;
+}
+static void global_key_modifiers_changed(uint32_t peer){
+#ifdef COMMAND_COMPONENT
+ component_key_modifiers_changed(peer);
+#else
+ ((void (*)(void*))(uintptr_t)(observer_image_bias+KEY_MODIFIERS_CHANGED_RVA))((void*)(uintptr_t)peer);
+#endif
+}
+static void global_key_up_down(uint32_t peer,unsigned down){
+#ifdef COMMAND_COMPONENT
+ component_key_up_down(peer,down);
+#else
+ ((void (*)(void*,unsigned))(uintptr_t)(observer_image_bias+KEY_UP_DOWN_RVA))((void*)(uintptr_t)peer,down);
+#endif
+}
+static unsigned global_key_press(uint32_t peer,const uint32_t *key){
+#ifdef COMMAND_COMPONENT
+ return component_key_press(peer,key);
+#else
+ return ((unsigned (*)(void*,const uint32_t*))(uintptr_t)(observer_image_bias+KEY_PRESS_RVA))((void*)(uintptr_t)peer,key);
+#endif
+}
+/* One synthetic press on an already qualified peer. *focus records whether the
+ * application had a focused component at the moment handleKeyPress read that
+ * slot: it is the condition JUCE's Tab traversal turns on, so it is carried
+ * out to the settlement event as a device-readable diagnostic, never as an
+ * acceptance. Returns the native handleKeyPress result unchanged. */
+static unsigned global_key_native(uint32_t peer,unsigned op,const uint32_t *key,unsigned *focus){
+ CommandKeySymbol sym=command_key_symbol(op);
+ uint32_t mods_at=observer_image_bias+KEY_STATICS_RVA+KEY_MODIFIERS_OFFSET;
+ uint32_t bit_at=observer_image_bias+KEY_DOWN_BITMAP_RVA+(sym.keysym>>3);
+ unsigned char mask=(unsigned char)(1u<<(sym.keysym&7)),held=global_key_byte(bit_at);
+ uint32_t old=word(mods_at);unsigned handled;
+ /* The handler tells the peer only when the word actually changed (bc2258),
+  * so a shift already held by a real keyboard adds no call and no edit. */
+ uint32_t wanted=old|(key[1]&COMMAND_KEY_SHIFT);
+ if(wanted!=old){global_key_store(mods_at,wanted);global_key_modifiers_changed(peer);}
+ global_key_byte_store(bit_at,(unsigned char)(held|mask));
+ global_key_up_down(peer,1);
+ *focus=word(observer_image_bias+KEY_STATICS_RVA+KEY_FOCUS_OFFSET)!=0;
+ handled=global_key_press(peer,key);
+ global_key_up_down(peer,0);
+ global_key_byte_store(bit_at,held);
+ if(word(mods_at)!=old){global_key_store(mods_at,old);global_key_modifiers_changed(peer);}
+ return handled;
+}
 /* The audio callback does not inspect UI-thread working fields. The retained
  * Editor queue holder protects its native queue lifetime; atomic source
  * identities cancel a callback after project/editor retirement. */
@@ -223,20 +421,42 @@ static void global_service(Context *c,unsigned at,const CommandRequest *r){
  }
  global_call.id=r->seq;global_call.owner=target;global_call.property=accepted[at].property;global_call.generation=atomic_load(&mirror_state->general.automation_generation);
  global_call.phase=command_toggle(r->reserved)?1:0;
- unsigned handled=1;
-if(r->reserved==GLOBAL_TRACK_NEW){native_started[at]=r->seq;why=new_track_open_native(c,r,target);if(why)goto reject;}else if(r->reserved==GLOBAL_TRACK_TYPE){native_started[at]=r->seq;why=type_open_native(c,r,target);if(why)goto reject;}else {
+ unsigned handled=1,key_focus=0;
+ /* juce::KeyPress {keyCode, ModifierKeys, textCharacter}, built in both builds
+  * from the one definition in command-state.h. */
+ uint32_t key[3]={command_key_code(r->reserved),command_key_modifiers(r->reserved),command_key_symbol(r->reserved).text};
+if(r->reserved==GLOBAL_TRACK_NEW){native_started[at]=r->seq;why=new_track_open_native(c,r,target);if(why)goto reject;}else if(r->reserved==GLOBAL_TRACK_TYPE){native_started[at]=r->seq;why=type_open_native(c,r,target);if(why)goto reject;}else if(command_key(r->reserved)){
+ /* Qualify the application's own top-level peer before anything is started or
+  * borrowed, and require it to name that same component back. */
+ uint32_t top=global_key_desktop_component(),peer=top?global_key_peer(top):0;
+ if(!typed(peer,KEY_PEER_VTABLE_RVA)||word(peer+KEY_PEER_COMPONENT)!=top){why=C_IDENTITY;goto reject;}
+ native_started[at]=r->seq;
 #ifdef COMMAND_COMPONENT
- native_started[at]=r->seq;component_global_dispatch(r->reserved,target,function,accepted[at].native_bits);
+ memcpy(component_global_key,key,sizeof(key));component_global_dispatch(r->reserved,target,function,accepted[at].native_bits);
+#endif
+ handled=global_key_native(peer,r->reserved,key,&key_focus);
+}else if(command_sequence_duplicate(r->reserved)){
+ /* Resolve the whole duplicate before anything is built or submitted. Every
+  * refusal here is a clean refusal: the only application code the plan enters
+  * is FirstUnusedSequence, which reads the Project's own sequence array and
+  * writes nothing but this lane's own out word. */
+ SequenceDuplicatePlan plan;why=sequence_duplicate_plan(target,&plan);
+ if(why)goto reject;
+ /* The chosen slots, on the record before the submission, so the device can
+  * read which sequence was copied where even when the copy lands elsewhere. */
+ event(c,CE_GLOBAL_STATE,r->seq,0,plan.source,target,0,r->reserved,plan.destination,0,epoch);
+ native_started[at]=r->seq;
+#ifdef COMMAND_COMPONENT
+ memcpy(component_global_key,key,sizeof(key));component_global_dispatch(r->reserved,target,function,accepted[at].native_bits);
+#endif
+ sequence_duplicate_submit(&plan);
+}else {
+#ifdef COMMAND_COMPONENT
+ native_started[at]=r->seq;memcpy(component_global_key,key,sizeof(key));component_global_dispatch(r->reserved,target,function,accepted[at].native_bits);
 #else
  if(r->reserved==CF_AUTOMATION||command_toggle(r->reserved)){native_started[at]=r->seq;((void (*)(void*,unsigned))(uintptr_t)function)((void*)(uintptr_t)target,accepted[at].native_bits);}
  else if(r->reserved==GLOBAL_SAVE||command_page(r->reserved)||command_history(r->reserved)){native_started[at]=r->seq;unsigned id=command_page(r->reserved)?command_page_id(r->reserved):r->reserved==GLOBAL_SAVE?0x2006:r->reserved==GLOBAL_UNDO?0x2018:0x2019;handled=((unsigned (*)(void*,unsigned))(uintptr_t)function)((void*)(uintptr_t)target,id);}
- else if(command_key(r->reserved)){
-  static const uint32_t keys[]={0x0d,0x1b,0x10000051,0x10000052,0x10000053,0x10000054};
-  uint32_t key[3]={keys[r->reserved-GLOBAL_KEY_ENTER],0,0};
-  uint32_t peer=((uint32_t (*)(void*))(uintptr_t)(observer_image_bias+0xb740bc))((void*)(uintptr_t)target);
-  if(!typed(peer,0x688e864)){why=C_IDENTITY;goto reject;}
-  native_started[at]=r->seq;handled=((unsigned (*)(void*,const uint32_t*))(uintptr_t)function)((void*)(uintptr_t)peer,key);
- }else {native_started[at]=r->seq;((void (*)(void*))(uintptr_t)function)((void*)(uintptr_t)target);}
+ else {native_started[at]=r->seq;((void (*)(void*))(uintptr_t)function)((void*)(uintptr_t)target);}
 #endif
  }
  if(handled>1){why=C_SOURCE_FAILURE;goto reject;}
@@ -250,7 +470,11 @@ if(r->reserved==GLOBAL_TRACK_NEW){native_started[at]=r->seq;why=new_track_open_n
   if(why||post_target!=target||post_function!=function||post_property!=accepted[at].property||global_call.phase!=2||value!=accepted[at].native_bits){if(!why)why=C_SOURCE_CHANGED;goto reject;}
   handled=value;
  }
- event(c,CE_GLOBAL_END,r->seq,0,0,target,0,r->reserved,r->reserved==CF_AUTOMATION?global_call.mode:handled,command_toggle(r->reserved)?0:accepted[at].property,epoch);
+ /* Key operations carry one diagnostic bit beside the native result: whether
+  * the application had a focused component when the press was delivered. It
+  * is readable on the device through command-client status, and it is never
+  * part of acceptance: the native result is still the only completion. */
+ event(c,CE_GLOBAL_END,r->seq,0,0,target,0,r->reserved,r->reserved==CF_AUTOMATION?global_call.mode:command_key(r->reserved)?(handled|(key_focus<<1)):handled,command_toggle(r->reserved)?0:accepted[at].property,epoch);
  memset(&global_call,0,sizeof(global_call));atomic_store_explicit(active_request+at,0,memory_order_seq_cst);
  atomic_store(&slot->dispatched,r->seq);atomic_store(&slot->returned,r->seq);atomic_store(&slot->done,r->seq);atomic_store_explicit(&slot->processed,r->seq,memory_order_release);atomic_store(&command_state->consumed,atomic_load(&command_state->consumed)+1);return;
 reject:memset(&global_call,0,sizeof(global_call));atomic_store_explicit(active_request+at,0,memory_order_seq_cst);atomic_store(&slot->rejected,why);atomic_store_explicit(&slot->processed,r->seq,memory_order_release);atomic_store(&command_state->consumed,atomic_load(&command_state->consumed)+1);

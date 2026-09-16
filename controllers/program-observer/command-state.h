@@ -18,15 +18,19 @@
 #define COMMAND_EVENTS 128u
 #define COMMAND_DRAIN 46u
 #define COMMAND_SEQUENCE_LAST (UINT32_MAX-1u)
+/* C_NO_DESTINATION is appended, not inserted: it is the refusal the application
+ * itself shows as "All Sequences are used!", and no existing code carries it.
+ * A failed project, editor, navigator or sequence-array pin keeps the codes
+ * that already mean exactly that, C_IDENTITY and C_NATIVE_MEMBERSHIP. */
 enum {C_OK,C_FORMAT,C_EXPIRED,C_NOT_READY,C_IDENTITY,C_NOT_DRUM,C_NATIVE_MEMBERSHIP,
- C_PREPARED,C_SOURCE_CHANGED,C_BUSY,C_SOURCE_FAILURE,C_OWNER,C_REENTRY,C_TRACE_LOSS,C_TRACE_AMBIGUOUS,C_CAPACITY,C_CLOSED};
+ C_PREPARED,C_SOURCE_CHANGED,C_BUSY,C_SOURCE_FAILURE,C_OWNER,C_REENTRY,C_TRACE_LOSS,C_TRACE_AMBIGUOUS,C_CAPACITY,C_CLOSED,C_NO_DESTINATION};
 static inline const char *command_error_name(unsigned code){
- static const char *names[]={"ok","format","expired","not_ready","identity","unsupported_mixable","native_membership","prepared","source_changed","busy","source_failure","owner","reentry","trace_loss","trace_ambiguous","capacity","closed"};
+ static const char *names[]={"ok","format","expired","not_ready","identity","unsupported_mixable","native_membership","prepared","source_changed","busy","source_failure","owner","reentry","trace_loss","trace_ambiguous","capacity","closed","no_destination"};
  return code<sizeof(names)/sizeof(*names)?names[code]:"unknown";
 }
 enum {CA_NONE,CA_ENROLL_INCREMENT,CA_ENROLL_DECREMENT,CA_LANE_GUARD,CA_CONSTRUCTOR_OWNER,CA_SOURCE_REENTRY};
 static inline uint32_t command_admission_detail(unsigned guard,unsigned result,unsigned site){return (site<<16)|(guard<<8)|(result&255u);}
-enum {JOG_BAR=CF_COUNT,JOG_BEAT,JOG_PULSE,GLOBAL_SAVE,GLOBAL_ZOOM_IN,GLOBAL_ZOOM_OUT,GLOBAL_ZOOM_UP,GLOBAL_ZOOM_DOWN,GLOBAL_KEY_ENTER,GLOBAL_KEY_CANCEL,GLOBAL_KEY_LEFT,GLOBAL_KEY_UP,GLOBAL_KEY_RIGHT,GLOBAL_KEY_DOWN,GLOBAL_RECORD_TOGGLE,GLOBAL_CLICK_TOGGLE,GLOBAL_LOOP_TOGGLE,GLOBAL_PAGE_MAIN,GLOBAL_PAGE_ARRANGE,GLOBAL_PAGE_CLIP,GLOBAL_PAGE_MIX,GLOBAL_PAGE_PAD_MIX,GLOBAL_PAGE_TRACK_EDIT,GLOBAL_PAGE_SAMPLE_EDIT,GLOBAL_PAGE_STEP,EFFECT_PARAMETER,EFFECT_ENABLE,QLINK_VALUE,QLINK_MODE,IO_PARAMETER,EFFECT_CHOOSER,GLOBAL_TRACK_TYPE,GLOBAL_TRACK_NEW,GLOBAL_PLAY,GLOBAL_STOP,GLOBAL_UNDO,GLOBAL_REDO};
+enum {JOG_BAR=CF_COUNT,JOG_BEAT,JOG_PULSE,GLOBAL_SAVE,GLOBAL_ZOOM_IN,GLOBAL_ZOOM_OUT,GLOBAL_ZOOM_UP,GLOBAL_ZOOM_DOWN,GLOBAL_KEY_ENTER,GLOBAL_KEY_CANCEL,GLOBAL_KEY_LEFT,GLOBAL_KEY_UP,GLOBAL_KEY_RIGHT,GLOBAL_KEY_DOWN,GLOBAL_RECORD_TOGGLE,GLOBAL_CLICK_TOGGLE,GLOBAL_LOOP_TOGGLE,GLOBAL_PAGE_MAIN,GLOBAL_PAGE_ARRANGE,GLOBAL_PAGE_CLIP,GLOBAL_PAGE_MIX,GLOBAL_PAGE_PAD_MIX,GLOBAL_PAGE_TRACK_EDIT,GLOBAL_PAGE_SAMPLE_EDIT,GLOBAL_PAGE_STEP,EFFECT_PARAMETER,EFFECT_ENABLE,QLINK_VALUE,QLINK_MODE,IO_PARAMETER,EFFECT_CHOOSER,GLOBAL_TRACK_TYPE,GLOBAL_TRACK_NEW,GLOBAL_PLAY,GLOBAL_STOP,GLOBAL_UNDO,GLOBAL_REDO,JOG_DATA,GLOBAL_KEY_TAB,GLOBAL_KEY_BACKTAB,JOG_PRESS,GLOBAL_SEQ_DUPLICATE};
 static inline int command_chooser(unsigned op){return op==EFFECT_CHOOSER;}
 static inline int command_io(unsigned op){return op==IO_PARAMETER;}
 static inline int command_qlink_mode(unsigned op){return op==QLINK_MODE;}
@@ -35,22 +39,88 @@ static inline int command_qlink(unsigned op){return op==QLINK_VALUE;}
 static inline int command_effect(unsigned op){return op==EFFECT_PARAMETER||op==EFFECT_ENABLE;}
 static inline int command_page(unsigned op){return op>=GLOBAL_PAGE_MAIN&&op<=GLOBAL_PAGE_STEP;}
 static inline unsigned command_page_id(unsigned op){static const unsigned ids[]={0x20ea,0x20f0,0x20eb,0x20ee,0x20ed,0x20ec,0x20f4,0x20f8};return command_page(op)?ids[op-GLOBAL_PAGE_MAIN]:0;}
-static inline int command_key(unsigned op){return op>=GLOBAL_KEY_ENTER&&op<=GLOBAL_KEY_DOWN;}
+/* The six original keys keep their contiguous range; Tab and Shift+Tab are
+ * appended operations and are named explicitly. */
+static inline int command_key(unsigned op){return (op>=GLOBAL_KEY_ENTER&&op<=GLOBAL_KEY_DOWN)||op==GLOBAL_KEY_TAB||op==GLOBAL_KEY_BACKTAB;}
+/* juce::KeyPress is {int keyCode; ModifierKeys mods; juce_wchar textCharacter}.
+ * JUCE's Linux windowing derives every key code as XK_<name>&0xff, with its own
+ * extended bit 0x10000000 for the cursor keys: Return 0xff0d->0x0d, Escape
+ * 0xff1b->0x1b, Left/Up/Right/Down 0xff51..0xff54 -> 0x10000051..0x10000054,
+ * and Tab 0xff09->0x09. ModifierKeys::shiftModifier is 1, which is the only
+ * modifier any of these carry. Both fields are built here so the observer's
+ * native injection and the regression read one definition. */
+#define COMMAND_KEY_SHIFT 1u
+static inline uint32_t command_key_code(unsigned op){
+ static const uint32_t codes[]={0x0du,0x1bu,0x10000051u,0x10000052u,0x10000053u,0x10000054u};
+ if(op==GLOBAL_KEY_TAB||op==GLOBAL_KEY_BACKTAB)return 0x09u;
+ return (op>=GLOBAL_KEY_ENTER&&op<=GLOBAL_KEY_DOWN)?codes[op-GLOBAL_KEY_ENTER]:0u;
+}
+static inline uint32_t command_key_modifiers(unsigned op){return op==GLOBAL_KEY_BACKTAB?COMMAND_KEY_SHIFT:0u;}
+/* The X keysym the real keyboard path decodes for each of these keys, and the
+ * UTF-8 text character it derives from it. MPC 3.9.1's own libinput keyboard
+ * handler (bc1cfc) indexes a keysDown bitmap by the keysym and passes the text
+ * character as juce::KeyPress's third word, so a synthetic press needs both
+ * alongside the code and modifier above. Return and Escape carry their control
+ * character, Tab carries 9, and the cursor keys carry none. Shift+Tab is the X
+ * server's own ISO_Left_Tab keysym fe20, which is the keysym the app sees and
+ * the bit it sets; its code and text stay Tab's. One table, read by the
+ * observer's injection and by the regression. */
+typedef struct {uint32_t keysym,text;} CommandKeySymbol;
+static inline CommandKeySymbol command_key_symbol(unsigned op){
+ static const CommandKeySymbol keys[]={{0xff0du,0x0du},{0xff1bu,0x1bu},{0xff51u,0u},{0xff52u,0u},{0xff53u,0u},{0xff54u,0u}};
+ static const CommandKeySymbol tab={0xff09u,0x09u},backtab={0xfe20u,0x09u},none={0u,0u};
+ if(op==GLOBAL_KEY_TAB)return tab;
+ if(op==GLOBAL_KEY_BACKTAB)return backtab;
+ return (op>=GLOBAL_KEY_ENTER&&op<=GLOBAL_KEY_DOWN)?keys[op-GLOBAL_KEY_ENTER]:none;
+}
 static inline int command_toggle(unsigned op){return op>=GLOBAL_RECORD_TOGGLE&&op<=GLOBAL_LOOP_TOGGLE;}
 static inline int command_transport(unsigned op){return op==GLOBAL_PLAY||op==GLOBAL_STOP;}
 static inline int command_history(unsigned op){return op==GLOBAL_UNDO||op==GLOBAL_REDO;}
-static inline int command_global(unsigned op){return op==GLOBAL_TRACK_NEW||op==GLOBAL_TRACK_TYPE||command_transport(op)||command_history(op)||op==CF_AUTOMATION||(op>=GLOBAL_SAVE&&op<=GLOBAL_PAGE_STEP);}
+/* Duplicate Sequence: one press builds the application's own Copy Sequence
+ * command from the current sequence into the first unused slot, named the way
+ * the application names a new sequence, and submits it through the same
+ * CommandManager the pencil-menu dialog's Confirm uses, so Undo and Redo cover
+ * it. It resolves the editor exactly as the other editor-family global
+ * operations do and takes no new hook site. See sequence-duplicate.inc. */
+static inline int command_sequence_duplicate(unsigned op){return op==GLOBAL_SEQ_DUPLICATE;}
+static inline int command_global(unsigned op){return op==GLOBAL_TRACK_NEW||op==GLOBAL_TRACK_TYPE||command_transport(op)||command_history(op)||command_key(op)||command_sequence_duplicate(op)||op==CF_AUTOMATION||(op>=GLOBAL_SAVE&&op<=GLOBAL_PAGE_STEP);}
 enum {RC_ENTER=129,RC_DONE,RC_APPLY,RC_PRODUCER,RC_ENQUEUER,RC_ENQUEUE_RETURN,RC_SECOND_ENTER,RC_SECOND_RETURN,RC_SECOND_DONE,RC_CP_DEATH};
 enum {MS_CREATE=99,MS_RESULT,MS_ENTER,MS_DONE,MS_FACTORY_DEATH,MS_FACTORY_DELETE,MS_SET_ENTER,MS_SET_DONE};
 enum {PX_GET=165,PX_GET_DONE,PX_SET,PX_LISTENER,PX_NOTIFY,PX_DEATH,PX_FACADE,PX_FACADE_ALT,PX_SET_ALT,PX_REPLACE,PX_UI_VECTOR,PX_RETIRE,PX_WIDGET_CTOR,PX_WIDGET_DTOR,PX_VST_REFRESH,PX_PARAMETER_TREE,PX_UI_DRAIN,PX_INSERT_ENABLE};
 enum {JN_PLAYING=159,JN_ADVANCE,JN_OPERATION,JN_RESTART_SET,JN_RESTART_DONE,JN_RESTART_EARLY};
 enum {JG_PUBLISH=83,JG_BAR_ENTER,JG_BAR_DONE,JG_BAR_RESULT,JG_BEAT_ENTER,JG_BEAT_DONE,JG_BEAT_RESULT,JG_PULSE_ENTER,JG_PULSE_DONE,JG_PULSE_RESULT,JG_DESTROY,JG_DELETE};
 static inline int command_jog(unsigned op){return op>=JOG_BAR&&op<=JOG_PULSE;}
+/* The X-Touch jog wheel acting as the app's own data wheel. It is not a
+ * transport jog: it never reaches the AsyncSequencer facade, so it shares no
+ * predicate with command_jog and takes its own service lane. */
+static inline int command_data_wheel(unsigned op){return op==JOG_DATA;}
+/* The MPC data wheel's own push, delivered through the same focus controller as
+ * the steps: UIFocusController vtable slot 5 (35c2648), the controller-side
+ * press entry, called as (controller, int buttonId). It is not a key press: it
+ * never reaches the peer's keyboard router, so it shares no predicate with
+ * command_key and takes its own service lane. See focus-press-capture.inc. */
+static inline int command_focus_press(unsigned op){return op==JOG_PRESS;}
+/* The button id the panel data wheel's push carries. Device-measured on the
+ * owner's Live II (2026-09-15): one real wheel push reached 35c2648 with
+ * buttonId = 11 on the active controller. It is not statically recoverable, so
+ * this constant is the measurement and nothing else. Defined once, read by the
+ * observer's format check, its one call and the bridge's publication. */
+#define FOCUS_PRESS_BUTTON 11u
+/* Both focus-controller operations reach the app through the same active
+ * controller and the same one-call-per-request shape, so they share a single
+ * flight. */
+static inline int command_focus_controller(unsigned op){return command_data_wheel(op)||command_focus_press(op);}
+/* The signed data-wheel count one ProcessDataWheelRotation call may carry. The
+ * app's own accelerator scales whatever delta it is handed and truncates the
+ * result with sxtb, so a fast spin must not be passed through verbatim. Shared
+ * so the observer clamps to it and the bridge publishes at most this per
+ * request, keeping the remainder instead of dropping it. See wheel-capture.inc. */
+#define WHEEL_MAX_STEPS 4
 #define JOG_DELTA_LIMIT 4096
 /* Signed relative native units, not a desired position or Track identity. */
 static inline int command_jog_delta(uint32_t bits){int32_t n=(int32_t)bits;return n&&n>=-JOG_DELTA_LIMIT&&n<=JOG_DELTA_LIMIT;}
 enum {IO_INPUT_SET=218,IO_OUTPUT_SET,IO_FILTER_SET,IO_INPUT_DONE,IO_OUTPUT_DONE,IO_FILTER_DONE,IO_CONNECTOR_BIRTH,IO_CONNECTOR_DEATH,IO_CONNECTOR_DELETE,IO_BIND_ENTER,IO_BIND_DONE,IO_PORT_CATALOGUE,IO_INPUT_CATALOGUE_SEED,IO_OUTPUT_CATALOGUE_SEED,IO_CONNECTOR_READY};
-enum {CE_DISPATCH=1,CE_RETURN,CE_QUEUE,CE_BODY,CE_COMMIT,CE_DONE,CE_OTHER_COMMIT,CE_OWNER_BEGIN,CE_OWNER_END,CE_JOG_ENQUEUE,CE_JOG_ENTER,CE_JOG_DONE,CE_MASTER_CREATE,CE_MASTER_QUEUE,CE_MASTER_ENTER,CE_MASTER_SET,CE_MASTER_COMMIT,CE_MASTER_VALUE,CE_MASTER_DONE,CE_GLOBAL_BEGIN,CE_GLOBAL_STATE,CE_GLOBAL_END,CE_RECORD_QUEUE,CE_RECORD_ENTER,CE_RECORD_APPLY,CE_RECORD_DONE,CE_RECORD_WORK,CE_RECORD_WORK_ENTER,CE_RECORD_HANDLED,CE_RECORD_WORK_DONE,CE_RECORD_COMMIT,CE_RECORD_TIME,CE_PAD_EXECUTE,CE_MIDI_QUEUE,CE_MIDI_ENTER,CE_MIDI_SET,CE_MIDI_COMMIT,CE_MIDI_DONE,CE_JOG_OUTCOME,CE_EFFECT_EXECUTE,CE_EFFECT_VALUE,CE_QL_QUEUE,CE_QL_RESULT,CE_QL_ENTER,CE_QL_DONE,CE_QL_VALUE,CE_QL_BARRIER,CE_QM_QUEUE,CE_QM_RESULT,CE_QM_ENTER,CE_QM_DONE,CE_QM_VALUE,CE_QM_ACCEPT,CE_IO_SET,CE_IO_COMMIT,CE_IO_DONE,CE_IO_VALUE,CE_IO_QUEUE,CE_IO_RESULT,CE_IO_ENTER,CE_IO_AUDIO_DONE,CE_CHOOSER_ACCEPT};
+enum {CE_DISPATCH=1,CE_RETURN,CE_QUEUE,CE_BODY,CE_COMMIT,CE_DONE,CE_OTHER_COMMIT,CE_OWNER_BEGIN,CE_OWNER_END,CE_JOG_ENQUEUE,CE_JOG_ENTER,CE_JOG_DONE,CE_MASTER_CREATE,CE_MASTER_QUEUE,CE_MASTER_ENTER,CE_MASTER_SET,CE_MASTER_COMMIT,CE_MASTER_VALUE,CE_MASTER_DONE,CE_GLOBAL_BEGIN,CE_GLOBAL_STATE,CE_GLOBAL_END,CE_RECORD_QUEUE,CE_RECORD_ENTER,CE_RECORD_APPLY,CE_RECORD_DONE,CE_RECORD_WORK,CE_RECORD_WORK_ENTER,CE_RECORD_HANDLED,CE_RECORD_WORK_DONE,CE_RECORD_COMMIT,CE_RECORD_TIME,CE_PAD_EXECUTE,CE_MIDI_QUEUE,CE_MIDI_ENTER,CE_MIDI_SET,CE_MIDI_COMMIT,CE_MIDI_DONE,CE_JOG_OUTCOME,CE_EFFECT_EXECUTE,CE_EFFECT_VALUE,CE_QL_QUEUE,CE_QL_RESULT,CE_QL_ENTER,CE_QL_DONE,CE_QL_VALUE,CE_QL_BARRIER,CE_QM_QUEUE,CE_QM_RESULT,CE_QM_ENTER,CE_QM_DONE,CE_QM_VALUE,CE_QM_ACCEPT,CE_IO_SET,CE_IO_COMMIT,CE_IO_DONE,CE_IO_VALUE,CE_IO_QUEUE,CE_IO_RESULT,CE_IO_ENTER,CE_IO_AUDIO_DONE,CE_CHOOSER_ACCEPT,CE_WHEEL_STEP};
 typedef struct {
  uint32_t seq,pid,start_lo,start_hi,origin_sec,origin_nsec,epoch,serial,binding,incarnation,
  bits,created,expires,before_bits,before_revision,reserved; /* reserved is the version3 ChannelField operation */
@@ -208,6 +278,13 @@ static inline int command_conflict(const CommandRequest *a,const CommandRequest 
  if(command_qlink_mode(a->reserved)||command_qlink_mode(b->reserved)){if((command_qlink(a->reserved)||command_qlink_mode(a->reserved))&&(command_qlink(b->reserved)||command_qlink_mode(b->reserved)))return a->qlink_root==b->qlink_root;return 0;}
  if(command_qlink(a->reserved)&&command_qlink(b->reserved))return a->qlink_wrapper==b->qlink_wrapper&&a->qlink_index==b->qlink_index; /* Independent logical slots retain separate obligations. */
  if(command_jog(a->reserved)&&command_jog(b->reserved))return 0;
+ /* Single-flight focus controller. One COMMAND_DRAIN can service several slots,
+  * so only refusing a second published request keeps the app's accelerator
+  * seeing one counted call per accepted request instead of N calls microseconds
+  * apart. A press conflicts with another press and with a data-wheel step for
+  * the same reason: both act on the one active controller, and the app's own
+  * hardware panel never overlaps them either. */
+ if(command_focus_controller(a->reserved)||command_focus_controller(b->reserved))return command_focus_controller(a->reserved)&&command_focus_controller(b->reserved);
  if(a->reserved!=b->reserved)return 0;
  if(command_effect(a->reserved))return a->program_owner==b->program_owner&&a->effect_slot==b->effect_slot&&a->effect_index==b->effect_index;
  if(a->pad_owner||b->pad_owner)return a->pad_owner&&b->pad_owner&&a->program_owner==b->program_owner&&a->pad_index==b->pad_index;
@@ -294,7 +371,7 @@ static inline unsigned command_request_controller(const CommandRequest *r){retur
 static inline int command_recording(const CommandRequest *r){return !command_qlink(r->reserved)&&(r->pad_owner||command_float(r->reserved)||(command_io(r->reserved)&&(r->io_field==IO_AUDIO_IN||r->io_field==IO_AUDIO_OUT)));}
 static inline unsigned command_source_field(unsigned field){return field==CF_SOLO?CF_SOLO_AUDIO:field;}
 static inline int command_supported(unsigned field){return command_chooser(field)||command_io(field)||command_qlink_mode(field)||command_qlink(field)||command_effect(field)||field==CF_MIDI_VOLUME||field==CF_VOLUME||field==CF_PAN||field==CF_MUTE||field==CF_SOLO||field==CF_ARM||field==CF_SELECTION||(field>=CF_SEND1&&field<=CF_SEND4);}
-static inline int command_operation(unsigned op){return command_supported(op)||command_jog(op)||op==CF_MASTER||command_global(op);}
+static inline int command_operation(unsigned op){return command_supported(op)||command_jog(op)||command_focus_controller(op)||op==CF_MASTER||command_global(op);}
 static inline uint32_t command_native_bits(unsigned field,uint32_t bits){if(field!=CF_MUTE&&field!=CF_SOLO)return bits;float f=bits?1.0f:0.0f;uint32_t b;memcpy(&b,&f,4);return b;}
 extern CommandState *command_state;
 extern _Atomic uint32_t command_in_hook,command_violation;

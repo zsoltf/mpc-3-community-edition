@@ -10,6 +10,15 @@
 #include <sys/un.h>
 #include "mirror-motor-core.h"
 #include "mirror-fresh.h"
+/* The centre-button focus-press (Enter) and Replace Duplicate Sequence call
+ * blocking application entry points from the input drain, which can stall the
+ * bridge on items that open a modal or run a threaded rendezvous. They stay
+ * built and fully exercised by the regressions (this defaults on), but the
+ * shipped bridge is compiled with -DX_TOUCH_BLOCKING_ENABLED=0 so those two
+ * routes never publish, until they are redesigned to run asynchronously. */
+#ifndef X_TOUCH_BLOCKING_ENABLED
+#define X_TOUCH_BLOCKING_ENABLED 1
+#endif
 #include "sha256.h"
 static volatile sig_atomic_t stopping;
 #ifdef MIRROR_INPUT
@@ -127,13 +136,16 @@ static int surface_event(const snd_seq_event_t *event,snd_seq_addr_t full,unsign
  if((event->type!=SND_SEQ_EVENT_NOTEON&&event->type!=SND_SEQ_EVENT_NOTEOFF)||event->data.note.channel!=0)return 0;
  if(event->data.note.velocity>127)return -1;
  unsigned note=event->data.note.note;int down=event->type==SND_SEQ_EVENT_NOTEON&&event->data.note.velocity>0;
+ /* Footswitch 1 is Play and footswitch 2 is Record, for hands-free looping:
+  * they enter as the transport Play relay and the Record toggle themselves. */
+ if(note==102)note=94;else if(note==103)note=95;
  if(note==93||note==94){*kind=12;*channel=note;*value=down;return 1;}
  if(note==70||note==91||note==92){*kind=9;*channel=note;*value=down;return 1;}
  if(note==112){*kind=7;*channel=8;*value=down;return 1;}
  if(note>=104&&note<=111){*kind=1;*channel=note-104;*value=down;return 1;}
  if(note>=46&&note<=49){*kind=2;*channel=note-46;*value=down;return 1;}
 #ifdef MIRROR_INPUT
- if((note>=54&&note<=61)||note==95||note==86||note==89||note==52||note==74||note==75||note==79||note==80||note==81||note==82||note==83||(note>=96&&note<=100)){*kind=11;*channel=note;*value=down;return 1;}
+ if((note>=54&&note<=61)||note==95||note==86||note==89||note==52||note==74||note==75||note==79||note==80||note==81||note==82||note==83||note==85||(note>=96&&note<=101)){*kind=11;*channel=note;*value=down;return 1;}
  if(note==40||note==41||note==42||note==43||note==44||note==45||note==50||note==51||(note>=62&&note<=69)){*kind=6;*channel=note;*value=down;return 1;}
  if(note<40){*kind=5;*channel=note;*value=down;return 1;}
 #endif
@@ -147,8 +159,8 @@ typedef struct {snd_seq_t *seq;snd_seq_addr_t full,ingress;int sink,source;unsig
 #ifdef MIRROR_INPUT
  snd_seq_addr_t stop_adapter,stop_mpc;int stop_sink;
  ChannelWire wire[8];unsigned char colors[8];unsigned wire_valid[8],colors_valid,next_wire,mode_valid,mode_led[128],playing_valid,playing_value,master_owner,master_incarnation,master_touch,master_tick;int master_sent;unsigned char position_text[10];unsigned position_valid,chooser_cleared;
- unsigned state_valid[7];
- unsigned meter_enabled[8],meter_identity[8],meter_valid,meter_tick,zoom_mode,name_value,display_until[8];
+ unsigned state_valid[8];
+ unsigned meter_enabled[8],meter_identity[8],meter_valid,meter_tick,zoom_mode,data_wheel,name_value,display_until[8];
 #endif
 } Surface;
 static void motor_event(snd_seq_event_t*,const Surface*,unsigned,int);
@@ -223,9 +235,13 @@ static void surface_assignment(Surface *s,MirrorInput *in,MirrorBank *bank,const
  for(unsigned j=0;j<8;j++)s->display_field[j]=bank->assignment==BA_TRACK?CF_VOLUME:bank_parameter(bank,j);
  BRIDGE_LOG("MODE view=%u assignment=%u flip=%u; unsent work canceled\n",bank->view,bank->assignment,bank->flip);
 }
-static void surface_jog(MirrorInput *in,const CopiedMirror *snapshot,unsigned kind,unsigned key,int value,uint32_t now){
+/* In data-wheel mode every detent is one data-wheel step and Shift is ignored
+ * for the wheel: the app's coarse flag comes from its own action object and no
+ * modifier on this firmware is known to feed it. Shift keeps its other roles,
+ * and the Rewind/Forward buttons (kind 9) are unchanged in both modes. */
+static void surface_jog(MirrorInput *in,const CopiedMirror *snapshot,unsigned kind,unsigned key,int value,uint32_t now,unsigned data_wheel){
  if(in->jog_epoch!=snapshot->epoch){input_jog_discard(in);in->jog_epoch=snapshot->epoch;}
- if(kind==8)input_jog_add(in,snapshot,in->jog_shift?JOG_PULSE:JOG_BEAT,value,now);
+ if(kind==8){if(data_wheel)input_wheel_add(in,snapshot,value);else input_jog_add(in,snapshot,in->jog_shift?JOG_PULSE:JOG_BEAT,value,now);}
  else{if(key==70)in->jog_shift=value;else if(key==91)in->jog_rewind=value;else in->jog_forward=value;if(!value){in->jog_repeat_tick=now;if(key==91||key==92)input_jog_release(in,key==92?1:2);}}
 }
 static void surface_navigation(MirrorInput *in,MirrorBank *bank,const CopiedMirror *snapshot,unsigned button,uint32_t now){
@@ -241,8 +257,28 @@ static void surface_navigation(MirrorInput *in,MirrorBank *bank,const CopiedMirr
 static void surface_general(Surface *surface,MirrorInput *in,const CopiedMirror *snapshot,unsigned note,uint32_t now){
  if(note>=54&&note<=61){input_global_add(in,snapshot,GLOBAL_PAGE_MAIN+note-54,0,now);requested_page=note-54;page_notice_until=now+2000;memset(surface->wire_valid,0,sizeof(surface->wire_valid));return;}
  if(note==52){surface->name_value=!surface->name_value;memset(surface->wire_valid,0,sizeof(surface->wire_valid));return;}
+ /* In data-wheel mode the cursor cluster works the focused control with the
+  * wheel instead of moving the playhead view: up/down ride the same
+  * single-flight data-wheel lane one step at a time, left/right move focus with
+  * Shift+Tab and Tab, and the centre button is the data wheel's own push, which
+  * is what Enter means for a focused item on this firmware. An injected
+  * keyboard Return does not reach that path, so the centre button rides the
+  * focus-controller lane beside the steps instead of the key lane. Zoom keeps
+  * note 100 in scrub mode, so the two modes never both own a button. */
+ if(surface->data_wheel&&note>=96&&note<=100){
+  if(note==96||note==97){input_wheel_add(in,snapshot,note==96?-1:1);return;}
+  if(note==100){if(X_TOUCH_BLOCKING_ENABLED)input_press_add(in,snapshot);return;}
+  input_global_add(in,snapshot,note==98?GLOBAL_KEY_BACKTAB:GLOBAL_KEY_TAB,0,now);return;
+ }
  if(note==100){surface->zoom_mode=!surface->zoom_mode;return;}
- unsigned op=note==95?GLOBAL_RECORD_TOGGLE:note==89?GLOBAL_CLICK_TOGGLE:note==86?GLOBAL_LOOP_TOGGLE:note==74||note==75||note==79?CF_AUTOMATION:note==80?GLOBAL_SAVE:note==81?(in->jog_shift?GLOBAL_REDO:GLOBAL_UNDO):note==82?GLOBAL_KEY_CANCEL:note==83?GLOBAL_KEY_ENTER:0;
+ /* Scrub: the jog wheel becomes the MPC data wheel. Session state only; a
+  * reconnect clears it with the rest of the Surface. */
+ if(note==101){surface->data_wheel=!surface->data_wheel;return;}
+ /* Replace (note 85) was unassigned. It is Duplicate Sequence: one press copies
+  * the current sequence into the first unused slot under the application's own
+  * default name, as one undoable Copy Sequence command. Shift is not consumed
+  * here, so the button keeps one meaning in both modes. */
+ unsigned op=note==95?GLOBAL_RECORD_TOGGLE:note==89?GLOBAL_CLICK_TOGGLE:note==86?GLOBAL_LOOP_TOGGLE:note==74||note==75||note==79?CF_AUTOMATION:note==80?GLOBAL_SAVE:note==81?(in->jog_shift?GLOBAL_REDO:GLOBAL_UNDO):note==82?GLOBAL_KEY_CANCEL:note==83?GLOBAL_KEY_ENTER:(note==85&&X_TOUCH_BLOCKING_ENABLED)?GLOBAL_SEQ_DUPLICATE:0;
  if(note>=96&&note<=99){
   static const unsigned ordinary[]={GLOBAL_KEY_UP,GLOBAL_KEY_DOWN,GLOBAL_KEY_LEFT,GLOBAL_KEY_RIGHT};
   static const unsigned zoom[]={GLOBAL_ZOOM_UP,GLOBAL_ZOOM_DOWN,GLOBAL_ZOOM_OUT,GLOBAL_ZOOM_IN};
@@ -355,7 +391,7 @@ static int surface_drain(Surface *s,MirrorBank *bank,const MirrorState *state,in
    else if(kind==7){s->master_touch=value;input_master_touch(&input,&snapshot,value);}
    else if(kind==10){input_master_pitch(&input,&snapshot,value,now);motor_follow_report(&following.motors[8],value,now,input.master.pending);}
    else if(kind==12)input_stop_button(&input,&snapshot,channel,value,now);
-   else if(kind==8||kind==9)surface_jog(&input,&snapshot,kind,channel,value,now);
+   else if(kind==8||kind==9)surface_jog(&input,&snapshot,kind,channel,value,now,s->data_wheel);
    else if(kind==11)surface_general_press(s,&input,&snapshot,channel,value,now);
    else if(kind==3){if(!surface_pitch(s,&input,bank,&snapshot,channel,value,now))return 0;}
    else if(kind==4)surface_encoder(s,&input,bank,&snapshot,channel,value,0,now);
@@ -552,8 +588,8 @@ static int channel_output(Surface *s,const MirrorBank *bank,const CopiedMirror *
   if(snapshot->record_mode.bits==3)record=1;
   else if(snapshot->record_mode.bits==1&&snapshot->playing.available)record=snapshot->playing.bits?127:1;
  }
- unsigned state_notes[7]={74,75,79,86,95,89,100},state_values[7]={snapshot->automation.available&&snapshot->automation.bits==1?auto_led:0,snapshot->automation.available&&snapshot->automation.bits==2?auto_led:0,snapshot->automation.available&&snapshot->automation.bits==0?auto_led:0,snapshot->loop.available&&snapshot->loop.bits?127:0,record,snapshot->click.available&&snapshot->click.bits?127:0,s->zoom_mode?127:0};
- for(unsigned i=0;i<7;i++)if(!s->mode_valid||s->mode_led[state_notes[i]]!=state_values[i]||!s->state_valid[i]){snd_seq_ev_clear(&global);snd_seq_ev_set_noteon(&global,0,state_notes[i],state_values[i]);if(!channel_send(s,&global))return 0;s->mode_led[state_notes[i]]=state_values[i];s->state_valid[i]=1;}
+ unsigned state_notes[8]={74,75,79,86,95,89,100,101},state_values[8]={snapshot->automation.available&&snapshot->automation.bits==1?auto_led:0,snapshot->automation.available&&snapshot->automation.bits==2?auto_led:0,snapshot->automation.available&&snapshot->automation.bits==0?auto_led:0,snapshot->loop.available&&snapshot->loop.bits?127:0,record,snapshot->click.available&&snapshot->click.bits?127:0,s->zoom_mode&&!s->data_wheel?127:0,s->data_wheel?0:127};
+ for(unsigned i=0;i<8;i++)if(!s->mode_valid||s->mode_led[state_notes[i]]!=state_values[i]||!s->state_valid[i]){snd_seq_ev_clear(&global);snd_seq_ev_set_noteon(&global,0,state_notes[i],state_values[i]);if(!channel_send(s,&global))return 0;s->mode_led[state_notes[i]]=state_values[i];s->state_valid[i]=1;}
  /* Master input/feedback belongs to the distinct rooted MpcMixer owner.
   * Pending native source settlement inhibits only its motor. */
  const CopiedField *master=&snapshot->master;

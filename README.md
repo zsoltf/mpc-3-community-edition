@@ -7,9 +7,12 @@ distributed here.
 
 ## Features
 
-- **Mackie Control (MCU) integration.** Drives the mixer, sends, drum pad mix,
-  inserts, Q-Links and transport. Motor faders, track names, colors and meters
-  follow the MPC's own state.
+- **Mackie Control (MCU) integration.** Currently for the full-size Behringer
+  X-Touch only. Drives the mixer, sends, drum pad mix, inserts, Q-Links and
+  transport. Motor faders, track names, colors and meters follow the MPC's
+  own state. The jog wheel doubles as the MPC data wheel (the Scrub button
+  toggles it), the cursor cluster does data steps and Tab/Shift+Tab focus
+  navigation, and the footswitches are Play and Record.
 - **USB mouse support.** A cursor after boot or on hot-plug, clicking,
   drag-to-select, and the scroll wheel acting as the data wheel for the
   focused control. Right-click and long-tap gestures are not implemented yet.
@@ -28,8 +31,9 @@ distributed here.
 
 - **MPC:** MPC Live II (tested) or another Gen1 model on firmware 3.9.1
   (untested). Gen2 models and Force are not supported.
-- **Controller:** Behringer X-Touch (full size) in MC/USB mode. Other MCU
-  controllers and HUI are not supported.
+- **Controller:** Behringer X-Touch (full size) in MC mode over USB. X-Touch
+  Compact, One and Extender, other MCU controllers and HUI are not supported
+  yet.
 - **File:** the official `MPC-3.9.1-Gen1-update.img` from Akai.
 
 ## Install
@@ -45,15 +49,17 @@ distributed here.
    on its own; no Global MIDI Learn mapping is needed.
 
 The first boot installs the runtime under `/data`. Upgrading from an earlier
-r2, r3 or r4 image keeps your settings and projects. Reinstalling official
-firmware restores the stock system files.
+image keeps your settings and projects. Reinstalling official firmware restores
+the stock system files.
 
 ## Status
 
-Release v0.1.0-rc.3, a release candidate. Tested on one MPC Live II with one
+Release v0.2.0, an experimental pre-release. Tested on one MPC Live II with one
 X-Touch and one mouse; long sessions and other hardware are not covered. Known
-limit: a fast wheel spin on some sliders overshoots. Details are in the
-[release notes](docs/releases/v0.1.0-rc.3.md).
+limit: a fast wheel spin on some sliders overshoots. The centre-button Enter and
+one-press Duplicate Sequence are built but disabled in this build pending an
+asynchronous redesign. Details are in the
+[release notes](docs/releases/v0.2.0.md).
 
 **Back up your projects and keep the official firmware available** before
 trying this.

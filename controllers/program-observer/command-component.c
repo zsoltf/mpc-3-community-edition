@@ -337,6 +337,12 @@ static const unsigned char *guarded_bytes(uint32_t address,unsigned length){
   if(guards[g].address<=address&&address+length<=guards[g].address+guards[g].length)return guards[g].bytes+address-guards[g].address;
  return NULL;
 }
+/* An `ldr rN,[pc,#..]` literal completed by its `add rN,pc,rN`: the address the
+ * application itself forms, decoded out of the image rather than restated. */
+static uint32_t key_image_word(const unsigned char *body,uint32_t base,uint32_t literal,uint32_t add,uint32_t offset){
+ uint32_t value;memcpy(&value,body+(literal-base),4);
+ return add+8+value+offset;
+}
 static void pointer_device_checks(void){
  unsigned site=0;while(site<PATCH_COUNT&&anchor[site]!=0xba6884)site++;
  require(site<PATCH_COUNT&&hook_ids[site]==M_POINTER_DEVICE,"peer pointer-device join is an installed site with its own hook id");
@@ -402,7 +408,7 @@ static void pointer_device_checks(void){
  * fixture. The native dispatch bodies are NOT executed here. */
 static uint32_t wheel_functions[8],wheel_receivers[8],wheel_coarse[8];
 static int wheel_deltas[8];
-static uint32_t wheel_focus_receiver;
+static uint32_t wheel_focus_receiver,wheel_focus_focused;
 static unsigned wheel_calls;
 static void wheel_call_fixture(uint32_t function,uint32_t receiver,int delta,unsigned coarse){
  if(wheel_calls<8){wheel_functions[wheel_calls]=function;wheel_receivers[wheel_calls]=receiver;wheel_deltas[wheel_calls]=delta;wheel_coarse[wheel_calls]=coarse;}
@@ -420,6 +426,30 @@ static uint32_t wheel_branch(uint32_t pc,uint32_t instruction){
  * wrong, so nothing here accepts a repeated call. */
 static unsigned wheel_one(int delta){
  return wheel_calls==1&&wheel_functions[0]==0x35c28f4u&&wheel_receivers[0]==wheel_focus_receiver&&wheel_deltas[0]==delta&&wheel_coarse[0]==0;
+}
+/* Publish one JOG_DATA request, let the app's own UI drain service it, then
+ * seal, settle and reclaim it so the mailbox is idle for the next case. Returns
+ * the step the observer says it actually delivered. */
+static int wheel_command_case(int delta){
+ CommandRequest r={.pid=command_state->pid,.start_lo=command_state->start_lo,.start_hi=command_state->start_hi,.origin_sec=command_state->origin_sec,.origin_nsec=command_state->origin_nsec,.epoch=epoch,.bits=(uint32_t)delta,.expires=120000,.reserved=JOG_DATA};
+ wheel_calls=0;unsigned at=submit_fixture(r),seq=atomic_load(&command_state->published);
+ CommandSlot *slot=command_state->slots+at;
+ require(!atomic_load(&slot->rejected)&&atomic_load(&slot->done)==seq&&atomic_load(&slot->returned)==seq&&!atomic_load(&command_state->trace_error),"an accepted data-wheel request completes synchronously in the UI drain");
+ int delivered=0;unsigned parts[3]={0,0,0};
+ for(unsigned lane=0;lane<COMMAND_LANES;lane++)for(unsigned j=0;j<atomic_load(&slot->lanes[lane].published);j++){
+  CommandEvent e;require(command_event_read(slot->lanes+lane,seq,j,&e),"data-wheel immutable source event");
+  require(e.reserved==JOG_DATA&&e.controller==JOG_DATA&&!e.arg_kind&&!e.program&&!e.property&&!e.incarnation&&!e.capture&&!e.counter,"data-wheel evidence names no Track, Program, Property or native queue");
+  /* The exact tuple the bridge's input_events and input_wheel_proof demand. */
+  require(e.request==seq&&e.revision==epoch&&e.token==command_state->owner_token&&(e.kind==CE_WHEEL_STEP||e.bits==r.bits),"data-wheel evidence carries the flight, the submission epoch, the UI owner token and the published count");
+  if(e.kind==CE_DISPATCH)parts[0]++;
+  else if(e.kind==CE_WHEEL_STEP){parts[1]++;delivered=(int32_t)e.bits;}
+  else if(e.kind==CE_RETURN)parts[2]++;
+  else require(0,"a data-wheel flight publishes no jog, queue or commit receipt");
+ }
+ require(parts[0]==1&&parts[1]==1&&parts[2]==1,"exactly one dispatch, one delivered step and one return per accepted request");
+ command_retire();require(atomic_load(&slot->sealed)==seq&&command_publish_settlement(command_state,seq),"data-wheel request seals after its synchronous return");
+ command_retire();require(command_idle(command_state),"settled data-wheel request reclaims on the same protocol");
+ return delivered;
 }
 static void wheel_data_checks(void){
  unsigned site=0;while(site<PATCH_COUNT&&anchor[site]!=0xbd20e0)site++;
@@ -589,10 +619,211 @@ static void wheel_data_checks(void){
  require(command_state->magic==COMMAND_MAGIC&&command_state->version==COMMAND_VERSION&&mirror_state->magic==MIRROR_MAGIC&&mirror_state->version==MIRROR_VERSION,"CMD31 and MMV17 unchanged");
  require(!atomic_load(&command_violation)&&!atomic_load(&command_state->error)&&!atomic_load(&mirror_state->error)&&atomic_load(&observer_running),"product hook enrolls no lane and publishes no diagnostic failure");
  require(!command_state->published&&!command_state->reclaimed,"no record published and no lane enrolled");
- component_wheel_call=NULL;wheel_remainder=0.0f;wheel_pending=0;
 #undef WHEEL_EVENT
 #undef WHEEL_DRAIN
+ /* Second consumer of the same clamp and the same single call: the X-Touch
+  * data-wheel command lane. Here the step arrives as a published JOG_DATA
+  * request serviced inside MPC's own UI drain, not from a libinput drain. */
+ wheel_focus_focused=word(wheel_focus_receiver+WHEEL_FOCUSED_OFFSET);
+ require(pointer(wheel_focus_focused),"data-wheel fixture keeps a focused component");
+ MirrorState *saved_mirror=fixture;CommandState *saved_commands=command_state;
+ fixture=calloc(1,sizeof(*fixture));command_state=calloc(1,sizeof(*command_state));require(fixture&&command_state,"data-wheel lane fixture storage");
+ memset(command_state,0,sizeof(*command_state));initial(1);command_initialize();observer_running=1;observer_image_bias=0;atomic_store(&command_state->alive,1);
+ command_state->magic=COMMAND_MAGIC;command_state->version=COMMAND_VERSION;command_state->bytes=sizeof(*command_state);command_state->capacity=COMMAND_SLOTS;
+ component_wheel_call=wheel_call_fixture;wheel_calls=0;wheel_remainder=0.0f;wheel_pending=0;
+ put(0x6b6f798,wheel_focus_receiver);put(wheel_focus_receiver,wheel_focus_vtables[2]);
+ put(wheel_focus_receiver+WHEEL_FOCUSED_OFFSET,wheel_focus_focused);put(wheel_focus_focused+WHEEL_FLAGS_OFFSET,WHEEL_VISIBLE_FLAG);
+ seed_fixture(0,0,0x3f000000,1);load_fixture();
+ require(wheel_command_case(2)==2&&wheel_one(2),"a published data-wheel request is exactly one call carrying its own count");
+ require(wheel_command_case(-1)==-1&&wheel_one(-1),"a negative published count turns the app's data wheel down once");
+ require(wheel_command_case(9)==WHEEL_MAX_STEPS&&wheel_one(WHEEL_MAX_STEPS),"a published count past the bound is clamped to the same four steps the mouse flush uses");
+ require(wheel_command_case(-9)==-WHEEL_MAX_STEPS&&wheel_one(-WHEEL_MAX_STEPS),"and clamped symmetrically downwards");
+ /* Suppression is a completed request with a zero step, never a rejection: the
+  * hardware panel path drops these steps silently too. */
+ put(wheel_focus_receiver+WHEEL_FOCUSED_OFFSET,0);
+ require(!wheel_command_case(2)&&!wheel_calls,"nothing focused completes the request with a zero step and no call");
+ put(wheel_focus_receiver+WHEEL_FOCUSED_OFFSET,wheel_focus_focused);
+ put(wheel_focus_focused+WHEEL_FLAGS_OFFSET,WHEEL_VISIBLE_FLAG^0xffffffffu);
+ require(!wheel_command_case(2)&&!wheel_calls,"a focused component without the app's own visible flag completes with a zero step");
+ put(wheel_focus_focused+WHEEL_FLAGS_OFFSET,WHEEL_VISIBLE_FLAG);
+ put(wheel_focus_receiver,wheel_focus_vtables[3]+4);
+ require(!wheel_command_case(2)&&!wheel_calls,"a receiver whose vptr is none of the four focus controllers completes with a zero step");
+ put(wheel_focus_receiver,wheel_focus_vtables[2]);
+ put(0x6b6f798,0);
+ require(!wheel_command_case(2)&&!wheel_calls,"no active focus controller completes with a zero step");
+ put(0x6b6f798,wheel_focus_receiver);
+ require(wheel_command_case(1)==1,"recovery: the next request after four suppressed ones still turns the wheel once");
+ /* Single flight. service_one can service several slots inside one drain, so
+  * only refusing the second publication keeps the app's accelerator seeing one
+  * counted call per accepted request. */
+ CommandRequest live={.pid=command_state->pid,.start_lo=command_state->start_lo,.start_hi=command_state->start_hi,.origin_sec=command_state->origin_sec,.origin_nsec=command_state->origin_nsec,.epoch=epoch,.bits=1,.expires=120000,.reserved=JOG_DATA};
+ live.seq=atomic_load(&command_state->published)+1;
+ unsigned first_slot=command_free(command_state);
+ require(first_slot<COMMAND_SLOTS&&command_publish_request_at(command_state,&live,first_slot),"first data-wheel request publishes");
+ CommandRequest second=live;second.seq=live.seq+1;second.bits=(uint32_t)-1;
+ unsigned second_slot=command_free(command_state);
+ require(second_slot<COMMAND_SLOTS&&second_slot!=first_slot&&!command_publish_request_at(command_state,&second,second_slot),"command_conflict refuses a second data-wheel request while one is alive");
+ wheel_calls=0;Context wheel_drain=context();wheel_drain.r[0]=ptr(queue_object)+4;call(&wheel_drain,COMMAND_DRAIN);
+ require(wheel_one(1)&&atomic_load(&command_state->slots[first_slot].done)==live.seq,"the one live request is serviced normally");
+ command_retire();require(command_publish_settlement(command_state,live.seq),"single-flight request settles");command_retire();
+ require(command_idle(command_state)&&command_publish_request_at(command_state,&second,command_free(command_state)),"the next data-wheel request publishes only after the previous one is reclaimed");
+ wheel_calls=0;call(&wheel_drain,COMMAND_DRAIN);require(wheel_one(-1),"and is then delivered as its own single call");
+ command_retire();require(command_publish_settlement(command_state,second.seq),"second request settles");command_retire();
+ /* A request carrying another family's field is a format refusal, not a call. */
+ CommandRequest foreign=live;foreign.seq=atomic_load(&command_state->published)+1;foreign.bits=1;foreign.track_owner=7;
+ wheel_calls=0;unsigned bad_at=submit_fixture(foreign);
+ require(!wheel_calls&&atomic_load(&command_state->slots[bad_at].rejected)==C_FORMAT&&atomic_load(&command_state->slots[bad_at].done)!=atomic_load(&command_state->slots[bad_at].published),"a data-wheel request naming any other target is refused without a call");
+ command_retire();
+ require(command_state->magic==COMMAND_MAGIC&&command_state->version==COMMAND_VERSION&&mirror_state->magic==MIRROR_MAGIC&&mirror_state->version==MIRROR_VERSION,"CMD31 and MMV17 unchanged by the data-wheel lane");
+ require(!atomic_load(&command_violation)&&!atomic_load(&command_state->error)&&!atomic_load(&command_state->trace_error),"data-wheel lane publishes no diagnostic failure");
+ observer_running=0;put(ptr(root_object)+0x2e4,0);free(fixture);free(command_state);fixture=saved_mirror;mirror_state=saved_mirror;command_state=saved_commands;
+ require(!atomic_load(&command_state->published)&&!atomic_load(&command_state->reclaimed),"the data-wheel lane fixture leaves the shared mailbox untouched");
+ component_wheel_call=NULL;wheel_remainder=0.0f;wheel_pending=0;
  puts("PASS wheel recipe matches the exact image, and the observer banks the peer's own vertical delta per event, zeroes the JUCE wheel it passes on, and delivers one clamped signed data-wheel count per drain to the app's active focus controller on the owning thread only (native ProcessDataWheelRotation substituted)");
+ puts("PASS X-Touch data-wheel command lane: one published JOG_DATA request is one clamped signed ProcessDataWheelRotation call with its own dispatch/step/return evidence, suppression completes with a zero step, a foreign target is refused, and command_conflict keeps exactly one request in flight (native rotation entry substituted)");
+}
+/* The MPC data wheel's push as a command lane. The press entry this lane calls,
+ * and the app's own performer that proves its receiver, its vtable slot and its
+ * int argument, are checked against the exact image bytes the installer
+ * verifies; the observer's own decision is then exercised with the app's
+ * active-controller slot as a fixture. No native body runs here, and no hook
+ * site is installed at the press entry: it is called, exactly as the rotation
+ * entry is. */
+static uint32_t press_functions[8],press_receivers[8];
+static int press_buttons[8];
+static unsigned press_calls;
+static void press_call_fixture(uint32_t function,uint32_t receiver,int button){
+ if(press_calls<8){press_functions[press_calls]=function;press_receivers[press_calls]=receiver;press_buttons[press_calls]=button;}
+ press_calls++;
+}
+static uint32_t press_receiver;
+/* Exactly one call, to the press entry, on the fixture's receiver, carrying the
+ * device-measured id. Nothing here accepts a repeated call: the app's own panel
+ * makes one per push. */
+static unsigned press_one(void){
+ return press_calls==1&&press_functions[0]==PRESS_ENTRY_RVA&&press_receivers[0]==press_receiver&&press_buttons[0]==(int)FOCUS_PRESS_BUTTON;
+}
+/* Publish one JOG_PRESS request, let the app's own UI drain service it, then
+ * seal, settle and reclaim it so the mailbox is idle for the next case. Returns
+ * the delivered flag the observer filed, 0 for a suppressed press. */
+static unsigned press_command_case(void){
+ CommandRequest r={.pid=command_state->pid,.start_lo=command_state->start_lo,.start_hi=command_state->start_hi,.origin_sec=command_state->origin_sec,.origin_nsec=command_state->origin_nsec,.epoch=epoch,.bits=FOCUS_PRESS_BUTTON,.expires=120000,.reserved=JOG_PRESS};
+ press_calls=0;unsigned at=submit_fixture(r),seq=atomic_load(&command_state->published);
+ CommandSlot *slot=command_state->slots+at;
+ require(!atomic_load(&slot->rejected)&&atomic_load(&slot->done)==seq&&atomic_load(&slot->returned)==seq&&!atomic_load(&command_state->trace_error),"an accepted press request completes synchronously in the UI drain");
+ unsigned delivered=0,parts[3]={0,0,0};
+ for(unsigned lane=0;lane<COMMAND_LANES;lane++)for(unsigned j=0;j<atomic_load(&slot->lanes[lane].published);j++){
+  CommandEvent e;require(command_event_read(slot->lanes+lane,seq,j,&e),"press immutable source event");
+  require(e.reserved==JOG_PRESS&&e.controller==JOG_PRESS&&!e.arg_kind&&!e.program&&!e.property&&!e.incarnation&&!e.capture&&!e.counter,"press evidence names no Track, Program, Property or native queue");
+  /* The exact tuple the bridge's input_events and input_press_proof demand. */
+  require(e.request==seq&&e.revision==epoch&&e.token==command_state->owner_token&&(e.kind==CE_WHEEL_STEP||e.bits==r.bits),"press evidence carries the flight, the submission epoch, the UI owner token and the published button id");
+  if(e.kind==CE_DISPATCH)parts[0]++;
+  else if(e.kind==CE_WHEEL_STEP){parts[1]++;require(e.bits<=1u,"the press receipt is a boolean call flag");delivered=e.bits;}
+  else if(e.kind==CE_RETURN)parts[2]++;
+  else require(0,"a press flight publishes no jog, queue or commit receipt");
+ }
+ require(parts[0]==1&&parts[1]==1&&parts[2]==1,"exactly one dispatch, one call receipt and one return per accepted request");
+ command_retire();require(atomic_load(&slot->sealed)==seq&&command_publish_settlement(command_state,seq),"press request seals after its synchronous return");
+ command_retire();require(command_idle(command_state),"settled press request reclaims on the same protocol");
+ return delivered;
+}
+static void focus_press_checks(void){
+ /* No new hook site: the press entry is called, never patched. */
+ for(unsigned i=0;i<PATCH_COUNT;i++)require(anchor[i]!=PRESS_ENTRY_RVA,"the controller press entry hosts no patch site");
+ const unsigned char *body=guarded_bytes(PRESS_ENTRY_RVA,PRESS_ENTRY_LENGTH),*performer=guarded_bytes(0x331e6f4,0x490),*accessor=guarded_bytes(0x2b64174,0x10);
+ require(body&&performer&&accessor,"press entry, its global-action performer group and the focus accessor guarded as whole native ranges");
+ const uint32_t focused_load=0xe59000e4,keep_id=0xe1a05001,hwfocusable_slot=0xe592201c,restore_id=0xe1a01005,press_tail=0xe12fff12;
+ require(!memcmp(body,&focused_load,4)&&(focused_load&0xfff)==WHEEL_FOCUSED_OFFSET,"slot 5 still starts from the controller's own focused component at the offset the data-wheel entry uses");
+ require(!memcmp(body+(0x35c2670-PRESS_ENTRY_RVA),&keep_id,4),"it still keeps its int argument across the dynamic cast");
+ require(!memcmp(body+(0x35c26a0-PRESS_ENTRY_RVA),&hwfocusable_slot,4),"it still resolves HWFocusable slot 7 at vtable+0x1c on that component");
+ require(!memcmp(body+(0x35c26c0-PRESS_ENTRY_RVA),&restore_id,4)&&!memcmp(body+(0x35c26d4-PRESS_ENTRY_RVA),&press_tail,4),"and still tail-calls that slot with the same int this lane supplies");
+ uint32_t accessor_call;memcpy(&accessor_call,performer+(0x331e8fc-0x331e6f4),4);
+ require(wheel_branch(0x331e8fc,accessor_call)==0x2b64174,"the app's own wheel-push performer still takes its receiver from the active-focus-controller accessor this lane reads");
+ const uint32_t receiver_vtable=0xe5953000,button_load=0xe5941008,receiver_argument=0xe1a00005,slot_five=0xe5933014,virtual_call=0xe12fff33;
+ require(!memcmp(performer+(0x331e944-0x331e6f4),&receiver_vtable,4),"it still reads that receiver's own vptr");
+ require(!memcmp(performer+(0x331e948-0x331e6f4),&button_load,4),"the id it passes is still its action object's own field at +8, which is the field the device reading came from");
+ require(!memcmp(performer+(0x331e94c-0x331e6f4),&receiver_argument,4)&&!memcmp(performer+(0x331e950-0x331e6f4),&slot_five,4)&&!memcmp(performer+(0x331e954-0x331e6f4),&virtual_call,4),"and it still reaches the press entry as vtable slot 5 at +0x14 with that receiver in r0 and that id in r1");
+ /* The four legal vptrs carrying slot 5 at +0x14 are pinned where they live, in
+  * the RW image, by model-prepare.py at recipe time: their runtime words carry
+  * the load bias, so a byte guard over them would fail at install. */
+ static unsigned char controller[0x100] __attribute__((aligned(8)));
+ static unsigned char focused[0x80] __attribute__((aligned(8)));
+ void *focus_page=mmap((void*)0x6b6f000,4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED,-1,0);
+ require(focus_page!=MAP_FAILED,"active focus controller slot fixture page");
+ MirrorState *saved_mirror=fixture;CommandState *saved_commands=command_state;
+ fixture=calloc(1,sizeof(*fixture));command_state=calloc(1,sizeof(*command_state));require(fixture&&command_state,"press lane fixture storage");
+ memset(command_state,0,sizeof(*command_state));initial(1);command_initialize();observer_running=1;observer_image_bias=0;atomic_store(&command_state->alive,1);
+ command_state->magic=COMMAND_MAGIC;command_state->version=COMMAND_VERSION;command_state->bytes=sizeof(*command_state);command_state->capacity=COMMAND_SLOTS;
+ component_press_call=press_call_fixture;component_wheel_call=wheel_call_fixture;press_calls=0;wheel_calls=0;
+ memset(controller,0,sizeof controller);memset(focused,0,sizeof focused);
+ press_receiver=ptr(controller);
+ put(press_receiver+WHEEL_FOCUSED_OFFSET,ptr(focused));put(ptr(focused)+WHEEL_FLAGS_OFFSET,WHEEL_VISIBLE_FLAG);
+ put(0x6b6f798,press_receiver);put(press_receiver,wheel_focus_vtables[0]);
+ /* The data-wheel lane shares this receiver here, so one drain can be shown to
+  * carry exactly one of the two operations. */
+ wheel_focus_receiver=press_receiver;
+ seed_fixture(0,0,0x3f000000,1);load_fixture();
+ require(press_command_case()==1&&press_one(),"a published press request is exactly one call to the app's own press entry carrying the device-measured id");
+ for(unsigned v=0;v<4;v++){
+  put(press_receiver,wheel_focus_vtables[v]);
+  require(press_command_case()==1&&press_one(),"each of the four legal focus-controller vptrs takes one press call with that id");
+ }
+ /* Suppression is a completed request with a zero call flag, never a rejection:
+  * the app's own panel path drops these pushes silently too. */
+ put(press_receiver,wheel_focus_vtables[0]);
+ put(press_receiver+WHEEL_FOCUSED_OFFSET,0);
+ require(!press_command_case()&&!press_calls,"nothing focused completes the press with a zero call flag and no call");
+ put(press_receiver+WHEEL_FOCUSED_OFFSET,ptr(focused));
+ put(ptr(focused)+WHEEL_FLAGS_OFFSET,WHEEL_VISIBLE_FLAG^0xffffffffu);
+ require(!press_command_case()&&!press_calls,"a focused component without the app's own visible flag completes with a zero call flag");
+ put(ptr(focused)+WHEEL_FLAGS_OFFSET,WHEEL_VISIBLE_FLAG);
+ put(press_receiver,wheel_focus_vtables[3]+4);
+ require(!press_command_case()&&!press_calls,"a receiver whose vptr is none of the four focus controllers completes with a zero call flag");
+ put(press_receiver,wheel_focus_vtables[0]);
+ put(0x6b6f798,0);
+ require(!press_command_case()&&!press_calls,"no active focus controller completes with a zero call flag");
+ put(0x6b6f798,press_receiver);
+ require(press_command_case()==1&&press_one(),"recovery: the next press after four suppressed ones still reaches the app's press entry");
+ /* Any id but the measured one is a format refusal, not a call: this lane
+  * delivers the panel data wheel's own push and nothing else. */
+ CommandRequest base={.pid=command_state->pid,.start_lo=command_state->start_lo,.start_hi=command_state->start_hi,.origin_sec=command_state->origin_sec,.origin_nsec=command_state->origin_nsec,.epoch=epoch,.bits=FOCUS_PRESS_BUTTON,.expires=120000,.reserved=JOG_PRESS};
+ const uint32_t wrong[3]={0,FOCUS_PRESS_BUTTON-1u,FOCUS_PRESS_BUTTON+1u};
+ for(unsigned i=0;i<3;i++){
+  CommandRequest bad=base;bad.bits=wrong[i];bad.seq=atomic_load(&command_state->published)+1;
+  press_calls=0;unsigned bad_at=submit_fixture(bad);
+  require(!press_calls&&atomic_load(&command_state->slots[bad_at].rejected)==C_FORMAT&&atomic_load(&command_state->slots[bad_at].done)!=atomic_load(&command_state->slots[bad_at].published),"a press request carrying any other button id is refused without a call");
+  command_retire();
+ }
+ CommandRequest foreign=base;foreign.seq=atomic_load(&command_state->published)+1;foreign.track_owner=7;
+ press_calls=0;unsigned foreign_at=submit_fixture(foreign);
+ require(!press_calls&&atomic_load(&command_state->slots[foreign_at].rejected)==C_FORMAT&&atomic_load(&command_state->slots[foreign_at].done)!=atomic_load(&command_state->slots[foreign_at].published),"a press request naming any other target is refused without a call");
+ command_retire();
+ /* Single flight across both focus-controller operations: they act on the one
+  * active controller, so a press and a data-wheel step never overlap. */
+ CommandRequest press=base;press.seq=atomic_load(&command_state->published)+1;
+ unsigned first_slot=command_free(command_state);
+ require(first_slot<COMMAND_SLOTS&&command_publish_request_at(command_state,&press,first_slot),"first press request publishes");
+ CommandRequest step={.pid=command_state->pid,.start_lo=command_state->start_lo,.start_hi=command_state->start_hi,.origin_sec=command_state->origin_sec,.origin_nsec=command_state->origin_nsec,.epoch=epoch,.bits=1,.expires=120000,.reserved=JOG_DATA};
+ step.seq=press.seq+1;
+ unsigned second_slot=command_free(command_state);
+ require(second_slot<COMMAND_SLOTS&&second_slot!=first_slot&&!command_publish_request_at(command_state,&step,second_slot),"command_conflict refuses a data-wheel request while a press is alive");
+ CommandRequest again=press;again.seq=press.seq+1;
+ require(!command_publish_request_at(command_state,&again,second_slot),"and refuses a second press while one is alive");
+ press_calls=0;wheel_calls=0;Context press_drain=context();press_drain.r[0]=ptr(queue_object)+4;call(&press_drain,COMMAND_DRAIN);
+ require(press_one()&&!wheel_calls&&atomic_load(&command_state->slots[first_slot].done)==press.seq,"the one live press is serviced normally");
+ command_retire();require(command_publish_settlement(command_state,press.seq),"single-flight press settles");command_retire();
+ require(command_idle(command_state)&&command_publish_request_at(command_state,&step,command_free(command_state)),"the data-wheel request publishes only after the press is reclaimed");
+ CommandRequest blocked=press;blocked.seq=step.seq+1;
+ require(!command_publish_request_at(command_state,&blocked,command_free(command_state)),"and a press is refused while that data-wheel request is alive");
+ press_calls=0;wheel_calls=0;call(&press_drain,COMMAND_DRAIN);
+ require(wheel_one(1)&&!press_calls,"the data-wheel request is then delivered as its own single call");
+ command_retire();require(command_publish_settlement(command_state,step.seq),"the data-wheel request settles");command_retire();
+ require(command_state->magic==COMMAND_MAGIC&&command_state->version==COMMAND_VERSION&&mirror_state->magic==MIRROR_MAGIC&&mirror_state->version==MIRROR_VERSION,"CMD31 and MMV17 unchanged by the press lane");
+ require(!atomic_load(&command_violation)&&!atomic_load(&command_state->error)&&!atomic_load(&command_state->trace_error),"press lane publishes no diagnostic failure");
+ observer_running=0;put(ptr(root_object)+0x2e4,0);free(fixture);free(command_state);fixture=saved_mirror;mirror_state=saved_mirror;command_state=saved_commands;
+ require(!atomic_load(&command_state->published)&&!atomic_load(&command_state->reclaimed),"the press lane fixture leaves the shared mailbox untouched");
+ component_press_call=NULL;component_wheel_call=NULL;press_calls=0;wheel_calls=0;
+ puts("PASS X-Touch data-wheel push lane: the app's own performer still reaches the guarded press entry as focus-controller slot 5 with its action id, no site is patched there, one published JOG_PRESS request is one call carrying the device-measured id on each legal receiver, suppression completes with a zero call flag, a wrong id or foreign target is refused, and command_conflict keeps one focus-controller request in flight across presses and data-wheel steps (native press entry substituted)");
 }
 static void new_project_checks(void){
  MirrorState *saved_fixture=fixture;CommandState *saved_commands=command_state;
@@ -805,7 +1036,54 @@ static void jog_checks(void){
   unsigned seen[3]={0};for(unsigned lane=0;lane<COMMAND_LANES;lane++)for(unsigned j=0;j<atomic_load(&slot->lanes[lane].published);j++){CommandEvent e;require(command_event_read(slot->lanes+lane,1,j,&e),"jog immutable source event");if(e.kind>=CE_JOG_ENQUEUE&&e.kind<=CE_JOG_DONE){seen[e.kind-CE_JOG_ENQUEUE]++;require(e.capture==ptr(jog_native_slot+2)&&e.bits==r.bits&&e.program==x,"exact native payload/signed units");require(e.revision==(e.kind==CE_JOG_ENQUEUE?1:jog_fixture_epoch?2:1),"submission and actual execution epoch remain distinct");}require(e.kind!=CE_COMMIT,"no manufactured changed-position acknowledgement for native no-op");}
   require(seen[0]==1&&seen[1]==1&&seen[2]==1,"enqueue/entry/completion all separately observed");command_retire();require(atomic_load(&slot->sealed)==1&&command_publish_settlement(command_state,1),"jog seals only after callback source leaves");command_retire();require(command_idle(command_state),"jog settled and reclaimed same protocol");
  }
+ /* The data-wheel lane is not the jog lane. It never calls jog_resolve, so a
+  * retired AsyncSequencer cannot stop it, and a retained native jog awaiting its
+  * audio-thread DONE neither blocks it nor is completed by it. */
+ {
+  memset(command_state,0,sizeof(*command_state));initial(1);command_initialize();observer_running=1;observer_image_bias=0;atomic_store(&command_state->alive,1);
+  component_jog_dispatch=jog_dispatch_fixture;component_wheel_call=wheel_call_fixture;
+  jog_fixture_fault=0;jog_fixture_epoch=0;jog_fixture_calls=0;jog_fixture_defer=1;
+  uint32_t a=ptr(jog_audio_object),sq=ptr(jog_sequencer_object),tl=ptr(jog_timeline_object),tm=ptr(jog_time_object),x=ptr(jog_async_object);
+  put(ptr(root_object)+0x2e4,a);put(a+0xa8,ptr(queue_object));put(a+0x3d8,x);put(a+0x3bc,sq);put(a+0x3a4,tl);put(a+0x3a0,tm);put(x,0x689fdac);put(x+8,ptr(queue_object));put(x+0x40,sq);put(tl,0x69091b0);put(sq+0x400,tl);put(sq+0x3fc,tm);
+  seed_fixture(0,0,0x3f000000,1);load_fixture();
+  put(0x6b6f798,wheel_focus_receiver);put(wheel_focus_receiver,wheel_focus_vtables[2]);
+  put(wheel_focus_receiver+WHEEL_FOCUSED_OFFSET,wheel_focus_focused);put(wheel_focus_focused+WHEEL_FLAGS_OFFSET,WHEEL_VISIBLE_FLAG);
+  CommandRequest base={.pid=command_state->pid,.start_lo=command_state->start_lo,.start_hi=command_state->start_hi,.origin_sec=command_state->origin_sec,.origin_nsec=command_state->origin_nsec,.epoch=epoch,.expires=120000};
+  CommandRequest jog=base;jog.seq=1;jog.bits=1;jog.reserved=JOG_BEAT;jog.project_owner=channel_owner_id(project);
+  CommandRequest data=base;data.seq=2;data.bits=3;data.reserved=JOG_DATA;
+  require(command_publish_request_at(command_state,&jog,0),"native jog publishes");
+  require(command_publish_request_at(command_state,&data,1),"a data-wheel request does not conflict with a live native jog");
+  wheel_calls=0;Context drain=context();drain.r[0]=ptr(queue_object)+4;call(&drain,COMMAND_DRAIN);
+  require(jog_fixture_calls==1&&wheel_one(3),"one native jog facade call and one data-wheel call come out of the same drain");
+  require(atomic_load(&command_state->slots[1].done)==2&&!atomic_load(&command_state->slots[1].rejected)&&!atomic_load(&command_state->trace_error),"the data-wheel request completes while the native jog is still retained");
+  require(!atomic_load(&command_state->slots[0].done)&&atomic_load(&command_state->slots[0].returned)==1,"the retained native jog keeps its own pending callback and is not completed by the data-wheel lane");
+  command_retire();require(atomic_load(&command_state->slots[1].sealed)==2&&command_publish_settlement(command_state,2),"the data-wheel request seals and settles without waiting for the jog");
+  command_retire();require(atomic_load(&command_state->slots[1].reclaimed)==2&&!atomic_load(&command_state->slots[0].sealed),"only the data-wheel slot is reclaimed");
+  component_wheel_call=NULL;
+ }
+ /* Retiring the AsyncSequencer is exactly what jog_resolve refuses on, so the
+  * same drain that rejects a native jog still turns the data wheel. */
+ {
+  memset(command_state,0,sizeof(*command_state));initial(1);command_initialize();observer_running=1;observer_image_bias=0;atomic_store(&command_state->alive,1);
+  component_jog_dispatch=jog_dispatch_fixture;component_wheel_call=wheel_call_fixture;
+  jog_fixture_fault=0;jog_fixture_epoch=0;jog_fixture_calls=0;jog_fixture_defer=0;
+  uint32_t a=ptr(jog_audio_object),sq=ptr(jog_sequencer_object),tl=ptr(jog_timeline_object),tm=ptr(jog_time_object),x=ptr(jog_async_object);
+  put(ptr(root_object)+0x2e4,a);put(a+0xa8,ptr(queue_object));put(a+0x3d8,x);put(a+0x3bc,sq);put(a+0x3a4,tl);put(a+0x3a0,tm);put(x,0x689fdac);put(x+8,ptr(queue_object));put(x+0x40,sq);put(tl,0x69091b0);put(sq+0x400,tl);put(sq+0x3fc,tm);
+  seed_fixture(0,0,0x3f000000,1);load_fixture();
+  put(0x6b6f798,wheel_focus_receiver);put(wheel_focus_receiver,wheel_focus_vtables[2]);
+  put(wheel_focus_receiver+WHEEL_FOCUSED_OFFSET,wheel_focus_focused);put(wheel_focus_focused+WHEEL_FLAGS_OFFSET,WHEEL_VISIBLE_FLAG);
+  Context destroy=context();destroy.r[0]=x;call(&destroy,JG_DESTROY);
+  CommandRequest base={.pid=command_state->pid,.start_lo=command_state->start_lo,.start_hi=command_state->start_hi,.origin_sec=command_state->origin_sec,.origin_nsec=command_state->origin_nsec,.epoch=epoch,.expires=120000};
+  CommandRequest jog=base;jog.seq=1;jog.bits=1;jog.reserved=JOG_BEAT;jog.project_owner=channel_owner_id(project);
+  CommandRequest data=base;data.seq=2;data.bits=(uint32_t)-2;data.reserved=JOG_DATA;
+  require(command_publish_request_at(command_state,&jog,0)&&command_publish_request_at(command_state,&data,1),"jog and data-wheel requests publish against a retired sequencer");
+  wheel_calls=0;jog_fixture_calls=0;Context drain=context();drain.r[0]=ptr(queue_object)+4;call(&drain,COMMAND_DRAIN);
+  require(!jog_fixture_calls&&atomic_load(&command_state->slots[0].rejected)==C_NATIVE_MEMBERSHIP,"the retired sequencer is exactly what jog_resolve refuses on");
+  require(wheel_one(-2)&&atomic_load(&command_state->slots[1].done)==2&&!atomic_load(&command_state->slots[1].rejected),"the same drain still turns the data wheel, so the data-wheel lane does not consult jog_resolve");
+  component_wheel_call=NULL;
+ }
  observer_running=0;put(ptr(root_object)+0x2e4,0);free(fixture);free(command_state);fixture=saved;mirror_state=saved;command_state=saved_command;
+ puts("PASS data-wheel requests stay out of the jog lane: no jog_resolve, no facade call, no shared retention, and they complete beside a retained native jog and after its AsyncSequencer is retired (native bodies substituted)");
  puts("PASS exact native queue payload correlation, early callback completion before enqueue result/return, independent UI retirement, signed bar/beat/pulse ABI, actual callback thread, no-op completion, execution epoch, wrong-callable and owner-destruction rejection (native body substituted)");
 }
 static unsigned char master_fixture_factory[0x60],master_fixture_block[0x60];
@@ -914,6 +1192,10 @@ static void recording_checks(void){
  puts("PASS GUI recording facade, source application, native no-Clip no-op, first/second queue correlation, early/delayed recorder callback, duplicate publication rejection and real consumer settlement (native bodies/history/recorder buffering substituted)");
 }
 static unsigned char general_fixture_auto[0xc0],general_fixture_editor[0x560],general_fixture_controls[0x100],general_fixture_responder[0x234],general_fixture_timeline[0x160],general_fixture_zoom[0x158];
+/* juce::Desktop, its desktopComponents storage and the top-level component the
+ * application's own key path reaches: the objects the corrected peer
+ * resolution reads instead of the enrolled Editor. */
+static unsigned char general_fixture_desktop[0x50] __attribute__((aligned(8))),general_fixture_desktop_list[0x10] __attribute__((aligned(8))),general_fixture_window[0x80] __attribute__((aligned(8)));
 /* Select through the generated raw-address recipe. Naming a synthetic bool
  * hook here once masked a real e29938/M_MUTE versus M_BOOL dispatch mismatch. */
 static unsigned source_site_at(uint32_t address){
@@ -921,6 +1203,60 @@ static unsigned source_site_at(uint32_t address){
  require(0,"native source address must have an installed detour");return 0;
 }
 static uint32_t toggle_recorder,toggle_properties,toggle_click,toggle_sequence;static unsigned toggle_calls,toggle_fault,transport_calls;
+/* The key lane's four native calls, recorded in order with the borrowed words
+ * as they stood at each call, so the regression reads the sequence the peer is
+ * actually handed and the state the application would have seen. */
+enum {KEY_CALL_PEER=1,KEY_CALL_MODIFIERS,KEY_CALL_DOWN,KEY_CALL_PRESS,KEY_CALL_UP};
+#define KEY_CALL_MAX 8
+static struct {unsigned kind;uint32_t argument,modifiers;unsigned char bitmap;} key_calls[KEY_CALL_MAX];
+static unsigned key_call_count,key_call_overflow,key_press_result,key_fixture_op;
+static uint32_t key_fixture_editor,key_fixture_top,key_fixture_peer,key_press_triple[3];
+static uint32_t key_modifier_address(void){return KEY_STATICS_RVA+KEY_MODIFIERS_OFFSET;}
+/* The exact byte the peer's own handler indexes, keysym>>3, and the bit inside
+ * it, keysym&7, both taken from the shared table rather than restated. */
+static uint32_t key_bitmap_address(unsigned op){return KEY_DOWN_BITMAP_RVA+(command_key_symbol(op).keysym>>3);}
+static unsigned char key_bitmap_mask(unsigned op){return (unsigned char)(1u<<(command_key_symbol(op).keysym&7));}
+static unsigned char key_bitmap_byte(unsigned op){return *(const unsigned char*)(uintptr_t)key_bitmap_address(op);}
+static void key_record(unsigned kind,uint32_t argument){
+ if(key_call_count>=KEY_CALL_MAX){key_call_overflow=1;return;}
+ key_calls[key_call_count].kind=kind;key_calls[key_call_count].argument=argument;
+ key_calls[key_call_count].modifiers=word(key_modifier_address());
+ key_calls[key_call_count].bitmap=key_bitmap_byte(key_fixture_op);
+ key_call_count++;
+}
+/* The JUCE peer statics the key lane borrows live past the writable segment's
+ * file image, so the component build gives them real pages at their exact
+ * image addresses; observer_image_bias is 0 here. Reserved before the harness
+ * allocates, and required to land exactly where asked: a kernel that ignored
+ * the placement would otherwise hand back an unrelated page and let the lane
+ * write into the heap. */
+#define KEY_FIXTURE_BASE (KEY_STATICS_RVA&~0xfffu)
+#define KEY_FIXTURE_BYTES 0x3000u
+static void key_statics_reserve(void){
+ void *page=mmap((void*)(uintptr_t)KEY_FIXTURE_BASE,KEY_FIXTURE_BYTES,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED_NOREPLACE,-1,0);
+ require(page==(void*)(uintptr_t)KEY_FIXTURE_BASE,"JUCE peer statics fixture pages at their exact image addresses");
+ require(KEY_STATICS_RVA+KEY_FOCUS_OFFSET<KEY_FIXTURE_BASE+KEY_FIXTURE_BYTES&&KEY_STATICS_RVA+KEY_DESKTOP_OFFSET<KEY_FIXTURE_BASE+KEY_FIXTURE_BYTES&&KEY_DOWN_BITMAP_RVA+(0xff54u>>3)<KEY_FIXTURE_BASE+KEY_FIXTURE_BYTES,"every borrowed static is inside those pages");
+}
+/* Component::getPeer is substituted on the component the lane actually hands it:
+ * the application's own first desktop component, read out of juce::Desktop, not
+ * the enrolled Editor whose getPeer returned null on the device. */
+static uint32_t key_peer_fixture(uint32_t component){
+ require(component==key_fixture_top&&component!=key_fixture_editor,"the peer lookup receives the desktop's own top-level component, not the enrolled Editor");
+ key_record(KEY_CALL_PEER,component);return key_fixture_peer;
+}
+static void key_modifiers_fixture(uint32_t peer){
+ require(peer==key_fixture_peer,"handleModifierKeysChange is told on the same peer");
+ key_record(KEY_CALL_MODIFIERS,peer);
+}
+static void key_up_down_fixture(uint32_t peer,unsigned down){
+ require(peer==key_fixture_peer&&down<=1,"handleKeyUpOrDown brackets the press on the same peer with a boolean");
+ key_record(down?KEY_CALL_DOWN:KEY_CALL_UP,down);
+}
+static unsigned key_press_fixture(uint32_t peer,const uint32_t *key){
+ require(peer==key_fixture_peer,"handleKeyPress is delivered to the same peer");
+ memcpy(key_press_triple,key,sizeof key_press_triple);
+ key_record(KEY_CALL_PRESS,peer);return key_press_result;
+}
 static void global_dispatch_fixture(unsigned op,uint32_t target,uint32_t function,unsigned bits){
  if(command_toggle(op)){
   Context c=context();unsigned site;
@@ -939,7 +1275,19 @@ static void global_dispatch_fixture(unsigned op,uint32_t target,uint32_t functio
   require(target==ptr(general_fixture_responder),"transport uses responder reached from qualified Editor root");
   require(function==(op==GLOBAL_PLAY?0xf2358c:0xf23628),"transport uses exact native Play/Stop method");return;
  }
- if(op!=CF_AUTOMATION){require(target==ptr(op==GLOBAL_SAVE||command_page(op)||command_key(op)||command_history(op)?general_fixture_editor:general_fixture_zoom),"native utility keeps enrolled editor/zoom owner");require(function==(command_key(op)?0xbc18ec:0x2c70f20)||!command_history(op),"Undo/Redo use qualified Editor perform facade");return;}
+ if(op!=CF_AUTOMATION){require(target==ptr(op==GLOBAL_SAVE||command_page(op)||command_key(op)||command_history(op)||command_sequence_duplicate(op)?general_fixture_editor:general_fixture_zoom),"native utility keeps enrolled editor/zoom owner");require(function==(command_key(op)?0xbc18ec:command_sequence_duplicate(op)?SEQ_DUP_CONFIRM_RVA:0x2c70f20)||!command_history(op),"Undo/Redo use qualified Editor perform facade");
+  /* Duplicate Sequence names the confirm entry it calls, not the generic
+   * action dispatcher, and it builds no key press. */
+  if(command_sequence_duplicate(op))require(function==SEQ_DUP_CONFIRM_RVA&&!bits,"the duplicate operation names the application's own CopySequence confirm and carries no value");
+  /* The production path builds the juce::KeyPress before the dispatch, so this
+   * reads the triple the native peer injection is handed, not a restatement. */
+  if(command_key(op)){
+   static const uint32_t expected_code[]={0x0d,0x1b,0x10000051,0x10000052,0x10000053,0x10000054};
+   uint32_t code=op==GLOBAL_KEY_TAB||op==GLOBAL_KEY_BACKTAB?0x09u:expected_code[op-GLOBAL_KEY_ENTER];
+   uint32_t text=op==GLOBAL_KEY_ENTER?0x0du:op==GLOBAL_KEY_CANCEL?0x1bu:op==GLOBAL_KEY_TAB||op==GLOBAL_KEY_BACKTAB?0x09u:0u;
+   require(component_global_key[0]==code&&component_global_key[1]==(op==GLOBAL_KEY_BACKTAB?COMMAND_KEY_SHIFT:0u)&&component_global_key[2]==text,"each key operation injects its own JUCE key code, its shift flag and the text character the keyboard path derives");
+  }else require(!component_global_key[0]&&!component_global_key[1]&&!component_global_key[2],"a non-key global operation builds no key press");
+  return;}
  union {uint64_t align;unsigned char bytes[sizeof(Context)+8];} frames;
  Context *enter=(Context*)(frames.bytes+8),*end=(Context*)frames.bytes;
  *enter=context();enter->r[0]=target;call(enter,GL_AUTO_ENTER);
@@ -956,6 +1304,264 @@ static void request_meter_bank(unsigned offset){
  input_meter_interest(&in,&bank,&out,atomic_load(&fixture->heartbeat),1);
 }
 
+/* Duplicate Sequence. The application's own CopySequence Confirm, its first-
+ * unused-slot rule, its default name and the String release are substituted one
+ * for one, so the regression reads the real properties block, its six words and
+ * the call order the lane produces, and the image assertions below hold each
+ * substituted body to the shape it has in the exact 3.9.1 binary. */
+enum {DUP_CALL_FIRST=1,DUP_CALL_NAME,DUP_CALL_CONFIRM,DUP_CALL_FREE};
+#define DUP_CALL_MAX 8
+static unsigned duplicate_order[DUP_CALL_MAX],duplicate_order_count,duplicate_order_overflow;
+static uint32_t duplicate_block,duplicate_block_words[SEQ_DUP_BLOCK_BYTES/4];
+static uint32_t duplicate_name_at,duplicate_free_at,duplicate_first_project;
+static int duplicate_name_index;
+static unsigned duplicate_name_live,duplicate_name_live_at_confirm;
+static void duplicate_record(unsigned kind){
+ if(duplicate_order_count>=DUP_CALL_MAX){duplicate_order_overflow=1;return;}
+ duplicate_order[duplicate_order_count++]=kind;
+}
+/* The application's own rule, re-run over the same Project array the lane
+ * pinned: walk the slots in order and take the first whose used byte is clear.
+ * The image assertions require 0x0255c32c to still be exactly that walk. */
+static void duplicate_first_unused_fixture(uint32_t out,uint32_t proj){
+ duplicate_record(DUP_CALL_FIRST);duplicate_first_project=proj;
+ uint32_t count=word(proj+SEQ_DUP_PROJECT_COUNT),slots=word(proj+SEQ_DUP_PROJECT_SEQUENCES);
+ put(out,0);*(volatile unsigned char*)(uintptr_t)(out+4)=0;
+ for(uint32_t i=0;i<count;i++){
+  uint32_t s=word(slots+4u*i);
+  if(!*(const volatile unsigned char*)(uintptr_t)(s+SEQ_DUP_SEQUENCE_USED)){put(out,i);*(volatile unsigned char*)(uintptr_t)(out+4)=1;return;}
+ }
+}
+static void duplicate_name_fixture(uint32_t name,int index){
+ duplicate_record(DUP_CALL_NAME);duplicate_name_at=name;duplicate_name_index=index;
+ put(name,0xd0000000u|(uint32_t)index);duplicate_name_live=1;
+}
+static void duplicate_confirm_fixture(uint32_t block){
+ duplicate_record(DUP_CALL_CONFIRM);duplicate_block=block;
+ for(unsigned i=0;i<SEQ_DUP_BLOCK_BYTES/4;i++)duplicate_block_words[i]=word(block+4u*i);
+ duplicate_name_live_at_confirm=duplicate_name_live;
+}
+static void duplicate_string_free_fixture(uint32_t name){duplicate_record(DUP_CALL_FREE);duplicate_free_at=name;duplicate_name_live=0;}
+static unsigned char duplicate_sequence_objects[4][0x260] __attribute__((aligned(8)));
+static unsigned char duplicate_navigator_object[0x48] __attribute__((aligned(8)));
+static unsigned char duplicate_manager_object[0x100] __attribute__((aligned(8)));
+static uint32_t duplicate_slot_array[4];
+static void duplicate_used(unsigned slot,unsigned used){duplicate_sequence_objects[slot][SEQ_DUP_SEQUENCE_USED]=(unsigned char)used;}
+/* Publish one GLOBAL_SEQ_DUPLICATE request through the real publisher, let the
+ * app's own UI drain service it, and return the refusal code (0 on acceptance).
+ * The slot is retired either way, so the mailbox is idle for the next case. */
+static unsigned duplicate_case(uint32_t editor,unsigned *seq_out,unsigned *at_out){
+ CopiedMirror out;require(copy_mirror(fixture,&out),"duplicate snapshot");
+ CommandRequest r={.epoch=epoch,.expires=120000,.reserved=GLOBAL_SEQ_DUPLICATE,.project_owner=out.project_owner,.global_owner=channel_owner_id(editor)};
+ duplicate_order_count=duplicate_order_overflow=0;duplicate_block=0;duplicate_name_at=duplicate_free_at=0;
+ memset(duplicate_block_words,0,sizeof duplicate_block_words);
+ unsigned at=submit_fixture(r),seq=atomic_load(&command_state->published);
+ if(at_out)*at_out=at;
+ if(seq_out)*seq_out=seq;
+ return atomic_load(&command_state->slots[at].rejected);
+}
+static void sequence_duplicate_checks(uint32_t editor,uint32_t audio){
+ /* No new hook site: Confirm is called, never patched. */
+ for(unsigned i=0;i<PATCH_COUNT;i++)require(anchor[i]!=SEQ_DUP_CONFIRM_RVA,"the CopySequence confirm hosts no patch site");
+ const unsigned char *confirm=guarded_bytes(SEQ_DUP_CONFIRM_RVA,SEQ_DUP_CONFIRM_LENGTH);
+ const unsigned char *ctor=guarded_bytes(0x13fabdc,0x1b8),*execute=guarded_bytes(0x13fb584,0x9d4),*undo=guarded_bytes(0x13f8b8c,0x538);
+ const unsigned char *accessors=guarded_bytes(SEQ_DUP_ACCESSORS_RVA,SEQ_DUP_ACCESSORS_LENGTH),*naming=guarded_bytes(SEQ_DUP_DEFAULT_NAME_RVA,SEQ_DUP_DEFAULT_NAME_LENGTH);
+ const unsigned char *dispatcher=guarded_bytes(0x2c70f20,0x2300),*navigate=guarded_bytes(0x1bba0e0,0x178),*copy=guarded_bytes(0x25c3990,0xd94);
+ require(confirm&&ctor&&execute&&undo&&accessors&&naming&&dispatcher&&navigate&&copy&&guarded_bytes(0x1477a08,0x22c)&&guarded_bytes(0x911e40,0x270)&&guarded_bytes(0x925c70,0x2d8),"confirm, the command constructor, execute, undo, the sequence accessors, the default name, CommandManager::perform, the sequence copy, the navigator call and both String ranges guarded as whole native ranges");
+#define DUP_WORD(body,base,address,value) do{uint32_t dup_w;memcpy(&dup_w,(body)+((address)-(base)),4);require(dup_w==(value),"image shape");}while(0)
+ /* Confirm reads exactly the six block words this lane fills, and nothing more:
+  * the destination, the source, the navigator, the Project, the dead seventh
+  * constructor argument and the name String. */
+ DUP_WORD(confirm,SEQ_DUP_CONFIRM_RVA,0x195183c,0xe5902038u);
+ DUP_WORD(confirm,SEQ_DUP_CONFIRM_RVA,0x1951850,0xe5903024u);
+ DUP_WORD(confirm,SEQ_DUP_CONFIRM_RVA,0x1951864,0xe5942054u);
+ DUP_WORD(confirm,SEQ_DUP_CONFIRM_RVA,0x1951868,0xe5943004u);
+ DUP_WORD(confirm,SEQ_DUP_CONFIRM_RVA,0x195186c,0xe594b050u);
+ DUP_WORD(confirm,SEQ_DUP_CONFIRM_RVA,0x1951894,0xe284104cu);
+ require((0xe5902038u&0xfffu)==SEQ_DUP_BLOCK_TO&&(0xe5903024u&0xfffu)==SEQ_DUP_BLOCK_FROM&&(0xe5942054u&0xfffu)==SEQ_DUP_BLOCK_NAV&&(0xe5943004u&0xfffu)==SEQ_DUP_BLOCK_PROJECT&&(0xe594b050u&0xfffu)==SEQ_DUP_BLOCK_SPARE&&(0xe284104cu&0xfffu)==SEQ_DUP_BLOCK_NAME,"the block offsets this lane fills are the ones those instructions name");
+ DUP_WORD(confirm,SEQ_DUP_CONFIRM_RVA,0x1951854,0xe1520003u);
+ DUP_WORD(confirm,SEQ_DUP_CONFIRM_RVA,0x1951858,0x0a000041u);
+ DUP_WORD(confirm,SEQ_DUP_CONFIRM_RVA,0x1951860,0xe3000668u);
+ {uint32_t call_word;
+  memcpy(&call_word,confirm+(0x19518d4-SEQ_DUP_CONFIRM_RVA),4);
+  require(wheel_branch(0x19518d4,call_word)==0x13fabdc,"confirm still builds the command with the CopySequenceCommand constructor");
+  memcpy(&call_word,confirm+(0x1951914-SEQ_DUP_CONFIRM_RVA),4);
+  require(wheel_branch(0x1951914,call_word)==0x1477a08,"and still submits it through CommandManager::perform");
+  DUP_WORD(confirm,SEQ_DUP_CONFIRM_RVA,0x19518e4,0xe5930ab0u);
+  require((0xe5930ab0u&0xfffu)==SEQ_DUP_PROJECT_MANAGER,"on the manager the Project holds at the offset this lane pins");}
+ /* The constructor keeps the navigator, the source and the destination where
+  * execute and undo read them, and takes the "Copy Sequence" undo name id. */
+ DUP_WORD(ctor,0x13fabdc,0x13fac84,0xe5848030u);
+ DUP_WORD(ctor,0x13fabdc,0x13fac70,0xe5847034u);
+ DUP_WORD(ctor,0x13fabdc,0x13fac8c,0xe5849038u);
+ DUP_WORD(ctor,0x13fabdc,0x13fac20,0xe3a0103au);
+ /* Execute resolves both sequences through GetSequence, and its make-current
+  * step is a +0x250 compare that no name can skip, taking the navigator from
+  * the word the constructor stored. That is why a navigator is mandatory. */
+ DUP_WORD(execute,0x13fb584,0x13fb5b0,0xe5961034u);
+ DUP_WORD(execute,0x13fb584,0x13fb5d4,0xe5961038u);
+ DUP_WORD(execute,0x13fb584,0x13fb9f0,0xe5984250u);
+ DUP_WORD(execute,0x13fb584,0x13fb9fc,0xe1500004u);
+ DUP_WORD(execute,0x13fb584,0x13fba74,0xeaffffddu);
+ DUP_WORD(execute,0x13fb584,0x13fba18,0xe5960030u);
+ require((0xe5984250u&0xfffu)==SEQ_DUP_SEQUENCE_SLOT,"the gate compares the slot index this lane reads");
+ /* The direction of the copy, instruction by instruction, rather than only by
+  * the whole-range byte guard. The two GetSequence results are kept apart
+  * (source in r11, destination in r8), the copy is called with the DESTINATION
+  * in r0 and the SOURCE in r1, and the copy's own prologue takes r0 as the
+  * object it writes and r1 as the object it reads - its first act on the two is
+  * to carry the source's used byte over to the destination. A swap of those two
+  * registers would overwrite the sequence the user is working on. */
+ DUP_WORD(execute,0x13fb584,0x13fb5d8,0xe1a0b000u);
+ DUP_WORD(execute,0x13fb584,0x13fb5e8,0xe1a08000u);
+ DUP_WORD(execute,0x13fb584,0x13fb908,0xe1a0100bu);
+ DUP_WORD(execute,0x13fb584,0x13fb910,0xe1a00008u);
+ DUP_WORD(copy,0x25c3990,0x25c3994,0xe1a04000u);
+ DUP_WORD(copy,0x25c3990,0x25c39a0,0xe1a0b001u);
+ DUP_WORD(copy,0x25c3990,0x25c3a24,0xe5db3258u);
+ DUP_WORD(copy,0x25c3990,0x25c3a30,0xe5c43258u);
+ require((0xe5db3258u&0xfffu)==SEQ_DUP_SEQUENCE_USED&&(0xe5c43258u&0xfffu)==SEQ_DUP_SEQUENCE_USED,"and the byte it carries across is the used byte this lane reads, so the destination becomes used and the next press moves on");
+ /* Execute navigates and records undo with the DESTINATION OBJECT's own slot
+  * word, not with the index the command carries, which is why the lane round
+  * trips the destination through the array the same way it does the source. */
+ DUP_WORD(execute,0x13fb584,0x13fba1c,0xe5981250u);
+ DUP_WORD(execute,0x13fb584,0x13fba10,0xe5860650u);
+ require((0xe5981250u&0xfffu)==SEQ_DUP_SEQUENCE_SLOT,"the index the navigation is given is that same slot word");
+ {uint32_t call_word;
+  memcpy(&call_word,execute+(0x13fb9f8-0x13fb584),4);
+  require(wheel_branch(0x13fb9f8,call_word)==0x255c3b0,"the gate's other side is the application's own current-sequence index");
+  memcpy(&call_word,execute+(0x13fba20-0x13fb584),4);
+  require(wheel_branch(0x13fba20,call_word)==0x1bba0e0,"and the step it gates is the navigator call");
+  memcpy(&call_word,execute+(0x13fb918-0x13fb584),4);
+  require(wheel_branch(0x13fb918,call_word)==0x25c3990,"the call those two registers are set up for is the sequence copy itself");
+  memcpy(&call_word,execute+(0x13fb728-0x13fb584),4);
+  require(wheel_branch(0x13fb728,call_word)==0x25c3990,"and the earlier one is the same copy reading the destination into the command's own undo snapshot at +0x40, the opposite direction of the one that follows");
+  DUP_WORD(execute,0x13fb584,0x13fb628,0xe2864040u);
+  DUP_WORD(execute,0x13fb584,0x13fb718,0xe1a00004u);
+  DUP_WORD(execute,0x13fb584,0x13fb720,0xe1a01008u);
+  memcpy(&call_word,undo+(0x13f8e38-0x13f8b8c),4);
+  require(wheel_branch(0x13f8e38,call_word)==0x1bba0e0,"undo makes the same navigator call when execute navigated");
+  DUP_WORD(undo,0x13f8b8c,0x13f8e30,0xe5960030u);
+  memcpy(&call_word,navigate,4);
+  require(call_word!=0,"the navigator entry is real code, not a stub");}
+ /* The first-unused-slot rule the fixture re-runs: the count, the array, the
+  * used byte and the two out stores, at the offsets this lane pins. */
+ DUP_WORD(accessors,SEQ_DUP_ACCESSORS_RVA,0x255c32c,0xe591ca78u);
+ DUP_WORD(accessors,SEQ_DUP_ACCESSORS_RVA,0x255c338,0xe5911a70u);
+ DUP_WORD(accessors,SEQ_DUP_ACCESSORS_RVA,0x255c344,0xe5d22258u);
+ DUP_WORD(accessors,SEQ_DUP_ACCESSORS_RVA,0x255c36c,0xe5803000u);
+ DUP_WORD(accessors,SEQ_DUP_ACCESSORS_RVA,0x255c370,0xe5c02004u);
+ DUP_WORD(accessors,SEQ_DUP_ACCESSORS_RVA,0x255c360,0xe5c03004u);
+ require((0xe591ca78u&0xfffu)==SEQ_DUP_PROJECT_COUNT&&(0xe5911a70u&0xfffu)==SEQ_DUP_PROJECT_SEQUENCES&&(0xe5d22258u&0xfffu)==SEQ_DUP_SEQUENCE_USED,"and it walks the same count, array and used byte");
+ DUP_WORD(accessors,SEQ_DUP_ACCESSORS_RVA,0x255c3b0,0xe59000e4u);
+ DUP_WORD(accessors,SEQ_DUP_ACCESSORS_RVA,0x255c3b8,0x15900250u);
+ require((0xe59000e4u&0xfffu)==SEQ_DUP_PROJECT_CURRENT,"the current-sequence index is that Project member's own slot word");
+ /* The name is the application's own "Sequence %02d" with index+1. */
+ DUP_WORD(naming,SEQ_DUP_DEFAULT_NAME_RVA,0x25b9688,0xe2844001u);
+ /* The navigator chain is the literal chain the application's own generic
+  * action dispatcher uses on this very editor pointer. */
+ DUP_WORD(dispatcher,0x2c70f20,0x2c71b68,0xe594337cu);
+ DUP_WORD(dispatcher,0x2c70f20,0x2c71b6c,0xe59332e4u);
+ DUP_WORD(dispatcher,0x2c70f20,0x2c71b70,0xe59303d8u);
+ require((0xe594337cu&0xfffu)==SEQ_DUP_EDITOR_ROOT&&(0xe59332e4u&0xfffu)==SEQ_DUP_ROOT_AUDIO&&(0xe59303d8u&0xfffu)==SEQ_DUP_AUDIO_NAVIGATOR,"hop for hop, at the three offsets this lane walks");
+#undef DUP_WORD
+ component_sequence_first_unused=duplicate_first_unused_fixture;component_sequence_default_name=duplicate_name_fixture;
+ component_sequence_confirm=duplicate_confirm_fixture;component_sequence_string_free=duplicate_string_free_fixture;
+ uint32_t proj=ptr(project_object),navigator=ptr(duplicate_navigator_object),manager=ptr(duplicate_manager_object);
+ memset(duplicate_sequence_objects,0,sizeof duplicate_sequence_objects);
+ for(unsigned i=0;i<4;i++){duplicate_slot_array[i]=ptr(duplicate_sequence_objects[i]);put(duplicate_slot_array[i]+SEQ_DUP_SEQUENCE_SLOT,i);}
+ duplicate_used(0,1);duplicate_used(1,1);duplicate_used(2,0);duplicate_used(3,0);
+ put(navigator,SEQ_DUP_NAV_VTABLE_RVA);
+ put(proj+SEQ_DUP_PROJECT_SEQUENCES,ptr(duplicate_slot_array));put(proj+SEQ_DUP_PROJECT_COUNT,4);
+ put(proj+SEQ_DUP_PROJECT_CURRENT,duplicate_slot_array[1]);put(proj+SEQ_DUP_PROJECT_MANAGER,manager);
+ put(audio+SEQ_DUP_AUDIO_NAVIGATOR,navigator);
+ require(typed(proj,0x6933c4c)&&word(ptr(root_object)+0x24c)==proj&&word(editor+SEQ_DUP_EDITOR_ROOT)==ptr(root_object)&&word(ptr(root_object)+SEQ_DUP_ROOT_AUDIO)==audio,"the duplicate fixture uses the same enrolled Project, root, editor and engine object the other global operations use");
+ /* One accepted duplicate: the current sequence, slot 1, into the first unused
+  * slot, 2, named for that slot, submitted once. */
+ unsigned seq=0,at=0;duplicate_name_live=duplicate_name_live_at_confirm=0;
+ require(!duplicate_case(editor,&seq,&at),"an accepted duplicate request completes in the UI drain");
+ require(!duplicate_order_overflow&&duplicate_order_count==4&&duplicate_order[0]==DUP_CALL_FIRST&&duplicate_order[1]==DUP_CALL_NAME&&duplicate_order[2]==DUP_CALL_CONFIRM&&duplicate_order[3]==DUP_CALL_FREE,"one duplicate is the application's first-unused rule, its default name, one confirm and one String release, in that order");
+ require(duplicate_first_project==proj,"the first-unused rule is asked about the enrolled Project");
+ require(duplicate_name_index==2&&duplicate_name_at==duplicate_block+SEQ_DUP_BLOCK_NAME&&duplicate_free_at==duplicate_name_at,"the name is built for the chosen slot straight into the block and released from the same word");
+ require(duplicate_name_live_at_confirm&&!duplicate_name_live,"the name String is alive for the confirm and released after it");
+ require(duplicate_block_words[SEQ_DUP_BLOCK_PROJECT/4]==proj&&duplicate_block_words[SEQ_DUP_BLOCK_FROM/4]==1&&duplicate_block_words[SEQ_DUP_BLOCK_TO/4]==2&&duplicate_block_words[SEQ_DUP_BLOCK_NAV/4]==navigator&&duplicate_block_words[SEQ_DUP_BLOCK_NAME/4]==(0xd0000000u|2u),"the block carries the Project, the current sequence's own slot as the source, the first unused slot as the destination, the resolved navigator and the built name");
+ require(!duplicate_block_words[SEQ_DUP_BLOCK_SPARE/4],"the dead seventh constructor argument goes in as zero");
+ for(unsigned i=0;i<SEQ_DUP_BLOCK_BYTES/4;i++){
+  unsigned offset=4u*i;
+  if(offset==SEQ_DUP_BLOCK_PROJECT||offset==SEQ_DUP_BLOCK_FROM||offset==SEQ_DUP_BLOCK_TO||offset==SEQ_DUP_BLOCK_NAME||offset==SEQ_DUP_BLOCK_NAV)continue;
+  require(!duplicate_block_words[i],"every other word of the block is zero: this is a plain aggregate, not a live property object");
+ }
+ /* The settlement evidence: the begin, the slot record and the end, in order,
+  * with the two slots the observer resolved. */
+ {CommandSlot *slot=command_state->slots+at;unsigned parts[3]={0,0,0};uint32_t state_source=0,state_destination=0,end_bits=0;
+  for(unsigned lane=0;lane<COMMAND_LANES;lane++)for(unsigned j=0;j<atomic_load(&slot->lanes[lane].published);j++){
+   CommandEvent ev;require(command_event_read(slot->lanes+lane,seq,j,&ev),"duplicate settlement event read");
+   require(ev.reserved==GLOBAL_SEQ_DUPLICATE&&ev.controller==GLOBAL_SEQ_DUPLICATE&&!ev.arg_kind&&!ev.property&&!ev.incarnation&&!ev.capture&&ev.revision==epoch&&ev.token==command_state->owner_token,"duplicate evidence names no Track, Program, Property or native queue");
+   if(ev.kind==CE_GLOBAL_BEGIN)parts[0]++;
+   else if(ev.kind==CE_GLOBAL_STATE){parts[1]++;state_source=ev.counter;state_destination=ev.bits;}
+   else if(ev.kind==CE_GLOBAL_END){parts[2]++;end_bits=ev.bits;}
+   else require(0,"a duplicate flight publishes no jog, queue or commit receipt");
+  }
+  require(parts[0]==1&&parts[1]==1&&parts[2]==1,"exactly one begin, one slot record and one end per accepted duplicate");
+  require(state_source==1&&state_destination==2,"the slot record names the source and the destination the block carried");
+  require(end_bits==1,"the end carries the submission, not a claim about the copy's contents");}
+ command_retire();require(atomic_load(&command_state->slots[at].sealed)==seq,"the duplicate seals after its synchronous return");
+ {CopiedMirror out;require(copy_mirror(fixture,&out),"duplicate settled snapshot");
+  MirrorInput in={.commands=command_state};MirrorBank bank;bank_init(&bank);
+  unsigned tick=atomic_load(&fixture->heartbeat)+1;atomic_store(&fixture->heartbeat,tick);
+  require(copy_mirror(fixture,&out),"duplicate settled snapshot readback");bank_apply(&bank,&out,tick);
+  in.flights[at]=(InputFlight){.flight=seq,.field=GLOBAL_SEQ_DUPLICATE,.expires=120000,.global_owner=channel_owner_id(editor),.global_epoch=epoch};
+  input_drain(&in,&bank,&out,tick);require(!in.error&&in.settled==1,"the production consumer accepts the duplicate's three-event proof");}
+ command_retire();require(command_idle(command_state),"the settled duplicate reclaims its slot");
+ /* Every refusal: nothing is built, nothing is submitted, and the slot is
+  * released. A failed navigator hop or pin keeps the codes that already mean
+  * exactly that; a full project is the application's own "All Sequences are
+  * used!" refusal and gets the one appended code. */
+ struct {const char *why;unsigned code;unsigned calls;} expected[9]={
+  {"a null navigator word refuses instead of submitting a command the application would dereference",C_NATIVE_MEMBERSHIP,0},
+  {"a navigator whose vptr is not the pinned one refuses",C_NATIVE_MEMBERSHIP,0},
+  {"a missing engine object refuses at the middle hop",C_NATIVE_MEMBERSHIP,0},
+  /* The one refusal that reaches the application at all, and only its
+   * read-only first-unused rule: nothing is built and nothing is submitted. */
+  {"a project with every slot used refuses with the distinct no-destination code",C_NO_DESTINATION,1},
+  {"a current sequence whose slot index does not name it back refuses",C_NATIVE_MEMBERSHIP,0},
+  {"no current sequence refuses",C_NATIVE_MEMBERSHIP,0},
+  {"no CommandManager refuses",C_NATIVE_MEMBERSHIP,0},
+  /* Execute navigates with the destination object's own slot word, so a
+   * destination that does not name its own array position is refused after the
+   * application's read-only first-unused rule has run and before anything is
+   * built or submitted. */
+  {"a destination slot whose own slot index does not name it back refuses, after the first-unused rule and before any confirm",C_NATIVE_MEMBERSHIP,1},
+  {"an editor that no longer names the enrolled root refuses at identity",C_IDENTITY,0}};
+ for(unsigned bad=0;bad<9;bad++){
+  if(bad==0)put(audio+SEQ_DUP_AUDIO_NAVIGATOR,0);
+  else if(bad==1)put(navigator,SEQ_DUP_NAV_VTABLE_RVA+0x20);
+  else if(bad==2)put(ptr(root_object)+SEQ_DUP_ROOT_AUDIO,0);
+  else if(bad==3){duplicate_used(2,1);duplicate_used(3,1);}
+  else if(bad==4)put(duplicate_slot_array[1]+SEQ_DUP_SEQUENCE_SLOT,3);
+  else if(bad==5)put(proj+SEQ_DUP_PROJECT_CURRENT,0);
+  else if(bad==6)put(proj+SEQ_DUP_PROJECT_MANAGER,0);
+  else if(bad==7)put(duplicate_slot_array[2]+SEQ_DUP_SEQUENCE_SLOT,0);
+  else put(editor+SEQ_DUP_EDITOR_ROOT,ptr(root_object)+4);
+  unsigned bad_seq=0,bad_at=0,code=duplicate_case(editor,&bad_seq,&bad_at);
+  require(code==expected[bad].code,expected[bad].why);
+  require(duplicate_order_count==expected[bad].calls&&(!expected[bad].calls||duplicate_order[0]==DUP_CALL_FIRST),"a refused duplicate builds no block and no name and makes no confirm call, and reaches nothing native beyond the read-only first-unused rule");
+  require(atomic_load(&command_state->slots[bad_at].dispatched)!=bad_seq&&atomic_load(&command_state->slots[bad_at].done)!=bad_seq&&!native_started[bad_at]&&!atomic_load(&command_state->trace_error),"a refused duplicate neither dispatches nor completes and starts nothing native");
+  command_retire();require(atomic_load(&command_state->slots[bad_at].reclaimed)==bad_seq&&command_idle(command_state),"a refused duplicate releases its slot");
+  put(audio+SEQ_DUP_AUDIO_NAVIGATOR,navigator);put(navigator,SEQ_DUP_NAV_VTABLE_RVA);put(ptr(root_object)+SEQ_DUP_ROOT_AUDIO,audio);
+  duplicate_used(2,0);duplicate_used(3,0);put(duplicate_slot_array[1]+SEQ_DUP_SEQUENCE_SLOT,1);put(duplicate_slot_array[2]+SEQ_DUP_SEQUENCE_SLOT,2);
+  put(proj+SEQ_DUP_PROJECT_CURRENT,duplicate_slot_array[1]);put(proj+SEQ_DUP_PROJECT_MANAGER,manager);put(editor+SEQ_DUP_EDITOR_ROOT,ptr(root_object));
+ }
+ /* Recovery, and the second duplicate taking the next free slot once the first
+  * one is in use: the destination is the application's rule, not a counter. */
+ duplicate_used(2,1);
+ require(!duplicate_case(editor,&seq,&at)&&duplicate_block_words[SEQ_DUP_BLOCK_TO/4]==3&&duplicate_name_index==3,"the next duplicate after a refusal takes the next unused slot and its own default name");
+ command_retire();require(command_publish_settlement(command_state,seq),"the second duplicate settles");command_retire();
+ require(command_idle(command_state)&&!atomic_load(&command_violation)&&!atomic_load(&command_state->error)&&!atomic_load(&command_state->trace_error),"the duplicate lane publishes no diagnostic failure");
+ put(proj+SEQ_DUP_PROJECT_SEQUENCES,0);put(proj+SEQ_DUP_PROJECT_COUNT,0);put(proj+SEQ_DUP_PROJECT_CURRENT,0);put(proj+SEQ_DUP_PROJECT_MANAGER,0);put(audio+SEQ_DUP_AUDIO_NAVIGATOR,0);
+ component_sequence_first_unused=NULL;component_sequence_default_name=NULL;component_sequence_confirm=NULL;component_sequence_string_free=NULL;
+ puts("PASS Duplicate Sequence lane: the application's own CopySequence confirm still reads exactly the six block words this lane fills and still builds and submits the CopySequenceCommand through CommandManager::perform, its constructor still keeps the navigator, source and destination where execute and undo read them, execute's make-current gate is still a slot-index compare no name can skip and still calls the navigator, the first-unused rule and the default name still have the shape the lane relies on, the navigator chain is still the dispatcher's own three hops, no site is patched at the confirm, one accepted request is one first-unused query, one default name, one confirm carrying a plain zeroed block and one String release with the current sequence as the source and the first unused slot as the destination, the settlement records both slots, and a null or wrongly typed navigator, a missing engine object, a full project, a self-inconsistent or absent current sequence, a missing CommandManager, a destination slot that does not name its own array position and a re-rooted editor each refuse without building or submitting anything; execute keeps the two sequences apart and hands the destination to the copy as the object written and the source as the object read, and the copy's own prologue and used-byte carry confirm that direction (native confirm, first-unused rule, default name and String release substituted)");
+}
 static void general_checks(void){
  MirrorState *saved=fixture;CommandState *csaved=command_state;fixture=calloc(1,sizeof(*fixture));command_state=calloc(1,sizeof(*command_state));require(fixture&&command_state,"general state fixture");
  initial(1);command_initialize();observer_running=1;observer_image_bias=0;atomic_store(&command_state->alive,1);component_global_dispatch=global_dispatch_fixture;
@@ -973,12 +1579,62 @@ static void general_checks(void){
  c=context();c.r[0]=toggle_properties;call(&c,CH_RECORD_OWNER);c.r[4]=toggle_properties;c.r[3]=0;call(&c,CH_RECORD_BIRTH);
  c=context();c.r[0]=toggle_click;call(&c,GL_CLICK_OWNER);c.r[4]=toggle_click;c.r[3]=0;call(&c,GL_CLICK_BIRTH);
  seed_fixture(0,0,0x3f000000,1);load_fixture();
- for(unsigned i=0;i<26;i++){
-  unsigned op=i<3?CF_AUTOMATION:i<14?GLOBAL_SAVE+i-3:i<22?GLOBAL_PAGE_MAIN+i-14:GLOBAL_PLAY+i-22,bits=i<3?i:0;
+ /* The six contiguous keys plus the two appended Tab operations. */
+ require(!command_key_code(GLOBAL_SAVE)&&!command_key_code(GLOBAL_ZOOM_DOWN)&&!command_key_code(JOG_DATA)&&!command_key_modifiers(GLOBAL_KEY_ENTER),"the key table is never indexed outside the key operations");
+ require(!command_key_symbol(GLOBAL_SAVE).keysym&&!command_key_symbol(JOG_DATA).keysym&&!command_key_symbol(GLOBAL_ZOOM_DOWN).text,"the keysym table is never indexed outside the key operations");
+ /* The modifier word, the keysDown bitmap and the focused-component slot the
+  * lane names are the ones the app's own keyboard handler bc1cfc names: decode
+  * its pc-relative literals instead of restating the addresses. */
+ const unsigned char *keyboard=guarded_bytes(0xbc1cfc,0xb6c),*press_body=guarded_bytes(0xbc18ec,0x378);
+ const unsigned char *peer_body=guarded_bytes(0xb740bc,0x170),*peer_for=guarded_bytes(0xb74074,0x48);
+ const unsigned char *desktop_body=guarded_bytes(0xb73474,0x70),*find_body=guarded_bytes(0xb9a904,0x14c);
+ require(keyboard&&press_body&&peer_body&&peer_for&&desktop_body&&find_body&&guarded_bytes(0xb74600,0x24c)&&guarded_bytes(0xb899b8,0xa8),"peer keyboard handler, handleKeyPress, the peer lookup and the getPeerFor body it tail-calls, Desktop::getInstance, findComponentAt, the up/down bracket and the modifier notification guarded as whole native ranges");
+ require(KEY_STATICS_RVA+KEY_MODIFIERS_OFFSET==key_image_word(keyboard,0xbc1cfc,0xbc2838,0xbc229c,0x10),"the modifier word is the one the handler hands to juce::KeyPress");
+ require(KEY_DOWN_BITMAP_RVA==key_image_word(keyboard,0xbc1cfc,0xbc282c,0xbc21c8,0),"the keysDown bitmap is the one the handler clears on release");
+ require(KEY_DOWN_BITMAP_RVA==key_image_word(keyboard,0xbc1cfc,0xbc2810,0xbc1e20,0),"and the one it sets before delivery");
+ require(KEY_STATICS_RVA+KEY_FOCUS_OFFSET==key_image_word(press_body,0xbc18ec,0xbc1c40,0xbc18f8,0x50),"the focused-component slot is the one handleKeyPress itself reads");
+ /* The corrected peer resolution, taken from the application's own two
+  * functions rather than restated: the juce::Desktop singleton slot
+  * Desktop::getInstance reads, and the desktopComponents list and count
+  * Desktop::findComponentAt walks. */
+ require(KEY_STATICS_RVA+KEY_DESKTOP_OFFSET==key_image_word(desktop_body,0xb73474,0xb734dc,0xb7347c,KEY_DESKTOP_OFFSET),"the Desktop singleton slot is the one Desktop::getInstance reads out of the same JUCE static table");
+ {const uint32_t desktop_load=0xe5934044,count_load=0xe590403c,list_load=0xe5963034,flags_load=0xe5d03068,parent_load=0xe590000c,peer_tail=0xeaffffe5,component_load=0xe5902004;
+  require(!memcmp(desktop_body+(0xb73480-0xb73474),&desktop_load,4),"Desktop::getInstance still loads the singleton from that slot and only constructs when it is null");
+  require(!memcmp(find_body+(0xb9a908-0xb9a904),&count_load,4)&&!memcmp(find_body+(0xb9a960-0xb9a904),&list_load,4),"findComponentAt still takes the desktop component count from +0x3c and the list from +0x34");
+  require(!memcmp(peer_body,&flags_load,4)&&!memcmp(peer_body+(0xb740c8-0xb740bc),&parent_load,4)&&!memcmp(peer_body+(0xb740d8-0xb740bc),&peer_tail,4),"Component::getPeer still tests the heavyweight flag at +0x68, walks parentComponent at +0xc and tail-calls getPeerFor, so a detached component yields no peer");
+  require(!memcmp(peer_for+(0xb74098-0xb74074),&component_load,4),"getPeerFor still identifies a peer by the component at +4");}
+ {const uint32_t modifier_store=0xe5823010,bracket=0xebfec895,notify=0xebff1dcf,deliver=0xebfffd8e,clear_bit=0xe1c22007,set_bit=0xe1822007,strip=0xe3c33070;
+  require(!memcmp(keyboard+(0xbc23cc-0xbc1cfc),&modifier_store,4),"the handler still edits that modifier word in place for a modifier keysym");
+  require(!memcmp(keyboard+(0xbc23a4-0xbc1cfc),&bracket,4),"it still brackets with handleKeyUpOrDown");
+  require(!memcmp(keyboard+(0xbc2274-0xbc1cfc),&notify,4),"it still calls handleModifierKeysChange when that word changed");
+  require(!memcmp(keyboard+(0xbc22ac-0xbc1cfc),&deliver,4),"it still delivers the press through handleKeyPress");
+  require(!memcmp(keyboard+(0xbc1e1c-0xbc1cfc),&set_bit,4)&&!memcmp(keyboard+(0xbc21bc-0xbc1cfc),&clear_bit,4),"it still sets the keysDown bit on the way down and clears it on release");
+  require(!memcmp(keyboard+(0xbc22a4-0xbc1cfc),&strip,4),"and still strips the mouse-button bits out of the modifiers it passes");}
+ component_key_peer=key_peer_fixture;component_key_modifiers_changed=key_modifiers_fixture;
+ component_key_up_down=key_up_down_fixture;component_key_press=key_press_fixture;
+ static unsigned char key_peer_object[0x40] __attribute__((aligned(8)));
+ /* The application's own resolution, modelled with real objects at the real
+  * static slot: Desktop singleton -> desktopComponents[0] -> its peer, whose
+  * component word names that same top-level component back. */
+ uint32_t desktop=ptr(general_fixture_desktop),desktop_list=ptr(general_fixture_desktop_list),window=ptr(general_fixture_window);
+ put(KEY_STATICS_RVA+KEY_DESKTOP_OFFSET,desktop);put(desktop+KEY_DESKTOP_LIST,desktop_list);put(desktop+KEY_DESKTOP_COUNT,1);put(desktop_list,window);
+ general_fixture_window[KEY_COMPONENT_FLAGS]=KEY_COMPONENT_HEAVYWEIGHT;
+ key_fixture_editor=e;key_fixture_top=window;key_fixture_peer=ptr(key_peer_object);
+ put(key_fixture_peer,KEY_PEER_VTABLE_RVA);put(key_fixture_peer+KEY_PEER_COMPONENT,window);key_press_result=1;
+ for(unsigned i=0;i<28;i++){
+  unsigned op=i<3?CF_AUTOMATION:i<14?GLOBAL_SAVE+i-3:i<22?GLOBAL_PAGE_MAIN+i-14:i<26?GLOBAL_PLAY+i-22:i==26?GLOBAL_KEY_TAB:GLOBAL_KEY_BACKTAB,bits=i<3?i:0;
   CopiedMirror out;require(copy_mirror(fixture,&out),"general initial snapshot");
   uint32_t target=op==CF_AUTOMATION?g:command_transport(op)?responder:op==GLOBAL_SAVE||command_page(op)||command_key(op)||command_history(op)?e:z,field=op==CF_AUTOMATION?out.automation.incarnation:0;
   CommandRequest r={.epoch=epoch,.bits=bits,.expires=120000,.reserved=op,.field_incarnation=field,.project_owner=out.project_owner,.global_owner=command_transport(op)?out.editor_owner:channel_owner_id(target)};
   unsigned copies=transport_queue_component_manager_count(0),destroys=transport_queue_component_manager_count(1),holder_count=word(e+0x2cc);
+  /* A non-zero resting modifier word and a neighbour bit already set in the
+   * same bitmap byte, so restoring is visible and cannot be a memset. The
+   * focused-component slot alternates so both diagnostic values are settled. */
+  unsigned char neighbour=0;uint32_t modifiers_before=0x1000u+2u*i;
+  key_call_count=key_call_overflow=0;key_fixture_op=op;memset(key_press_triple,0,sizeof key_press_triple);
+  put(key_modifier_address(),modifiers_before);
+  put(KEY_STATICS_RVA+KEY_FOCUS_OFFSET,i&1?ptr(general_fixture_editor):0);
+  if(command_key(op)){neighbour=(unsigned char)(0xa5u&~key_bitmap_mask(op));*(unsigned char*)(uintptr_t)key_bitmap_address(op)=neighbour;}
   unsigned at=submit_fixture(r),seq=atomic_load(&command_state->published);command_retire();
   if(command_transport(op)){
    require(transport_queue_component_pending()&&atomic_load(&command_state->slots[at].done)!=seq&&word(e+0x2cc)==holder_count+1,"transport transfers one Editor queue-holder reference and cannot complete on UI submission");
@@ -987,9 +1643,59 @@ static void general_checks(void){
    require(!transport_queue_component_pending()&&word(e+0x2cc)==holder_count&&transport_queue_component_manager_count(1)==destroys+1,"audio completion releases holder and destroys queued callable");command_retire();
   }
   require(atomic_load(&command_state->slots[at].done)==seq&&!atomic_load(&command_state->trace_error),"native global facade whole-operation completion");
+  if(command_key(op)){
+   unsigned shift=op==GLOBAL_KEY_BACKTAB,n=shift?6u:4u;
+   static const unsigned plain[]={KEY_CALL_PEER,KEY_CALL_DOWN,KEY_CALL_PRESS,KEY_CALL_UP};
+   static const unsigned shifted[]={KEY_CALL_PEER,KEY_CALL_MODIFIERS,KEY_CALL_DOWN,KEY_CALL_PRESS,KEY_CALL_UP,KEY_CALL_MODIFIERS};
+   const unsigned *want=shift?shifted:plain;
+   unsigned char mask=key_bitmap_mask(op);uint32_t held_modifiers=modifiers_before|(shift?COMMAND_KEY_SHIFT:0u);
+   require(!key_call_overflow&&key_call_count==n,"one synthetic press makes exactly the peer keyboard calls the application's own handler makes");
+   for(unsigned k=0;k<n;k++)require(key_calls[k].kind==want[k],"and makes them in the handler's own order: peer, shift change, key down, press, key up, shift restored");
+   require(key_calls[0].bitmap==neighbour&&key_calls[0].modifiers==modifiers_before,"nothing is borrowed before the peer is qualified");
+   for(unsigned k=shift?2u:1u;k<(shift?5u:4u);k++)
+    require(key_calls[k].bitmap==(unsigned char)(neighbour|mask)&&key_calls[k].modifiers==held_modifiers,"the keysDown bit and the shift flag are set for the whole down/press/up bracket");
+   if(shift)require(key_calls[1].modifiers==held_modifiers&&key_calls[1].bitmap==neighbour&&key_calls[5].modifiers==modifiers_before&&key_calls[5].bitmap==neighbour,"the shift change is told after the word is edited and again after it is put back");
+   require(key_bitmap_byte(op)==neighbour&&word(key_modifier_address())==modifiers_before,"every borrowed word is put back, the neighbouring keysDown bits untouched");
+   require(key_press_triple[0]==command_key_code(op)&&key_press_triple[1]==command_key_modifiers(op)&&key_press_triple[2]==command_key_symbol(op).text,"the delivered juce::KeyPress carries this operation's code, shift flag and text character");
+   require(key_press_triple[2]==(op==GLOBAL_KEY_ENTER?0x0du:op==GLOBAL_KEY_CANCEL?0x1bu:op==GLOBAL_KEY_TAB||op==GLOBAL_KEY_BACKTAB?0x09u:0u),"Return, Escape and both Tabs carry their control character and the cursor keys carry none");
+   /* The diagnostic the device reads back through command-client status: the
+    * native result in bit 0, focused-component presence in bit 1. */
+   CommandSlot *key_slot=command_state->slots+at;unsigned ends=0;
+   for(unsigned lane=0;lane<COMMAND_LANES;lane++)for(unsigned j=0;j<atomic_load(&key_slot->lanes[lane].published);j++){
+    CommandEvent ev;require(command_event_read(key_slot->lanes+lane,seq,j,&ev),"key settlement event read");
+    if(ev.kind!=CE_GLOBAL_END)continue;
+    ends++;require(ev.controller==op&&ev.bits==(key_press_result|((i&1)<<1)),"the settlement event carries the native result and the focused-component diagnostic");
+   }
+   require(ends==1,"one settlement event per synthetic press");
+  }else require(!key_call_count,"a non-key global operation makes none of the peer keyboard calls");
   atomic_store(&fixture->heartbeat,i+1);require(copy_mirror(fixture,&out),"general completed snapshot");MirrorInput in={.commands=command_state};MirrorBank bank;bank_init(&bank);bank_apply(&bank,&out,i+1);
   in.flights[at]=(InputFlight){.flight=seq,.field=op,.bits=bits,.expires=120000,.field_incarnation=field,.property=op==CF_AUTOMATION?g+0xc:0,.global_owner=r.global_owner,.global_epoch=epoch};
   input_drain(&in,&bank,&out,i+1);require(!in.error&&in.settled==1,"production global consumer accepts native whole-operation proof");command_retire();require(command_idle(command_state),"general facade slot reclaims");
+ }
+ /* The peer pin and the corrected resolution both fail closed. A peer whose
+  * first word is a foreign vtable, a peer that names a different component, a
+  * desktop with no component and a top-level component that is not on the
+  * desktop are each refused at C_IDENTITY with nothing borrowed, no native
+  * press and no completion. The first case is the one that fired on the device
+  * with the old Editor-derived lookup. */
+ for(unsigned bad=0;bad<4;bad++){
+  CopiedMirror out;require(copy_mirror(fixture,&out),"key refusal snapshot");
+  CommandRequest r={.epoch=epoch,.expires=120000,.reserved=GLOBAL_KEY_TAB,.project_owner=out.project_owner,.global_owner=channel_owner_id(e)};
+  unsigned char neighbour=(unsigned char)(0xa5u&~key_bitmap_mask(GLOBAL_KEY_TAB));uint32_t modifiers_before=0x3000u+bad;
+  key_call_count=key_call_overflow=0;key_fixture_op=GLOBAL_KEY_TAB;
+  put(key_modifier_address(),modifiers_before);*(unsigned char*)(uintptr_t)key_bitmap_address(GLOBAL_KEY_TAB)=neighbour;
+  if(bad==0)put(key_fixture_peer,KEY_PEER_VTABLE_RVA+0x20);
+  else if(bad==1)put(key_fixture_peer+KEY_PEER_COMPONENT,e);
+  else if(bad==2)put(desktop+KEY_DESKTOP_COUNT,0);
+  else general_fixture_window[KEY_COMPONENT_FLAGS]=0;
+  unsigned at=submit_fixture(r),seq=atomic_load(&command_state->published);
+  require(atomic_load(&command_state->slots[at].rejected)==C_IDENTITY,"an unqualified peer refuses the key operation at C_IDENTITY");
+  require(atomic_load(&command_state->slots[at].dispatched)!=seq&&atomic_load(&command_state->slots[at].done)!=seq&&!atomic_load(&command_state->trace_error),"a refused key operation neither dispatches nor completes");
+  require(!key_call_overflow&&key_call_count==(bad<2?1u:0u),"the refusal happens at the pin, and an unresolved desktop never reaches the peer lookup");
+  require(key_bitmap_byte(GLOBAL_KEY_TAB)==neighbour&&word(key_modifier_address())==modifiers_before,"a refused key operation borrows no modifier word and no keysDown bit");
+  put(key_fixture_peer,KEY_PEER_VTABLE_RVA);put(key_fixture_peer+KEY_PEER_COMPONENT,window);
+  put(desktop+KEY_DESKTOP_COUNT,1);general_fixture_window[KEY_COMPONENT_FLAGS]=KEY_COMPONENT_HEAVYWEIGHT;
+  command_retire();require(command_idle(command_state),"refused key operation reclaims its slot");
  }
  /* Failed submissions and retired callbacks must neither block the next
   * transport nor fabricate completion. The native queue is substituted. */
@@ -1036,6 +1742,7 @@ static void general_checks(void){
  CommandRequest absent_request={.epoch=epoch,.expires=120000,.reserved=GLOBAL_LOOP_TOGGLE,.project_owner=absent.project_owner,.global_owner=absent.project_owner};
  unsigned absent_at=submit_fixture(absent_request),absent_seq=atomic_load(&command_state->published);command_retire();
  require(atomic_load(&command_state->slots[absent_at].rejected)==C_IDENTITY&&atomic_load(&command_state->slots[absent_at].reclaimed)==absent_seq&&command_idle(command_state),"no Sequence refuses without dispatch, receipt or stranded slot");
+ sequence_duplicate_checks(e,a);
  /* No native commit cannot masquerade as intent completion; an invalidated
   * current link is rejected before a post-call Sequence read. */
  CommandState *healthy_commands=command_state;
@@ -1058,7 +1765,7 @@ static void general_checks(void){
  c=context();c.r[7]=meter;call(&c,ME_STEREO);MeterCell *mc=meter_find(meter);require(mc&&atomic_load(&mc->lanes[0].left)==0x3f000000&&atomic_load(&mc->lanes[0].right)==0x3e800000,"native meter source lanes copy linear amplitude");
  atomic_store(&command_state->stop_requested,1);c=context();c.r[0]=ptr(queue_object)+4;call(&c,COMMAND_DRAIN);require(!atomic_load(&fixture->meters.tokens)&&atomic_load(&fixture->meters.closed),"explicit source stop releases all UI-owner meter demand");
  observer_running=0;free(objects);put(meter,old_meter);put(ptr(root_object)+0x388,0);free(fixture);free(command_state);fixture=saved;mirror_state=saved;command_state=csaved;
- puts("PASS Off/Read/Write whole native facade, Save/Zoom/focused key owner routing, exact Editor Undo/Redo facade and rooted TransportControlsResponder Play/Stop targets, production settlement, fresh Record/Click/Loop intent pairs and configured commit/link rejection, offscreen meter source/demand closure (native method bodies and hardware substituted)");
+ puts("PASS Off/Read/Write whole native facade, Save/Zoom/focused key owner routing, every key operation delivered in the peer keyboard handler's own shape (image-derived modifier word, keysDown bit, focused-component slot and Desktop singleton slot; the peer resolved from the application's own desktop component list rather than the enrolled Editor and refused at C_IDENTITY for a foreign vtable, a mismatched component, an empty desktop list or a detached top-level component; shift change, up/down bracket, KeyPress triple with its text character, every borrowed word put back) with its focused-component diagnostic in the settlement event and no such call for a non-key operation, exact Editor Undo/Redo facade and rooted TransportControlsResponder Play/Stop targets, production settlement, fresh Record/Click/Loop intent pairs and configured commit/link rejection, offscreen meter source/demand closure (native method bodies and hardware substituted)");
 }
 /* Native bus Programs are absent from Project.ProgramPool. Exercise the same
  * current-owner resolver used by demand and real command dispatch, with copied
@@ -1604,8 +2311,9 @@ int main(int argc,char **argv){
  component_recording_dispatch=recording_fallback_fixture;
  alarm(30);retired_key_checks();manual_checks();exercise_adjust=4096;replay_checks();
  void *v=mmap((void*)0x6930000,4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED,-1,0);require(v!=(void*)-1,"fixture Drum vtable page");put(0x6930c28,0x250ba74);put(0x6930c78,0x1375c68);
+ key_statics_reserve();
  fixture=command_file(argv[1],sizeof(MirrorState));command_state=command_file(argv[2],sizeof(CommandState));require(fixture!=MAP_FAILED&&command_state!=MAP_FAILED,"exclusive actual shared output files");
- pointer_device_checks();wheel_data_checks();processor_lifecycle_checks();repair_checks();external_close_checks();new_project_checks();heartbeat_checks();channel_checks();jog_checks();master_checks();recording_checks();general_checks();send_destination_checks();bus_membership_checks();meter_interest_checks();registration_overlap_checks();mode_acceptance_checks();io_audio_checks();io_monitor_dispatch_checks();io_sync_dispatch_checks();io_completion_checks();
+ pointer_device_checks();wheel_data_checks();focus_press_checks();processor_lifecycle_checks();repair_checks();external_close_checks();new_project_checks();heartbeat_checks();channel_checks();jog_checks();master_checks();recording_checks();general_checks();send_destination_checks();bus_membership_checks();meter_interest_checks();registration_overlap_checks();mode_acceptance_checks();io_audio_checks();io_monitor_dispatch_checks();io_sync_dispatch_checks();io_completion_checks();
  initial(1);command_state->magic=COMMAND_MAGIC;command_state->version=COMMAND_VERSION;command_state->bytes=sizeof(*command_state);command_state->capacity=COMMAND_SLOTS;command_state->pid=getpid();uint64_t start=command_process_start(getpid());command_state->start_lo=start;command_state->start_hi=start>>32;command_state->origin_sec=fixture->origin_sec;command_state->origin_nsec=fixture->origin_nsec;command_state->seconds=WINDOW_SECONDS;atomic_store(&command_state->alive,1);
  command_initialize();observer_running=1;observer_image_bias=0;component_dispatch=fake_dispatch;
  seed_fixture(0,0,0x3f000000,1);load_fixture();

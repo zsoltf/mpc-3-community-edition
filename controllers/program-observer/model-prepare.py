@@ -209,18 +209,82 @@ if command:guards += [(0xba6658,0x128),(0xba6780,0x308)]
 # functions holding the drain loops: the flush sites live inside them and the
 # hook trusts the loop structure around them, so both are verified whole.
 if command:guards += [(0xbd1e2c,0x3d4),(0xbd2200,0x188),(0x35c28f4,0xe8),(0x2b64174,0x10),(0xb74904,0x54),(0xa09c24,0xab4),(0xa0d50c,0xa78)]
+# The data wheel's push. 35c2648 is UIFocusController vtable slot 5, the
+# controller-side press entry, called (never patched) by the JOG_PRESS lane
+# exactly as 35c28f4 is called by the data-wheel lane; one complete .ARM.exidx
+# range [35c2648,35c26e8), guarded whole so the called body is install-time
+# verified. 331e6f4 is the folded global-action performer group holding
+# 331e8c4, the app's own caller: it is provenance for the receiver, the vtable
+# slot and the int argument, not something this lane calls.
+if command:guards += [(0x35c2648,0xa0),(0x331e6f4,0x490)]
+# Duplicate Sequence. All complete .ARM.exidx function ranges, so each body the
+# lane reaches is install-time verified and not only its entry address.
+# Called: 1951810 SeqEditProperties::CopySequence::Confirm, the whole operation
+# the pencil-menu dialog's Confirm button runs; 255c304 the folded accessor
+# group holding FirstUnusedSequence 255c32c (GetSequence 255c304,
+# CountUsedSequences 255c378 and CurrentSequenceIndex 255c3b0 ride the same
+# range as provenance); 25b9638 DefaultSequenceName; 911e40 the folded range
+# holding the String destructor 911f58 the creation site itself uses on its
+# temporary. Reached through Confirm and guarded as provenance for what the
+# submission runs: 13fabdc the CopySequenceCommand constructor, 1477a08
+# CommandManager::perform, 13fb584 execute, 13f8b8c undo, 25c3990 the sequence
+# copy, 1bba0e0 the navigator call execute and undo make, and 925c70 the folded
+# String range holding the copy constructor.
+if command:guards += [(0x1951810,0x3a8),(0x255c304,0xbc),(0x25b9638,0xf0),(0x911e40,0x270),
+ (0x13fabdc,0x1b8),(0x1477a08,0x22c),(0x13fb584,0x9d4),(0x13f8b8c,0x538),(0x25c3990,0xd94),(0x1bba0e0,0x178),(0x925c70,0x2d8)]
+# Synthetic key presses through the peer's own keyboard entries. All are
+# complete .ARM.exidx function ranges, so each called body is install-time
+# verified and not only its entry address: the peer lookup b740bc, the
+# ComponentPeer::getPeerFor body b74074 that it tail-calls, the up/down bracket
+# b74600, the modifier-change notification b899b8 and handleKeyPress bc18ec,
+# which this lane already called. bc1cfc, the peer's own libinput keyboard
+# handler, is the provenance for the modifier word, the keysDown bitmap and this
+# call order; b73474 (Desktop::getInstance) and b9a904 (Desktop::findComponentAt)
+# are the provenance for the Desktop singleton slot and its desktopComponents
+# list. None of those three is called here, and the writable statics they name
+# carry the load bias at runtime, so those addresses are qualified in the source
+# against the exact program headers instead of byte-guarded.
+if command:guards += [(0xb740bc,0x170),(0xb74074,0x48),(0xb74600,0x24c),(0xb899b8,0xa8),(0xbc18ec,0x378),(0xbc1cfc,0xb6c),(0xb73474,0x70),(0xb9a904,0x14c)]
 if command:guards += [(0xe4fb24,0x1f0),(0xeeedec,0x1e0),(0x1462c7c,0x1f4),(0x1dc97d8,0x7b4),(0x1dc9f8c,0x244),(0x1e88d30,0x37c),(0x1e890b4,0x380),(0x1e8943c,0x37c),(0x1e897c0,0x380),(0x1e8c020,0x1958),(0x1e8d978,0xf40),(0x1e935f0,0x4e0),(0x1e93c34,0x150),(0x264eb8c,0xec0),(0x2652224,0x10a4)]
-# Data-wheel dispatch provenance. Runtime vtable words carry the load bias, so
-# a byte guard over them would fail at install; these are recipe-time checks
-# against the pinned ELF instead. UIFocusController is the primary base of all
-# four concrete focus-controller classes, so its slots 6, 7 and 8 sit at vtable
-# +0x18, +0x1c and +0x20. Slot 8, ProcessDataWheelRotation, is the one the hook
-# calls and the one the hardware panel performer 331e9ac calls; the two
-# countless siblings are checked as provenance only.
+# Focus-controller dispatch provenance. Runtime vtable words carry the load
+# bias, so a byte guard over them would fail at install; these are recipe-time
+# checks against the pinned ELF instead. UIFocusController is the primary base
+# of all four concrete focus-controller classes, so its slots 5, 6, 7 and 8 sit
+# at vtable +0x14, +0x18, +0x1c and +0x20. Slot 8, ProcessDataWheelRotation, is
+# what the data-wheel lanes call and what the hardware panel performer 331e9ac
+# calls; slot 5, 35c2648, is the controller-side press entry the JOG_PRESS lane
+# calls and what the panel performer 331e8c4 calls for the wheel's own push. The
+# two countless siblings at +0x18 and +0x1c are checked as provenance only.
 if command:
  for vtable in (0x699ee00,0x69c3090,0x69c3af4,0x69c8f9c):
-  if struct.unpack('<3I',at(vtable+0x18,12))!=(0x35c2b04,0x35c2bdc,0x35c28f4):
-   raise SystemExit(f'focus controller vtable {vtable:x} no longer dispatches the data wheel')
+  if struct.unpack('<4I',at(vtable+0x14,16))!=(0x35c2648,0x35c2b04,0x35c2bdc,0x35c28f4):
+   raise SystemExit(f'focus controller vtable {vtable:x} no longer dispatches the data wheel and its press')
+# Duplicate Sequence provenance, recipe-time for the same reason: every word
+# below is relocated and carries the load bias at runtime.
+#
+# 1. The CopySequenceCommand vtable its constructor forms pc-relative
+#    (13fac6c ldr r3,[pc,#272] -> literal 13fad84; 13fac88 add r3,pc,r3;
+#    13fac90 add r3,r3,#676; 13fac94 str r3,[r4]) must still be 68eeb4c and
+#    must still dispatch execute at +0x20 and undo at +0x24, the two slots
+#    CommandManager::perform reaches. Recomputed from the instruction stream.
+# 2. The navigator handle's own vptr, formed the same way in its constructor
+#    1bba540 (1bba540 ldr r3,[pc,#280] -> literal 1bba660; 1bba560 add r3,pc,r3;
+#    1bba568 add r3,r3,#8; 1bba578 str r3,[r6],#20), pins the live handle
+#    against, so the source of that constant is checked rather than repeated.
+# 3. The shared control block the creation site builds takes its vptr from a
+#    GOT slot; that slot must still carry the _Sp_counted_ptr_inplace vtable
+#    whose dispose and destroy the release path calls.
+if command:
+ def pcrel(literal_at,add_at,extra=0):
+  return add_at+8+struct.unpack('<I',at(literal_at,4))[0]+extra
+ command_vtable=pcrel(0x13fad84,0x13fac88,676)
+ if command_vtable!=0x68eeb4c:raise SystemExit('CopySequenceCommand vtable no longer formed at 68eeb4c')
+ if struct.unpack('<2I',at(command_vtable+0x20,8))!=(0x13fb584,0x13f8b8c):
+  raise SystemExit('CopySequenceCommand no longer dispatches its own execute and undo')
+ navigator_vtable=pcrel(0x1bba660,0x1bba560,8)
+ if navigator_vtable!=0x689fdac:raise SystemExit('sequence navigator vtable no longer formed at 689fdac')
+ if struct.unpack('<I',at(0x6a904e0,4))[0]+8!=0x689d0a0 or struct.unpack('<2I',at(0x689d0a0+8,8))!=(0x1956a70,0x195778c):
+  raise SystemExit('shared command control block vtable or its dispose/destroy changed')
 for address,target in [(0x17b7fb4,0x25f0c9c),(0x17b80fc,0x255caa4),(0x25f1274,0x26320d4),(0x25f1284,0x255f370),(0x255fad8,0x2581890),(0xe5fc6c,0x925d58),(0x2651cf8,0x264e1d8),(0x2651f48,0x264e1d8),(0x2651ba8,0x264e1d8),(0x25178d0,0x25175cc),(0x25176d0,0x2510754)]:
  w=struct.unpack('<I',at(address,4))[0];d=w&0xffffff
  if d&0x800000:d-=1<<24

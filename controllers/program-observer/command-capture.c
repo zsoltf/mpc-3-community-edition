@@ -340,6 +340,7 @@ void command_retire(void){
 #include "jog-capture.inc"
 #include "processor-observation.inc"
 #include "master-capture.inc"
+#include "sequence-duplicate.inc"
 #include "general-capture.inc"
 #include "type-open.inc"
 #include "new-track-open.inc"
@@ -353,6 +354,7 @@ void command_retire(void){
 #include "io-capture.inc"
 #include "pointer-capture.inc"
 #include "wheel-capture.inc"
+#include "focus-press-capture.inc"
 static void service_one(Context *c,unsigned at){
  CommandSlot *slot=command_state->slots+at;
  unsigned published=atomic_load_explicit(&slot->published,memory_order_acquire);
@@ -364,6 +366,8 @@ static void service_one(Context *c,unsigned at){
  if(command_io(r.reserved)){io_input_service(c,at,&r);return;}
  if(command_qlink_mode(r.reserved)){qlink_mode_service(c,at,&r);return;}
  if(command_qlink(r.reserved)){qlink_input_service(c,at,&r);return;}
+ if(command_data_wheel(r.reserved)){wheel_command_service(c,at,&r);return;}
+ if(command_focus_press(r.reserved)){focus_press_service(c,at,&r);return;}
  if(command_jog(r.reserved)){jog_service(c,at,&r);return;}
  if(r.reserved==CF_MASTER){master_service(c,at,&r);return;}
  if(command_global(r.reserved)){global_service(c,at,&r);return;}
