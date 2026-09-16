@@ -25,6 +25,16 @@ enum {
 /* Appended command-mode source IDs; preserve every existing hook number. */
 #define M_CREATE_ENTER 294u
 #define M_CREATE_READY 295u
+/* Peer libinput pointer-device join; command mode only. */
+#define M_POINTER_DEVICE 296u
+/* Peer libinput scroll handler, after the wheel delta is stored; command only. */
+#define M_WHEEL_DATA 297u
+/* Ends of the peer's libinput drain loops, where the banked wheel notches are
+ * delivered as one native call; command mode only. Four anchors share one hook
+ * body. model-prepare.py derives a site's hook id from its position in the
+ * recipe list, so these take consecutive ids rather than one repeated id. */
+#define M_WHEEL_FLUSH 298u
+#define M_WHEEL_FLUSH_LAST 301u
 #define MODEL_FINITE_CLOSE 200u
 enum {MODEL_CONTEXT=32,MODEL_STACK,MODEL_ROOT,MODEL_INVALIDATE,MODEL_LOAD,
  MODEL_SNAPSHOT,MODEL_TRACK,MODEL_PROGRAM,MODEL_SCALARS,MODEL_FLAGS,MODEL_NAME,

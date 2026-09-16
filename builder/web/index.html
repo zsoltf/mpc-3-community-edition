@@ -90,7 +90,7 @@
 <body>
 <div class="wrap">
   <div class="top">
-    <a class="brand" href="./">MPC 3 Community Edition <small>r4</small></a>
+    <a class="brand" href="./">MPC 3 Community Edition <small>r5</small></a>
     <nav aria-label="Help">
       <a href="#builder">Image builder</a>
       <a href="guide.html">X-Touch guide</a>
@@ -105,7 +105,7 @@
       <ul class="features">
         <li class="done"><b>Mackie Control</b><span>Full Behringer X-Touch: motor faders, names, colors, meters, sends, drum pad mix, inserts, Q-Links, transport. <a href="guide.html">Guide and cheat sheet</a>.</span></li>
         <li><b>Global MIDI Learn</b><span>Next on the roadmap.</span></li>
-        <li><b>Mouse support</b><span>Planned.</span></li>
+        <li class="done"><b>Mouse support</b><span>Plug in a USB mouse: the cursor appears after boot or on hot-plug, clicking and drag-select work, and the wheel acts as the data wheel for the focused control. The right button and long-tap gestures are not implemented yet.</span></li>
         <li><b>Basic VST2 support</b><span>Planned.</span></li>
       </ul>
     </div>
@@ -162,7 +162,7 @@
 
   <dl class="scope">
     <dt>Tested on</dt><dd><b>MPC Live II</b> 3.9.1, with the full X-Touch in MC/USB mode for the controller feature. Other Gen1 models are untested. Gen2 and Force are not supported.</dd>
-    <dt>This release</dt><dd>r4 fixes the audible clicks r3 produced in large projects when several faders moved at once. Details in the <a href="https://github.com/zsoltf/mpc-3-community-edition/releases" rel="noopener noreferrer">release notes</a>.</dd>
+    <dt>This release</dt><dd>r5 adds USB mouse support: a pointer, clicks and drag-select, and the wheel as the data wheel for the focused control. It keeps the r4 heavy-project audio repair. Details in the <a href="https://github.com/zsoltf/mpc-3-community-edition/releases" rel="noopener noreferrer">release notes</a>.</dd>
     <dt>Before you flash</dt><dd>Back up your projects and keep the official firmware. This page builds an image; it does not flash the MPC. Reinstalling official firmware restores stock system files.</dd>
   </dl>
 
@@ -176,7 +176,7 @@
   </footer>
 </div>
 <script>
-const imageName = 'MPC-3.9.1-Gen1-CE-r4-update.img';
+const imageName = 'MPC-3.9.1-Gen1-CE-r5-update.img';
 
 
 const picker = document.querySelector('#picker');

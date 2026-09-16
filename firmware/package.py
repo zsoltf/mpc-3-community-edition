@@ -2,7 +2,7 @@
 """Copy only the accepted package files; never archive a device stage or settings."""
 import hashlib, json, pathlib, shutil, sys
 repo = pathlib.Path(__file__).resolve().parents[1]
-RUNTIME_SOURCE = '9000390'  # commit whose tree built the pinned runtime
+RUNTIME_SOURCE = '4d060dc'  # commit whose tree built the pinned runtime
 source, output = map(pathlib.Path, sys.argv[1:])
 names = 'command-observer.so command-client mirror-input mirror-read config.h mcu-session.sh mcu mpclearn-controls main-button'.split()
 manifest = {}
@@ -24,7 +24,7 @@ if manifest != qualified:
     raise SystemExit('Not the accepted '+RUNTIME_SOURCE+' package; qualify a new release first')
 if '#define WINDOW_SECONDS 0u' not in (source/'config.h').read_text():
     raise SystemExit('Timed verification packages cannot be released')
-if '#define OBSERVER_LIBRARY "/data/mpclearn-model.mcu-perf-r4/command-observer.so"' not in (source/'config.h').read_text():
+if '#define OBSERVER_LIBRARY "/data/mpclearn-model.mouse-r5/command-observer.so"' not in (source/'config.h').read_text():
     raise SystemExit('Wrong runtime path')
 output.mkdir(parents=True, exist_ok=False)
 for name in names + ['session-package.sha256']:
@@ -32,5 +32,5 @@ for name in names + ['session-package.sha256']:
 for name in ['mcu-boot.sh','mcu-boot-install.sh','mpclearn-boot.service']:
     shutil.copyfile(repo/'controllers/program-observer'/name, output/name)
 shutil.copyfile(repo/'controllers/program-observer/LICENSE', output/'LICENSE')
-(output/'BUILD.json').write_text(json.dumps({'runtime_source':RUNTIME_SOURCE, 'firmware':'3.9.1 Gen1', 'qualified_hardware':'MPC Live II + full X-Touch MC/USB', 'stage':'/data/mpclearn-model.mcu-perf-r4', 'format':'CMD31/MMV17', 'fresh_device_setup':'MCU transport is native; Global MIDI Learn and XMM profiles are not required. Disable raw X-TOUCH_INT musical input; see guide.'}, indent=2)+'\n')
+(output/'BUILD.json').write_text(json.dumps({'runtime_source':RUNTIME_SOURCE, 'firmware':'3.9.1 Gen1', 'qualified_hardware':'MPC Live II + full X-Touch MC/USB', 'stage':'/data/mpclearn-model.mouse-r5', 'format':'CMD31/MMV17', 'fresh_device_setup':'MCU transport is native; Global MIDI Learn and XMM profiles are not required. Disable raw X-TOUCH_INT musical input; see guide.'}, indent=2)+'\n')
 (output/'payload.sha256').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in sorted(output.iterdir())))

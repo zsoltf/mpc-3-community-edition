@@ -1,12 +1,13 @@
 {
-  "release": "v0.1.0-rc.2",
-  "image_revision": "r4",
+  "release": "v0.1.0-rc.3",
+  "image_revision": "r5",
   "firmware": "3.9.1 Gen1",
   "runtime_format": "CMD31/MMV17",
   "runtime_checksums": "firmware/runtime.sha256",
-  "runtime_stage": "/data/mpclearn-model.mcu-perf-r4",
+  "runtime_stage": "/data/mpclearn-model.mouse-r5",
   "qualified_hardware": "MPC Live II + full X-Touch MC/USB",
   "image_flash_tested": true,
-  "prior_image_acceptance": "r4: flashed over r3 on MPC Live II, booted, upgraded into the r4 stage and connected the controller; r3 and r2 earlier confirmed flash, boot and projects.",
-  "runtime_acceptance": "r4 heavy-project repair: on the roughly 40-track project that clicked with r3, the owner reported no clicks with eight concurrent faders, unplug/reconnect and Drum Mix, first in place and then on the flashed r4 image; bridge 4 to 8% of one core."
+  "prior_image_acceptance": "r4: flashed over r3 on MPC Live II, booted, upgraded into the r4 stage, replaced the boot helpers, connected the controller and played the heavy project cleanly; r3 and r2 earlier confirmed flash, boot and projects.",
+  "runtime_acceptance": "r5 mouse support on the owner's Live II, run in the r4 stage: cursor with no manual step after a boot with the mouse attached and after hot-plug, clicking and drag-select, and the wheel as the focused control's data wheel over tracks and presets at slow and fast speeds. The r4 heavy-project repair is retained and unchanged: no clicks with eight concurrent faders, unplug/reconnect and Drum Mix on the project that clicked with r3.",
+  "image_acceptance": "r5: flashed over r4 on MPC Live II on 2026-09-15, booted, installed the r5 stage, replaced the boot helpers, kept the r4 stage; on the flashed build the cursor appeared at boot and after hot-plug, click and drag-select worked, the wheel drove tracks and presets, and the heavy project played cleanly with the X-Touch connected. Known limit: a fast wheel spin on some sliders (volume) overshoots."
 }

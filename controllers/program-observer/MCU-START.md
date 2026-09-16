@@ -4,12 +4,12 @@ After installing Community Edition, turn on MPC, create a blank project or
 load a template/saved project, and use the X-Touch. The controller waits while
 the project chooser is open. No computer or manual command is needed in normal use.
 
-The r4 image installs its matched runtime at
-`/data/mpclearn-model.mcu-perf-r4`. Earlier r2 and r3 installations use
-different directories, which an r4 upgrade leaves in place. The selected installation is recorded in `/etc/mpclearn-boot-stage`.
+The r5 image installs its matched runtime at
+`/data/mpclearn-model.mouse-r5`. Earlier r2, r3 and r4 installations use
+different directories, which an r5 upgrade leaves in place. The selected installation is recorded in `/etc/mpclearn-boot-stage`.
 
 For buttons and operating modes, use the [X-Touch cheat sheet](../../docs/xtouch-cheatsheet.md).
-For tested scope, see the [release notes](../../docs/releases/v0.1.0-rc.2.md).
+For tested scope, see the [release notes](../../docs/releases/v0.1.0-rc.3.md).
 
 ## Connection checklist
 
@@ -38,10 +38,10 @@ cat /etc/mpclearn-boot-stage
 systemctl status mpclearn-boot.service
 ```
 
-For **r4**, use:
+For **r5**, use:
 
 ```sh
-/data/mpclearn-model.mcu-perf-r4/mcu status
+/data/mpclearn-model.mouse-r5/mcu status
 ```
 
 If the selector names an earlier stage, use that installation's `mcu` instead.
@@ -49,8 +49,8 @@ An explicit start or stop can restart the MPC application. **Save your project
 before either command.** Starting an already owned session retains it.
 
 ```sh
-/data/mpclearn-model.mcu-perf-r4/mcu start
-/data/mpclearn-model.mcu-perf-r4/mcu stop
+/data/mpclearn-model.mouse-r5/mcu start
+/data/mpclearn-model.mouse-r5/mcu stop
 ```
 
 `stop` ends the owned controller session and restores stock MPC. It does not
@@ -69,7 +69,7 @@ session. The early system service remains installed but dormant. It does not
 delete projects or the runtime package. The provisioner preserves this disabled
 state on subsequent boots and known-version upgrades.
 
-For a later one-session trial, the r4 `mcu start` command above remains available.
+For a later one-session trial, the r5 `mcu start` command above remains available.
 Restoring persistent autostart uses the maintainer boot installer, which requires
 the matched stage and access to its systemd unit directory; do not substitute an
 old stage or copy individual executables from another release.

@@ -20,7 +20,7 @@ case "${1:-}" in
   [ -d "$unit_directory" ] && [ -w "$unit_directory" ] || { echo "Unit directory is not writable: $unit_directory" >&2;exit 1; }
   state=$(systemctl is-active mpclearn-boot.service || :)
   case "$state" in active|activating|deactivating) echo 'Disable the existing boot session before changing its selection.' >&2;exit 1;; esac
-  stage=${2:-/data/mpclearn-model.mcu-perf-r4}
+  stage=${2:-/data/mpclearn-model.mouse-r5}
   case "$stage" in /data/mpclearn-model.*) ;; *) exit 2;; esac
   case "$stage" in *[!a-zA-Z0-9/._-]*) exit 2;; esac
   [ -d "$stage" ] && [ ! -L "$stage" ] && [ "$(stat -c %u "$stage")" = 0 ] && [ "$(stat -c %a "$stage")" = 700 ] || exit 2

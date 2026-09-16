@@ -351,6 +351,8 @@ void command_retire(void){
 #include "qlink-command.inc"
 #include "qlink-mode.inc"
 #include "io-capture.inc"
+#include "pointer-capture.inc"
+#include "wheel-capture.inc"
 static void service_one(Context *c,unsigned at){
  CommandSlot *slot=command_state->slots+at;
  unsigned published=atomic_load_explicit(&slot->published,memory_order_acquire);
@@ -552,6 +554,10 @@ static void position_point(Context *c,unsigned site,unsigned lane){
 void observer_hook(Context *c,unsigned kind){
  if(!c||kind<MODEL_HOOK_BASE||!command_state)return;
  unsigned site=kind-MODEL_HOOK_BASE;
+ /* Product hook, not a diagnostic: it enrolls no lane and publishes no row. */
+ if(site==M_POINTER_DEVICE){pointer_device_enable(c);return;}
+ if(site==M_WHEEL_DATA){wheel_data(c);return;}
+ if(site>=M_WHEEL_FLUSH&&site<=M_WHEEL_FLUSH_LAST){wheel_flush();return;}
  effects_lifecycle(c,site);
  qlink_lifecycle(site);
  if(site>=QS_DESCRIPTOR&&site<=QS_LABELS&&site!=QJ_VALUE_FANOUT){

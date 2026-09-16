@@ -4,7 +4,7 @@ Development stays in the private mpclearn project. The clean release checkout
 is a publication snapshot for **zsoltf/mpc-3-community-edition**, not a replacement
 for the development repository. Its local location is
 `artifacts/mpc-3-community-edition` under the main mpclearn checkout. Release
-attachments are in `artifacts/community-release-v0.1.0-rc.2` alongside it.
+attachments are in `artifacts/community-release-v0.1.0-rc.3` alongside it.
 Never push the private repository's history.
 
 ## 1. Create the GitHub repository
@@ -54,9 +54,9 @@ Reference: [GitHub Pages custom workflows](https://docs.github.com/en/pages/gett
 
 Open **Releases > Draft a new release**:
 
-- New tag: `v0.1.0-rc.2`, target: **main**.
-- Title: `MPC 3 Community Edition v0.1.0-rc.2`.
-- Copy the body from [release notes](releases/v0.1.0-rc.2.md).
+- New tag: `v0.1.0-rc.3`, target: **main**.
+- Title: `MPC 3 Community Edition v0.1.0-rc.3`.
+- Copy the body from [release notes](releases/v0.1.0-rc.3.md).
 - Check **Set as a pre-release**.
 - Attach only the prepared website ZIP, runtime payload archive and SHA256SUMS.
   GitHub supplies source archives automatically.
@@ -64,8 +64,9 @@ Open **Releases > Draft a new release**:
   SSH keys, MPC.settings, projects or private research exports.
 
 Save a draft while preparing. The release notes record the r4 flash, boot and
-upgrade on the owner's Live II. Keep the experimental pre-release label while
-community testing expands hardware and long-session coverage.
+upgrade on the owner's Live II, and state that the r5 image itself has not been
+flashed yet. Keep the experimental pre-release label while community testing
+expands hardware and long-session coverage.
 
 ## Later updates
 

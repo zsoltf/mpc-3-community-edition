@@ -8,7 +8,7 @@
 #ifdef VOLUME_MIRROR
 #undef PATCH_COUNT
 #if defined(MIRROR_COMMAND)
-#define PATCH_COUNT 290u
+#define PATCH_COUNT 296u
 #elif defined(UI_WITNESS)
 #define PATCH_COUNT 31u
 #else

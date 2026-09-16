@@ -123,13 +123,41 @@ if mirror:
   # at the ordinary return after Project initialization and page transition.
   sites += [(0xe45844,'08d04de2f4426de1'),(0xe45b2c,'fcd08de2d040cde1')]
   selected += [294,295]
+  # Peer libinput device join: both add and remove reach ba6884 with the live
+  # cursor state object in r6 and the pointer-device vector already updated,
+  # and the app itself tail-calls the cursor show/move routine at ba68a8.
+  # The two displaced loads are plain offsets, not literal or branch words.
+  sites += [(0xba6884,'301096e5342096e5')]
+  selected += [296]
+  # Peer SCROLL_WHEEL handler bd2008 (the event switch at bd2224 sends libinput
+  # type 404 here through bd2300; 405/406 finger/continuous go to bd1e2c, which
+  # a USB mouse never reaches). At bd20e0 both get_scroll_value_v120 calls have
+  # stored deltaX at [r6] and the negated deltaY at [r6+4], which is the only
+  # input the wheel hook reads. The displaced pair is a plain NEON load and an
+  # SP add, no literal and no branch word. .ARM.exidx folds both scroll handlers
+  # into one range, so the bd1e2c guard already covers bd2008.
+  sites += [(0xbd20e0,'8f0764f410308de2')]
+  selected += [297]
+  # Peer libinput wrappers, where the banked notches become one native
+  # data-wheel call. libinput_dispatch runs once at the top of each loop and the
+  # loop drains get_event to NULL on the callback's own thread, so one visit to
+  # a post-drain block is one drain. Two wrapper functions hold two loop copies
+  # each: a0a0d0 and a0d9f0 are the blocks immediately after their drains, which
+  # deliver; a09c90 and a0d5e4 are the third test of the post-poll() fd-flag
+  # dispatch chain near the loop head (poll@plt at a0d5b4, flag half-words at
+  # +98/+106/+114/+122), run once per wake before the drain with an empty
+  # accumulator, so they cost one load and cannot split a burst. Each displaced
+  # pair is ldrsh r3,[r7|r4,#114] plus cmp r3,#0: no literal and no branch word.
+  sites += [(0xa0a0d0,'f237d7e1000053e3'),(0xa0d9f0,'f237d4e1000053e3'),
+   (0xa09c90,'f237d7e1000053e3'),(0xa0d5e4,'f237d4e1000053e3')]
+  selected += [298,299,300,301]
  sites=[sites[i] for i in selected]
 for a,h in sites:
  if at(a,8).hex()!=h:raise SystemExit(f'raw recipe changed at {a:x}')
 if command:
- # The new create pairs must not replace any native retry/branch destination
- # with their inline jump literal. Scan direct B/BL in the complete RX image.
- interiors={0xe45848,0xe45b30}
+ # The new create and pointer pairs must not replace any native retry/branch
+ # destination with their inline jump literal. Scan direct B/BL in the whole RX image.
+ interiors={0xe45848,0xe45b30,0xba6888,0xbd20e4,0xa0a0d4,0xa0d9f4,0xa09c94,0xa0d5e8}
  for typ,off,va,pa,size,mem,flags,align in loads:
   if typ!=1 or not flags&1:continue
   for offset in range(0,size-3,4):
@@ -161,7 +189,38 @@ if command:guards += [(0x25701f0,0x23c),(0x15951e4,0x1b0),(0x158bbb0,0x28),(0xa1
 if command:guards += [(0x2437188,0x100),(0x2435bcc,0xa0),(0x243820c,0x28),(0x2436a3c,0x24),(0x2433af4,0x30),(0x24345d0,0x20),(0x2434724,0x70),(0x24aa5ac,0x2d4),(0x24aa91c,0x110),(0x242e8fc,0x80),(0x2430d80,0x140),(0x24bb9f0,0x84),(0x249ea40,0x2b0),(0x1dd220c,0xa0)]
 if command:guards += [(0x11bcd54,0x58),(0x11c0fe0,0x568),(0x11c2104,0x178),(0x11bcc70,0xe4),(0x11bbd84,0x598),(0x1174ed0,0x198),(0x1f5ae64,0x20)]
 if command:guards += [(0x14e6768,0x250),(0x14e0634,0x3f0),(0x14e1bbc,0xe48),(0x128f708,0x74),(0x12c5abc,0x54),(0x11b6d28,0x17c),(0x11b86d8,0x258),(0x11b77f0,8),(0x14e040c,0x224),(0x14e3a50,0x2f4)]
+# Pointer enable setter and the peer device handler that hosts the hook: both
+# complete native functions, so the called setter and the surrounding control
+# flow are install-time verified, not only the eight displaced bytes.
+if command:guards += [(0xba6658,0x128),(0xba6780,0x308)]
+# Mouse wheel -> data wheel: the folded scroll-handler range that contains the
+# SCROLL_WHEEL handler supplying the delta, and the folded DataWheelUp/
+# DataWheelDown pair the hook calls. Both complete native ranges, so the called
+# dispatch and the control flow around the site are install-time verified, not
+# only the eight displaced bytes. The third range is the app's own active-
+# focus-controller accessor: the hook does not call it, but its PC-relative
+# literal is where the slot address comes from, so pinning it keeps that
+# provenance install-time verified too. bd2200 is the peer event switch: its
+# jump table is what routes libinput type 404 SCROLL_WHEEL to the handler that
+# holds the site, and 405/406 elsewhere, so that routing is verified too. The
+# fifth is the head of the hardware path's liveness walk: the hook does not
+# call it either, but it is where the component flag bit the hook tests comes
+# from, so that bit stays image-derived. The last two are the libinput wrapper
+# functions holding the drain loops: the flush sites live inside them and the
+# hook trusts the loop structure around them, so both are verified whole.
+if command:guards += [(0xbd1e2c,0x3d4),(0xbd2200,0x188),(0x35c28f4,0xe8),(0x2b64174,0x10),(0xb74904,0x54),(0xa09c24,0xab4),(0xa0d50c,0xa78)]
 if command:guards += [(0xe4fb24,0x1f0),(0xeeedec,0x1e0),(0x1462c7c,0x1f4),(0x1dc97d8,0x7b4),(0x1dc9f8c,0x244),(0x1e88d30,0x37c),(0x1e890b4,0x380),(0x1e8943c,0x37c),(0x1e897c0,0x380),(0x1e8c020,0x1958),(0x1e8d978,0xf40),(0x1e935f0,0x4e0),(0x1e93c34,0x150),(0x264eb8c,0xec0),(0x2652224,0x10a4)]
+# Data-wheel dispatch provenance. Runtime vtable words carry the load bias, so
+# a byte guard over them would fail at install; these are recipe-time checks
+# against the pinned ELF instead. UIFocusController is the primary base of all
+# four concrete focus-controller classes, so its slots 6, 7 and 8 sit at vtable
+# +0x18, +0x1c and +0x20. Slot 8, ProcessDataWheelRotation, is the one the hook
+# calls and the one the hardware panel performer 331e9ac calls; the two
+# countless siblings are checked as provenance only.
+if command:
+ for vtable in (0x699ee00,0x69c3090,0x69c3af4,0x69c8f9c):
+  if struct.unpack('<3I',at(vtable+0x18,12))!=(0x35c2b04,0x35c2bdc,0x35c28f4):
+   raise SystemExit(f'focus controller vtable {vtable:x} no longer dispatches the data wheel')
 for address,target in [(0x17b7fb4,0x25f0c9c),(0x17b80fc,0x255caa4),(0x25f1274,0x26320d4),(0x25f1284,0x255f370),(0x255fad8,0x2581890),(0xe5fc6c,0x925d58),(0x2651cf8,0x264e1d8),(0x2651f48,0x264e1d8),(0x2651ba8,0x264e1d8),(0x25178d0,0x25175cc),(0x25176d0,0x2510754)]:
  w=struct.unpack('<I',at(address,4))[0];d=w&0xffffff
  if d&0x800000:d-=1<<24

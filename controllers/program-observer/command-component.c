@@ -146,6 +146,9 @@ static void replay_checks(void){
   if(hook_ids[i]==IO_AUDIO_MONITOR_COPY)in.r[7]=ptr(program_objects[2]); /* copied enum load uses native source P+2000 */
   if(anchor[i]==0x2374f88)in.r[2]=0; /* displaced indexed load uses a byte offset */
   if(hook_ids[i]==GL_AUTO_STATE)in.r[7]=ptr(program_objects[2]); /* displaced pair loads through r7 */
+  if(hook_ids[i]==M_POINTER_DEVICE)in.r[6]=ptr(track_objects[0]); /* displaced pair loads cursor x/y through the cursor state object in r6 */
+  if(hook_ids[i]==M_WHEEL_DATA)in.r[4]=ptr(track_objects[0]); /* displaced NEON pair loads the cursor x/y vector through r4 */
+  if(hook_ids[i]>=M_WHEEL_FLUSH&&hook_ids[i]<=M_WHEEL_FLUSH_LAST){in.r[7]=ptr(track_objects[0]);in.r[4]=ptr(track_objects[0]);} /* displaced ldrsh reads +114 through r7 or r4 */
   /* Adjacent native hooks are legal. Install this fixture's one-pair
    * continuation immediately before its exercise, so another site's +8
    * continuation cannot overwrite the pair under test. */
@@ -322,6 +325,274 @@ static void external_close_checks(void){
  require(command_publish_request(command_state,&external_request),"external publication before stop");command_close();require(command_finalize()&&atomic_load(&command_state->error)==C_CLOSED,"publication-before-stop cannot masquerade as successful consumption");
  free(fixture);free(command_state);fixture=saved_fixture;mirror_state=fixture;command_state=saved_commands;
  puts("PASS actual CMD13 external helpers: paused admission/payload/frontier/settled vs finite close; stop recheck, admitted work drain, explicit stranded error and byte-immutable closed state");
+}
+/* USB mouse support. The enable is a native call into the app's own setter, so
+ * the recipe, the called function and the host handler are checked against the
+ * exact image bytes the installer verifies; the substituted seam then exercises
+ * the observer's actual decision. The native setter body is NOT executed here. */
+static unsigned pointer_enable_calls,pointer_enable_argument;
+static void pointer_enable_fixture(unsigned on){pointer_enable_calls++;pointer_enable_argument=on;}
+static const unsigned char *guarded_bytes(uint32_t address,unsigned length){
+ for(unsigned g=0;g<sizeof(guards)/sizeof(guards[0]);g++)
+  if(guards[g].address<=address&&address+length<=guards[g].address+guards[g].length)return guards[g].bytes+address-guards[g].address;
+ return NULL;
+}
+static void pointer_device_checks(void){
+ unsigned site=0;while(site<PATCH_COUNT&&anchor[site]!=0xba6884)site++;
+ require(site<PATCH_COUNT&&hook_ids[site]==M_POINTER_DEVICE,"peer pointer-device join is an installed site with its own hook id");
+ const unsigned char join[8]={0x30,0x10,0x96,0xe5,0x34,0x20,0x96,0xe5};
+ require(!memcmp(expected[site],join,8),"displaced pair is the exact cursor x/y load pair");
+ require(!capture_after_pair[site]&&!relocated[site][0]&&!relocated[site][1]&&!branch_target[site][0]&&!branch_target[site][1],"plain displaced pair with no literal or branch word");
+ /* One hook body at four drain-loop anchors: consecutive ids, same recipe
+  * shape, and both host wrapper functions guarded whole. */
+ const uint32_t flush_anchors[4]={0xa0a0d0,0xa0d9f0,0xa09c90,0xa0d5e4};
+ const unsigned char flush_pair[2][8]={{0xf2,0x37,0xd7,0xe1,0x00,0x00,0x53,0xe3},{0xf2,0x37,0xd4,0xe1,0x00,0x00,0x53,0xe3}};
+ for(unsigned f=0;f<4;f++){
+  unsigned at=0;while(at<PATCH_COUNT&&anchor[at]!=flush_anchors[f])at++;
+  require(at<PATCH_COUNT,"each drain-loop end is an installed site");
+  require(hook_ids[at]>=M_WHEEL_FLUSH&&hook_ids[at]<=M_WHEEL_FLUSH_LAST,"and carries a hook id the flush body answers");
+  require(!memcmp(expected[at],flush_pair[f&1],8),"displaced pair is the exact signed half-word load and compare");
+  require(!capture_after_pair[at]&&!relocated[at][0]&&!relocated[at][1]&&!branch_target[at][0]&&!branch_target[at][1],"plain displaced pair with no literal or branch word");
+ }
+ require(guarded_bytes(0xa09c24,0xab4)&&guarded_bytes(0xa0d50c,0xa78),"both libinput drain wrappers guarded as whole native functions");
+ const unsigned char *setter=guarded_bytes(0xba6658,0x128),*handler=guarded_bytes(0xba6780,0x308);
+ require(setter&&handler,"called setter and host handler guarded as whole native functions");
+ const uint32_t enable_store=0xe5c04038,setter_tail=0xea028663,handler_tail=0xea0285e1;
+ require(!memcmp(setter+(0xba6690-0xba6658),&enable_store,4),"setter still stores the enable byte at cursor object+0x38");
+ require(!memcmp(setter+(0xba66a0-0xba6658),&setter_tail,4),"setter still tail-calls the cursor show/move routine");
+ require(!memcmp(handler+(0xba68a8-0xba6780),&handler_tail,4),"host handler reaches that same routine itself right after the join");
+ /* The cursor slot the hook checks is the one the host handler itself loads:
+  * decode its pc-relative literal rather than restating the address. */
+ const uint32_t table_load=0xe59f8288,table_add=0xe08f8008,cursor_load=0xe598602c;
+ require(!memcmp(handler+(0xba67e0-0xba6780),&table_load,4)&&!memcmp(handler+(0xba67e4-0xba6780),&table_add,4),"host handler still forms the peer static table from one pc-relative literal");
+ require(!memcmp(handler+(0xba67e8-0xba6780),&cursor_load,4),"it still takes the cursor state object from that table +0x2c");
+ uint32_t table_literal;memcpy(&table_literal,handler+(0xba6a70-0xba6780),4);
+ require(0xba67ecu+table_literal+0x2cu==POINTER_STATE_RVA,"the handler's own table literal names the exact slot the hook checks");
+ static unsigned char cursor[0x3c] __attribute__((aligned(8)));
+ static uint32_t devices[2];
+ void *peer_page=mmap((void*)0x6b22000,4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED_NOREPLACE,-1,0);
+ require(peer_page!=MAP_FAILED,"peer static table fixture page");
+ memset(command_state,0,sizeof(*command_state));initial(1);command_initialize();observer_running=1;observer_image_bias=0;atomic_store(&command_state->alive,1);
+ component_pointer_enable=pointer_enable_fixture;pointer_enable_calls=0;pointer_enable_argument=0;atomic_store(&pointer_enabled,0);
+ memset(cursor,0,sizeof cursor);
+ Context c=context();c.r[6]=ptr(cursor);
+ put(0x6b220d4,0);call(&c,M_POINTER_DEVICE);
+ require(!pointer_enable_calls,"no enable before the peer owns a cursor state object");
+ put(0x6b220d4,ptr(cursor)+4);call(&c,M_POINTER_DEVICE);
+ require(!pointer_enable_calls,"no enable for a receiver the peer's own slot does not name");
+ put(0x6b220d4,ptr(cursor));put(ptr(cursor)+0x24,ptr(devices));put(ptr(cursor)+0x28,ptr(devices));
+ call(&c,M_POINTER_DEVICE);
+ require(!pointer_enable_calls,"no enable while no pointer device is present");
+ devices[0]=0x1000;put(ptr(cursor)+0x28,ptr(devices)+4);
+ uint32_t owner=command_owner;command_owner=owner+1;call(&c,M_POINTER_DEVICE);command_owner=owner;
+ require(!pointer_enable_calls,"no enable off the thread that owns the observer's command work");
+ call(&c,M_POINTER_DEVICE);
+ require(pointer_enable_calls==1&&pointer_enable_argument==1,"present pointer device enables once through the app's own setter");
+ devices[1]=0x2000;put(ptr(cursor)+0x28,ptr(devices)+8);call(&c,M_POINTER_DEVICE);
+ put(ptr(cursor)+0x28,ptr(devices));call(&c,M_POINTER_DEVICE);
+ require(pointer_enable_calls==1,"further device add and remove events never call the setter again");
+ require(!atomic_load(&command_violation)&&!atomic_load(&command_state->error)&&!atomic_load(&mirror_state->error)&&atomic_load(&observer_running),"product hook enrolls no lane and publishes no diagnostic failure");
+ component_pointer_enable=NULL;
+ puts("PASS pointer enable recipe matches the exact image, and the observer calls the app's own setter once, only with a live peer cursor object, a present pointer device and the owning thread (native setter body substituted)");
+}
+/* USB mouse wheel -> data wheel. The recipe, the host scroll handler that
+ * supplies the delta and the called DataWheelUp/DataWheelDown pair are checked
+ * against the exact image bytes the installer verifies; the observer's own
+ * decision is then exercised with the app's active-controller slot as a
+ * fixture. The native dispatch bodies are NOT executed here. */
+static uint32_t wheel_functions[8],wheel_receivers[8],wheel_coarse[8];
+static int wheel_deltas[8];
+static uint32_t wheel_focus_receiver;
+static unsigned wheel_calls;
+static void wheel_call_fixture(uint32_t function,uint32_t receiver,int delta,unsigned coarse){
+ if(wheel_calls<8){wheel_functions[wheel_calls]=function;wheel_receivers[wheel_calls]=receiver;wheel_deltas[wheel_calls]=delta;wheel_coarse[wheel_calls]=coarse;}
+ wheel_calls++;
+}
+static void wheel_put_float(uint32_t address,float v){uint32_t bits;memcpy(&bits,&v,sizeof bits);put(address,bits);}
+/* Resolved target of an ARM BL, or 0 if the word is not one. */
+static uint32_t wheel_branch(uint32_t pc,uint32_t instruction){
+ if((instruction&0xff000000u)!=0xeb000000u)return 0;
+ int32_t displacement=(int32_t)(instruction<<8)>>6;
+ return pc+8+(uint32_t)displacement;
+}
+/* Exactly one call, to the rotation entry, on the fixture's receiver, with this
+ * signed count and coarse 0. The count is what the first device build got
+ * wrong, so nothing here accepts a repeated call. */
+static unsigned wheel_one(int delta){
+ return wheel_calls==1&&wheel_functions[0]==0x35c28f4u&&wheel_receivers[0]==wheel_focus_receiver&&wheel_deltas[0]==delta&&wheel_coarse[0]==0;
+}
+static void wheel_data_checks(void){
+ unsigned site=0;while(site<PATCH_COUNT&&anchor[site]!=0xbd20e0)site++;
+ require(site<PATCH_COUNT&&hook_ids[site]==M_WHEEL_DATA,"peer SCROLL_WHEEL handler is an installed site with its own hook id");
+ const unsigned char scroll[8]={0x8f,0x07,0x64,0xf4,0x10,0x30,0x8d,0xe2};
+ require(!memcmp(expected[site],scroll,8),"displaced pair is the exact cursor vector load and stack add");
+ require(!capture_after_pair[site]&&!relocated[site][0]&&!relocated[site][1]&&!branch_target[site][0]&&!branch_target[site][1],"plain displaced pair with no literal or branch word");
+ const unsigned char *handler=guarded_bytes(0xbd1e2c,0x3d4),*dispatch=guarded_bytes(0x35c28f4,0xe8),*accessor=guarded_bytes(0x2b64174,0x10),*dispatcher=guarded_bytes(0xbd2200,0x188);
+ require(handler&&dispatch&&accessor&&dispatcher,"folded scroll-handler range, the peer event switch, the data-wheel rotation entry and the focus accessor guarded as whole native ranges");
+ /* The mouse's own event type is 404 SCROLL_WHEEL. The switch at bd2224 is a
+  * pc-relative table: it reaches the wheel handler bd2008 through bd2300 and
+  * the finger/continuous handler bd1e2c through bd229c. The site must sit in
+  * the first, which a touchpad-only range would never see. */
+ const uint32_t table_jump=0x908ff103,wheel_arm=0xea00002d,wheel_tail=0xeaffff3c,finger_arm=0xea000013;
+ require(!memcmp(dispatcher+(0xbd222c-0xbd2200),&table_jump,4),"the switch still indexes its arms from bd2234, so type 404 is the fifth arm");
+ require(!memcmp(dispatcher+(0xbd2244-0xbd2200),&wheel_arm,4),"event switch still sends libinput type 404 to the SCROLL_WHEEL arm");
+ require(!memcmp(dispatcher+(0xbd2310-0xbd2200),&wheel_tail,4),"that arm still tail-calls the handler holding this site");
+ require(!memcmp(dispatcher+(0xbd2248-0xbd2200),&finger_arm,4),"types 405 and 406 still go to the separate finger/continuous handler");
+ const uint32_t enable_load=0xe5d43038,details_base=0xe28d6028,scale_load=0xeddf0b47,scale_multiply=0xee200b20,delta_y=0xed8d0a0b,juce_delivery=0xebfffd20;
+ require(!memcmp(handler+(0xbd2044-0xbd1e2c),&enable_load,4),"wheel handler still reads the same cursor-state enable byte at +0x38");
+ require(!memcmp(handler+(0xbd2098-0xbd1e2c),&details_base,4),"r6 at the site is still the wheel details the handler builds at sp+40");
+ require(!memcmp(handler+(0xbd20c4-0xbd1e2c),&scale_load,4)&&!memcmp(handler+(0xbd20d0-0xbd1e2c),&scale_multiply,4),"vertical v120 result is still scaled by the pc-relative double literal");
+ require(!memcmp(handler+(0xbd20d8-0xbd1e2c),&delta_y,4),"the scaled vertical delta is still stored at the wheel details +4");
+ require(!memcmp(handler+(0xbd21c8-0xbd1e2c),&juce_delivery,4),"the app's own JUCE wheel delivery still follows the site");
+ /* WHEEL_NOTCH is derived from the image, not asserted against it: both scroll
+  * reads must be the v120 API (whose detent is 120 units, unlike the plain
+  * get_scroll_value the finger handler uses), and the vertical scale literal
+  * supplies the divisor. */
+ uint32_t axis[2];memcpy(axis,handler+(0xbd20a4-0xbd1e2c),4);memcpy(axis+1,handler+(0xbd20c0-0xbd1e2c),4);
+ uint32_t v120=wheel_branch(0xbd20a4,axis[0]),other=wheel_branch(0xbd20c0,axis[1]);
+ require(v120&&v120==other,"both scroll reads still call one and the same import");
+ uint32_t plain[1];memcpy(plain,handler+(0xbd1ec8-0xbd1e2c),4);
+ require(v120!=wheel_branch(0xbd1ec8,plain[0]),"that import is not the plain get_scroll_value the finger handler calls, so it is the v120 API");
+ double horizontal,vertical;
+ memcpy(&horizontal,handler+(0xbd21e0-0xbd1e2c),8);memcpy(&vertical,handler+(0xbd21e8-0xbd1e2c),8);
+ require(horizontal==1.0/512.0&&vertical==-1.0/512.0,"the handler still scales v120 units by 1/512, negating the vertical axis");
+ require(WHEEL_NOTCH==(float)(120.0*-vertical),"WHEEL_NOTCH is one 120-unit v120 detent through the image's own scale");
+ /* The slot the hook reads is the one the app's own accessor loads: decode its
+  * pc-relative literal rather than restating the address. */
+ uint32_t accessor_words[4];memcpy(accessor_words,accessor,16);
+ require(accessor_words[0]==0xe59f3004u&&accessor_words[1]==0xe79f0003u&&accessor_words[2]==0xe12fff1eu,"focus accessor is still ldr/ldr/bx over one pc-relative literal");
+ require(0x2b64180u+accessor_words[3]==FOCUS_SLOT_RVA,"the accessor still names the exact slot the hook reads");
+ uint32_t focused_load=0xe59000e4,rotate_cast=0xeb08df1d,rotate_slot=0xe5933028,pass_coarse=0xe1a02006,pass_delta=0xe1a01005,tail=0xe12fff13;
+ require(!memcmp(dispatch+(0x35c28f4-0x35c28f4),&focused_load,4),"ProcessDataWheelRotation still starts from the controller's own focused component at +0xe4");
+ require(!memcmp(dispatch+(0x35c2944-0x35c28f4),&rotate_cast,4),"it still casts that component with the app's __dynamic_cast");
+ require(!memcmp(dispatch+(0x35c295c-0x35c28f4),&rotate_slot,4),"it still reads HWFocusable slot 10, the rotation slot that takes a count");
+ require(!memcmp(dispatch+(0x35c297c-0x35c28f4),&pass_coarse,4)&&!memcmp(dispatch+(0x35c2980-0x35c28f4),&pass_delta,4),"it still forwards this hook's delta in r1 and coarse in r2");
+ require(!memcmp(dispatch+(0x35c2998-0x35c28f4),&tail,4),"it still tail-calls that slot");
+ /* The visible flag the hook tests is the one the hardware path's own liveness
+  * walk tests, read out of that walk rather than restated. */
+ const unsigned char *liveness=guarded_bytes(0xb74904,0x54);
+ require(liveness!=NULL,"hardware liveness walk guarded as a native range");
+ const uint32_t parent_load=0xe590300c,flags_load=0xe5d02068,flag_test=0xe3120002,climb=0x1afffff8;
+ require(!memcmp(liveness+(0xb7491c-0xb74904),&parent_load,4),"the walk still climbs juce::Component parents at +0xc");
+ uint32_t flags_word;memcpy(&flags_word,liveness+(0xb7492c-0xb74904),4);
+ require(flags_word==flags_load&&(flags_word&0xfff)==WHEEL_FLAGS_OFFSET,"the walk still reads the component flags byte at the offset the hook reads");
+ uint32_t test_word;memcpy(&test_word,liveness+(0xb74930-0xb74904),4);
+ require(test_word==flag_test&&(test_word&0xff)==WHEEL_VISIBLE_FLAG,"the walk still requires the flag bit the hook requires");
+ require(!memcmp(liveness+(0xb74934-0xb74904),&climb,4),"a set bit still means keep walking, a clear bit still means not showing");
+ /* The four legal vptrs are pinned where they live, in the RW image, by
+  * model-prepare.py at recipe time: their runtime words carry the load bias,
+  * so a byte guard over them would fail at install and cannot be checked here. */
+ static unsigned char details[16] __attribute__((aligned(8)));
+ static unsigned char controller[0x100] __attribute__((aligned(8)));
+ static unsigned char focused[0x80] __attribute__((aligned(8)));
+ void *focus_page=mmap((void*)0x6b6f000,4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED_NOREPLACE,-1,0);
+ require(focus_page!=MAP_FAILED,"active focus controller slot fixture page");
+ memset(command_state,0,sizeof(*command_state));initial(1);command_initialize();observer_running=1;observer_image_bias=0;atomic_store(&command_state->alive,1);
+ command_state->magic=COMMAND_MAGIC;command_state->version=COMMAND_VERSION;command_state->bytes=sizeof(*command_state);command_state->capacity=COMMAND_SLOTS;
+ component_wheel_call=wheel_call_fixture;wheel_calls=0;wheel_remainder=0.0f;wheel_pending=0;
+ wheel_focus_receiver=ptr(controller);
+ memset(controller,0,sizeof controller);memset(focused,0,sizeof focused);
+ put(wheel_focus_receiver+WHEEL_FOCUSED_OFFSET,ptr(focused));
+ put(ptr(focused)+WHEEL_FLAGS_OFFSET,WHEEL_VISIBLE_FLAG);
+ put(0x6b6f798,wheel_focus_receiver);put(wheel_focus_receiver,wheel_focus_vtables[2]);
+ Context c=context();c.r[6]=ptr(details);
+ /* One turn of the wheel is one event plus one drain end. */
+#define WHEEL_EVENT(delta) do{wheel_put_float(ptr(details),0.0f);wheel_put_float(ptr(details)+4,(delta));call(&c,M_WHEEL_DATA);}while(0)
+#define WHEEL_DRAIN() call(&c,M_WHEEL_FLUSH)
+ uint32_t owner=command_owner;command_owner=owner+1;
+ wheel_put_float(ptr(details)+4,WHEEL_NOTCH);call(&c,M_WHEEL_DATA);WHEEL_DRAIN();
+ command_owner=owner;
+ require(!wheel_calls&&!wheel_pending,"no accumulation and no step off the thread that owns the observer's command work");
+ require(word(ptr(details)+4)!=0,"and the app's own wheel delivery is left alone there");
+ Context bad=c;bad.r[6]=1;call(&bad,M_WHEEL_DATA);WHEEL_DRAIN();
+ require(!wheel_calls,"no step for a non-pointer wheel-details register");
+ /* The JUCE delivery that follows the site must carry a zero wheel, so a list
+  * moves its selection without also scrolling its view. */
+ WHEEL_EVENT(WHEEL_NOTCH);
+ require(!word(ptr(details))&&!word(ptr(details)+4),"the hook zeroes both deltas so the app's own wheel delivery is a no-op");
+ require(!wheel_calls&&wheel_pending==1,"the event banks its notch and calls nothing");
+ WHEEL_DRAIN();
+ require(wheel_one(1)&&!wheel_pending,"the drain end delivers one call with the banked count");
+ wheel_calls=0;
+ WHEEL_DRAIN();
+ require(!wheel_calls,"a drain end with nothing banked calls nothing");
+ /* Two events inside one drain are one call carrying two. */
+ WHEEL_EVENT(WHEEL_NOTCH);WHEEL_EVENT(WHEEL_NOTCH);
+ require(!wheel_calls&&wheel_pending==2,"events inside one drain bank without calling");
+ WHEEL_DRAIN();
+ require(wheel_one(2),"two events in one drain are exactly one call with a count of two");
+ wheel_calls=0;
+ WHEEL_EVENT(-WHEEL_NOTCH);WHEEL_DRAIN();
+ require(wheel_one(-1),"one notch down is one call with a negative count");
+ wheel_calls=0;
+ put(wheel_focus_receiver+WHEEL_FOCUSED_OFFSET,0);
+ WHEEL_EVENT(WHEEL_NOTCH);WHEEL_DRAIN();
+ require(!wheel_calls,"no step while the focus controller has nothing focused");
+ put(wheel_focus_receiver+WHEEL_FOCUSED_OFFSET,ptr(focused));
+ put(ptr(focused)+WHEEL_FLAGS_OFFSET,WHEEL_VISIBLE_FLAG^0xffffffffu);
+ WHEEL_EVENT(WHEEL_NOTCH);WHEEL_DRAIN();
+ require(!wheel_calls,"no step for a focused component without the visible flag the app's own liveness walk requires");
+ put(ptr(focused)+WHEEL_FLAGS_OFFSET,WHEEL_VISIBLE_FLAG);
+ put(0x6b6f798,0);WHEEL_EVENT(WHEEL_NOTCH);WHEEL_DRAIN();
+ require(!wheel_calls,"no step while the app has no active focus controller");
+ put(0x6b6f798,1);WHEEL_EVENT(WHEEL_NOTCH);WHEEL_DRAIN();
+ require(!wheel_calls,"no step for a non-pointer focus controller slot");
+ put(0x6b6f798,wheel_focus_receiver);
+ put(wheel_focus_receiver,wheel_focus_vtables[3]+4);
+ WHEEL_EVENT(WHEEL_NOTCH);WHEEL_DRAIN();
+ require(!wheel_calls,"no step for a receiver whose vptr is not one of the four focus controllers");
+ require(!wheel_pending,"a rejected flush still clears what it banked");
+ wheel_remainder=0.0f;
+ for(unsigned v=0;v<4;v++){
+  put(wheel_focus_receiver,wheel_focus_vtables[v]);
+  WHEEL_EVENT(WHEEL_NOTCH);WHEEL_DRAIN();
+  require(wheel_one(1),"each of the four legal focus-controller vptrs takes one call with a count of one and coarse 0");
+  wheel_calls=0;
+ }
+ require(wheel_remainder==0.0f,"whole notches leave no remainder");
+ WHEEL_EVENT(WHEEL_NOTCH*3.0f);
+ wheel_put_float(ptr(details),WHEEL_NOTCH*3.0f);wheel_put_float(ptr(details)+4,0.0f);call(&c,M_WHEEL_DATA);
+ require(!word(ptr(details)),"a horizontal-only event is zeroed too");
+ WHEEL_DRAIN();
+ require(wheel_one(3),"horizontal scroll alone adds nothing to the count");
+ wheel_calls=0;
+ WHEEL_EVENT(WHEEL_NOTCH*0.5f);WHEEL_DRAIN();
+ require(!wheel_calls&&wheel_remainder>0.0f,"a sub-notch delta moves nothing and keeps its remainder");
+ WHEEL_EVENT(WHEEL_NOTCH*0.5f);WHEEL_DRAIN();
+ require(wheel_one(1)&&wheel_remainder==0.0f,"two sub-notch deltas across two drains complete one notch");
+ wheel_calls=0;
+ WHEEL_EVENT(WHEEL_NOTCH*6.0f);WHEEL_DRAIN();
+ require(wheel_one(WHEEL_MAX_STEPS),"six notches in one event are clamped to one call of four");
+ require(wheel_remainder==0.0f,"clamping drops the excess whole notches instead of carrying them");
+ wheel_calls=0;
+ for(unsigned e=0;e<6;e++)WHEEL_EVENT(WHEEL_NOTCH*3.0f);
+ require(wheel_pending==WHEEL_MAX_PENDING,"a long spin inside one drain saturates the counter instead of overflowing");
+ WHEEL_DRAIN();
+ require(wheel_one(WHEEL_MAX_STEPS),"and still delivers one clamped call");
+ wheel_calls=0;
+ uint32_t rejected[3]={0x7fc00000u,0x7f800000u,0};
+ for(unsigned i=0;i<3;i++){wheel_put_float(ptr(details),0.0f);put(ptr(details)+4,rejected[i]);call(&c,M_WHEEL_DATA);WHEEL_DRAIN();}
+ require(!wheel_calls&&wheel_remainder==0.0f&&!wheel_pending,"NaN, infinity and a zero delta move nothing and never poison the accumulator");
+ /* A delta this large would overflow the notch quotient, which is undefined and
+  * saturates on VFP, leaving a remainder of millions of notches that would bank
+  * the maximum on every later event. It must be refused outright. */
+ WHEEL_EVENT(6.0e8f);
+ require(!wheel_calls&&!wheel_pending&&wheel_remainder==0.0f,"a delta past the sanity bound is refused and leaves the accumulator untouched");
+ WHEEL_DRAIN();
+ require(!wheel_calls,"and banks nothing for a later drain to deliver");
+ /* The largest accepted delta still leaves a sub-notch remainder. */
+ WHEEL_EVENT(9.99e5f);
+ require(wheel_pending==WHEEL_MAX_PENDING&&wheel_remainder>=0.0f&&wheel_remainder<WHEEL_NOTCH,"the largest accepted delta saturates the counter and keeps a bounded remainder");
+ WHEEL_DRAIN();
+ require(wheel_one(WHEEL_MAX_STEPS),"and delivers one clamped call");
+ wheel_calls=0;wheel_remainder=0.0f;wheel_pending=0;
+ require(command_state->magic==COMMAND_MAGIC&&command_state->version==COMMAND_VERSION&&mirror_state->magic==MIRROR_MAGIC&&mirror_state->version==MIRROR_VERSION,"CMD31 and MMV17 unchanged");
+ require(!atomic_load(&command_violation)&&!atomic_load(&command_state->error)&&!atomic_load(&mirror_state->error)&&atomic_load(&observer_running),"product hook enrolls no lane and publishes no diagnostic failure");
+ require(!command_state->published&&!command_state->reclaimed,"no record published and no lane enrolled");
+ component_wheel_call=NULL;wheel_remainder=0.0f;wheel_pending=0;
+#undef WHEEL_EVENT
+#undef WHEEL_DRAIN
+ puts("PASS wheel recipe matches the exact image, and the observer banks the peer's own vertical delta per event, zeroes the JUCE wheel it passes on, and delivers one clamped signed data-wheel count per drain to the app's active focus controller on the owning thread only (native ProcessDataWheelRotation substituted)");
 }
 static void new_project_checks(void){
  MirrorState *saved_fixture=fixture;CommandState *saved_commands=command_state;
@@ -1334,7 +1605,7 @@ int main(int argc,char **argv){
  alarm(30);retired_key_checks();manual_checks();exercise_adjust=4096;replay_checks();
  void *v=mmap((void*)0x6930000,4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED,-1,0);require(v!=(void*)-1,"fixture Drum vtable page");put(0x6930c28,0x250ba74);put(0x6930c78,0x1375c68);
  fixture=command_file(argv[1],sizeof(MirrorState));command_state=command_file(argv[2],sizeof(CommandState));require(fixture!=MAP_FAILED&&command_state!=MAP_FAILED,"exclusive actual shared output files");
- processor_lifecycle_checks();repair_checks();external_close_checks();new_project_checks();heartbeat_checks();channel_checks();jog_checks();master_checks();recording_checks();general_checks();send_destination_checks();bus_membership_checks();meter_interest_checks();registration_overlap_checks();mode_acceptance_checks();io_audio_checks();io_monitor_dispatch_checks();io_sync_dispatch_checks();io_completion_checks();
+ pointer_device_checks();wheel_data_checks();processor_lifecycle_checks();repair_checks();external_close_checks();new_project_checks();heartbeat_checks();channel_checks();jog_checks();master_checks();recording_checks();general_checks();send_destination_checks();bus_membership_checks();meter_interest_checks();registration_overlap_checks();mode_acceptance_checks();io_audio_checks();io_monitor_dispatch_checks();io_sync_dispatch_checks();io_completion_checks();
  initial(1);command_state->magic=COMMAND_MAGIC;command_state->version=COMMAND_VERSION;command_state->bytes=sizeof(*command_state);command_state->capacity=COMMAND_SLOTS;command_state->pid=getpid();uint64_t start=command_process_start(getpid());command_state->start_lo=start;command_state->start_hi=start>>32;command_state->origin_sec=fixture->origin_sec;command_state->origin_nsec=fixture->origin_nsec;command_state->seconds=WINDOW_SECONDS;atomic_store(&command_state->alive,1);
  command_initialize();observer_running=1;observer_image_bias=0;component_dispatch=fake_dispatch;
  seed_fixture(0,0,0x3f000000,1);load_fixture();

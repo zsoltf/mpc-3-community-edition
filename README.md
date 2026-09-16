@@ -4,10 +4,13 @@ A community build of the MPC 3.9.1 Gen1 firmware that adds features to
 standalone MPCs. You build the image yourself in a browser from Akai's official
 update file; nothing is uploaded and no firmware is distributed here.
 
-Shipped so far: Mackie Control (MCU) support, tested with an MPC Live II and a
-full Behringer X-Touch. The controller drives mixer, sends, drum pad mix,
-inserts, Q-Links and transport through MPC's own state, so motor faders,
-names, colors and meters follow whatever changes on the MPC. The roadmap below
+Shipped so far: Mackie Control (MCU) support and USB mouse support, tested with
+an MPC Live II and a full Behringer X-Touch. The controller drives mixer, sends,
+drum pad mix, inserts, Q-Links and transport through MPC's own state, so motor
+faders, names, colors and meters follow whatever changes on the MPC. Plug in a
+USB mouse and you get a cursor after boot or on hot-plug, clicking and
+drag-select, and the wheel acting as the data wheel for the focused control; the
+right button and long-tap gestures are not implemented yet. The roadmap below
 lists what comes next.
 
 - Image builder: https://zsoltf.github.io/mpc-3-community-edition/
@@ -18,7 +21,7 @@ lists what comes next.
 
 - [x] Mackie MCU support
 - [ ] Global MIDI Learn
-- [ ] Mouse support
+- [x] Mouse support
 - [ ] Basic VST2 support
 - [ ] Bonus update 1
 - [ ] Bonus update 2
@@ -43,18 +46,20 @@ lists what comes next.
    its own; no Global MIDI Learn mapping is needed.
 
 The first boot installs the runtime under `/data` and selects it for startup.
-Upgrading from an earlier r2 or r3 image keeps the previous installation and
+Upgrading from an earlier r2, r3 or r4 image keeps the previous installation and
 your settings and projects. Reinstalling official firmware restores stock
 system files.
 
 ## Status
 
-This is a release candidate. The current image (r4) fixes audible clicks that
-r3 produced in a large project when several faders moved at once. On the test
-device it played cleanly with eight faders moving, after unplugging and
-reconnecting the controller, and in Drum Mix. Long sessions and other hardware
-are not covered by testing. Details and limits are in the
-[release notes](docs/releases/v0.1.0-rc.2.md) and
+This is a release candidate. The current image (r5) adds USB mouse support and
+keeps the r4 repair for the audible clicks r3 produced in a large project when
+several faders moved at once. The mouse runtime was tested on the device: cursor
+after boot and on hot-plug, clicking and drag-select, and the wheel at slow and
+fast speeds, then the r5 image was flashed over r4 on the same device and
+re-checked. A fast wheel spin on some sliders still overshoots. Long sessions
+and other hardware are not covered by testing. Details and limits are in the
+[release notes](docs/releases/v0.1.0-rc.3.md) and
 [performance measurements](docs/performance.md).
 
 Back up your projects and keep the official firmware available before trying
