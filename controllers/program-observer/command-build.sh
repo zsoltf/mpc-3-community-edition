@@ -6,6 +6,7 @@ case "$2" in /*) ;; *) exit 2;; esac
 case "$2" in *[!A-Za-z0-9_./-]*|*/../*|*/..|*//*) exit 2;; esac
 duration=${3:-360};[ "$duration" != manual ] || duration=0;case "$duration" in *[!0-9]*|'') exit 2;; esac
 [ "$duration" -eq 0 ] || { [ "$duration" -ge 60 ] && [ "$duration" -le 900 ]; } || exit 2
+./mirror-guard.sh
 mkdir -p package/command
 python3 -B model-prepare.py "$1" package/command/pinned.h --command
 state_dir=${2%/}

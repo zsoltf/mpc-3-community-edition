@@ -62,7 +62,7 @@ static int prepare(const char *path,const char *output,const char *value_text,co
  int fd=-1;struct stat st;const MirrorState *s=map_file(path,sizeof(*s),0,&fd,&st);if(s==MAP_FAILED)return 1;int result=1;
  if(s->magic!=MIRROR_MAGIC||s->version!=MIRROR_VERSION||s->bytes!=sizeof(*s)||s->capacity!=MIRROR_CELLS||!s->pid)goto done;
  uint64_t start=command_process_start(s->pid);long hz=sysconf(_SC_CLK_TCK);if(!start||hz<=0||(uint64_t)s->origin_sec*(unsigned long)hz+(uint64_t)s->origin_nsec*(unsigned long)hz/1000000000<start||!command_process_exact(s->pid))goto done;
- CopiedMirror copy;uint32_t now;if(!copy_mirror(s,&copy)||!copy.ready||!copy.alive||copy.error)goto done;
+ MIRROR_COPY(copy);uint32_t now;if(!copy_mirror(s,&copy)||!copy.ready||!copy.alive||copy.error)goto done;
  now=command_now(s->origin_sec,s->origin_nsec);if(now==UINT32_MAX||now<copy.heartbeat||now-copy.heartbeat>=1000||!file_current(path,fd,&st)||command_process_start(s->pid)!=start)goto done;
  if(command_jog(field)){
   if(now>UINT32_MAX-120000)goto done;
@@ -80,7 +80,7 @@ static int prepare(const char *path,const char *output,const char *value_text,co
  }
  if(index==UINT_MAX){for(unsigned i=0;i<copy.count;i++)if(copy.tracks[i].vptr==0x6930c00){index=i;break;}}
  if(index>=copy.count||now>UINT32_MAX-120000)goto done;
- CopiedTrack *t=copy.tracks+index;if(field==CF_VOLUME&&midi_volume(t->vptr))field=CF_MIDI_VOLUME;CopiedField volume;const CopiedField *f=copied_field(&copy,t,command_source_field(field),&volume);if(!f||!f->available)goto done;uint32_t bits;if(command_float(field))memcpy(&bits,&value,4);else{if(value!=0&&value!=1)goto done;bits=(uint32_t)value;}if(field==CF_SELECTION?f->bits==t->track:bits==f->bits)goto done;
+ CopiedTrack *t=copy.tracks+index;if(field==CF_VOLUME&&midi_volume(t->vptr))field=CF_MIDI_VOLUME;MIRROR_FIELD(volume);const CopiedField *f=copied_field(&copy,t,command_source_field(field),&volume);if(!f||!f->available)goto done;uint32_t bits;if(command_float(field))memcpy(&bits,&value,4);else{if(value!=0&&value!=1)goto done;bits=(uint32_t)value;}if(field==CF_SELECTION?f->bits==t->track:bits==f->bits)goto done;
  r=(CommandRequest){0,s->pid,(uint32_t)start,(uint32_t)(start>>32),s->origin_sec,s->origin_nsec,copy.epoch,t->serial,t->binding,t->incarnation,bits,now,now+120000,f->bits,f->revision,field,t->track_owner,t->program_owner,field?f->incarnation:0,copy.project_owner,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
 write_request:;
  int out=open(output,O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC|O_NOFOLLOW,0600);if(out<0)goto done;int ok=write(out,&r,sizeof(r))==(ssize_t)sizeof(r);close(out);if(!ok)goto done;
@@ -126,7 +126,7 @@ static int settle(const char *command_path,const char *mirror_path){
  if(flock(fd,LOCK_EX|LOCK_NB)||!header(c)||m->magic!=MIRROR_MAGIC||m->version!=MIRROR_VERSION||m->bytes!=sizeof(*m)||m->pid!=c->pid||m->origin_sec!=c->origin_sec||m->origin_nsec!=c->origin_nsec)goto unmap;
  uint64_t start=((uint64_t)c->start_hi<<32)|c->start_lo;if(!start||command_process_start(c->pid)!=start||!command_process_exact(c->pid))goto unmap;
  if(command_idle(c)){status(c);result=0;goto unmap;}
- MirrorInput in={.commands=c};MirrorBank bank;bank_init(&bank);CopiedMirror s;
+ MirrorInput in={.commands=c};MirrorBank bank;bank_init(&bank);MIRROR_COPY(s);
  uint32_t began=command_now(c->origin_sec,c->origin_nsec);int bound=0;const char *reason="interrupted";
  while(!stopped){
   if(!file_current(command_path,fd,&st)||!file_current(mirror_path,mfd,&mst)||command_process_start(c->pid)!=start||!command_process_file(c->pid,0)){reason="source file or process identity changed";break;}
@@ -155,7 +155,7 @@ static int settle(const char *command_path,const char *mirror_path){
     const CopiedTrack *t=NULL;for(unsigned i=0;i<s.count;i++)if(s.tracks[i].serial==r.serial)t=s.tracks+i;
     if(!t||s.epoch!=r.epoch||s.project_owner!=r.project_owner||t->binding!=r.binding||t->incarnation!=r.incarnation||t->track_owner!=r.track_owner||t->program_owner!=r.program_owner)goto unmap;
     if(command_effect(r.reserved)||command_chooser(r.reserved)){InputFlight *tx=in.flights+at;*tx=(InputFlight){.flight=seq,.bits=r.bits,.expires=r.expires,.field=r.reserved,.field_incarnation=r.field_incarnation,.effect_request=r,.acknowledged=atomic_load(&q->settled)==seq};tx->target=(MotorIdentity){r.epoch,r.serial,r.binding,r.incarnation,t->track,t->program,r.track_owner,r.program_owner,0,0,0};continue;}
-    CopiedField v;const CopiedField *f=copied_field(&s,t,command_source_field(r.reserved),&v);if(!f||!f->available||(r.reserved&&f->incarnation!=r.field_incarnation))goto unmap;
+    MIRROR_FIELD(v);const CopiedField *f=copied_field(&s,t,command_source_field(r.reserved),&v);if(!f||!f->available||(r.reserved&&f->incarnation!=r.field_incarnation))goto unmap;
     InputFlight *tx=in.flights+at;*tx=(InputFlight){.flight=seq,.bits=r.bits,.expires=r.expires,.before_revision=r.before_revision,.field=r.reserved,.field_incarnation=r.field_incarnation,.property=f->property,.acknowledged=atomic_load_explicit(&q->settled,memory_order_acquire)==seq};
     tx->target=(MotorIdentity){r.epoch,r.serial,r.binding,r.incarnation,t->track,t->program,r.track_owner,r.program_owner,r.pad_owner,r.pad_index,r.pad_generation};
    }
@@ -201,7 +201,7 @@ static int session(const char *command_path,const char *mirror_path,int stop){
  if(!header(c)||!command_duration_valid(c->seconds)||m->magic!=MIRROR_MAGIC||m->version!=MIRROR_VERSION||m->bytes!=sizeof(*m)||m->pid!=c->pid||m->origin_sec!=c->origin_sec||m->origin_nsec!=c->origin_nsec)goto unmap;
  uint64_t start=((uint64_t)c->start_hi<<32)|c->start_lo;
  int process=start&&command_process_start(c->pid)==start&&command_process_file(c->pid,stop)&&command_process_start(c->pid)==start;
- CopiedMirror copy;int stable=copy_mirror(m,&copy);uint32_t now=command_now(c->origin_sec,c->origin_nsec);
+ MIRROR_COPY(copy);int stable=copy_mirror(m,&copy);uint32_t now=command_now(c->origin_sec,c->origin_nsec);
  int current=file_current(command_path,fd,&st)&&file_current(mirror_path,mfd,&mst)&&command_process_start(c->pid)==start;
  int fresh=stable&&now!=UINT32_MAX&&now>=copy.heartbeat&&now-copy.heartbeat<1000;
  int healthy=startup==2&&process&&current&&fresh&&copy.alive&&!copy.error&&atomic_load(&c->alive)&&!atomic_load(&c->error)&&!atomic_load(&c->trace_error)&&!atomic_load(&c->closed);
@@ -341,7 +341,7 @@ static int effects_interest_cli(const char *command_path,const char *mirror_path
  reason="mirror mapping unavailable";const MirrorState *m=map_file(mirror_path,sizeof(*m),0,&mfd,&mst);if(m==MAP_FAILED)goto done;
  reason="command writer already owned";if(flock(fd,LOCK_EX|LOCK_NB))goto unmap;
  reason="command/mirror header or source mismatch";if(!header(c)||m->magic!=MIRROR_MAGIC||m->version!=MIRROR_VERSION||m->bytes!=sizeof(*m)||m->pid!=c->pid||m->origin_sec!=c->origin_sec||m->origin_nsec!=c->origin_nsec)goto unmap;
- uint64_t start=((uint64_t)c->start_hi<<32)|c->start_lo;CopiedMirror copy;uint32_t now;
+ uint64_t start=((uint64_t)c->start_hi<<32)|c->start_lo;MIRROR_COPY(copy);uint32_t now;
  reason="MPC process identity or executable hash rejected";if(!start||command_process_start(c->pid)!=start||!command_process_exact(c->pid))goto unmap;
  /* Full executable qualification is slow. Copy publication and sample its
   * clock afterward, just as the settlement consumer does. */
@@ -364,7 +364,7 @@ static int qlink_interest_cli(const char *command_path,const char *mirror_path,c
  reason="mirror mapping unavailable";const MirrorState *m=map_file(mirror_path,sizeof(*m),0,&mfd,&mst);if(m==MAP_FAILED)goto done;
  reason="command writer already owned";if(flock(fd,LOCK_EX|LOCK_NB))goto unmap;
  reason="command/mirror header or source mismatch";if(!header(c)||m->magic!=MIRROR_MAGIC||m->version!=MIRROR_VERSION||m->bytes!=sizeof(*m)||m->pid!=c->pid||m->origin_sec!=c->origin_sec||m->origin_nsec!=c->origin_nsec)goto unmap;
- uint64_t start=((uint64_t)c->start_hi<<32)|c->start_lo;CopiedMirror copy;uint32_t now;
+ uint64_t start=((uint64_t)c->start_hi<<32)|c->start_lo;MIRROR_COPY(copy);uint32_t now;
  reason="MPC process identity or executable hash rejected";if(!start||command_process_start(c->pid)!=start||!command_process_exact(c->pid))goto unmap;
  /* Full executable qualification is slow. Copy publication and sample its
   * clock afterward, just as the settlement consumer does. */
@@ -387,7 +387,7 @@ static int io_interest_cli(const char *command_path,const char *mirror_path,cons
  reason="mirror mapping unavailable";const MirrorState *m=map_file(mirror_path,sizeof(*m),0,&mfd,&mst);if(m==MAP_FAILED)goto done;
  reason="command writer already owned";if(flock(fd,LOCK_EX|LOCK_NB))goto unmap;
  reason="command/mirror header or source mismatch";if(!header(c)||m->magic!=MIRROR_MAGIC||m->version!=MIRROR_VERSION||m->bytes!=sizeof(*m)||m->pid!=c->pid||m->origin_sec!=c->origin_sec||m->origin_nsec!=c->origin_nsec)goto unmap;
- uint64_t start=((uint64_t)c->start_hi<<32)|c->start_lo;CopiedMirror copy;uint32_t now;
+ uint64_t start=((uint64_t)c->start_hi<<32)|c->start_lo;MIRROR_COPY(copy);uint32_t now;
  reason="MPC process identity or executable hash rejected";if(!start||command_process_start(c->pid)!=start||!command_process_exact(c->pid))goto unmap;
  /* Full executable qualification is slow. Copy publication and sample its
   * clock afterward, just as the settlement consumer does. */
@@ -406,7 +406,7 @@ static int effects_prepare_kind(const char *mirror_path,const char *output,const
  char *end;unsigned long strip=strtoul(strip_arg,&end,10);if(!*strip_arg||*end||strip>=(enable?EFFECT_SLOTS:EFFECT_PAGE))return 2;
  float value=strtof(value_arg,&end);if(!*value_arg||*end||!isfinite(value)||value<0||value>1||(enable&&value!=0&&value!=1))return 2;
  int fd=-1,result=1;const char *reason="mirror mapping unavailable";struct stat st;const MirrorState *m=map_file(mirror_path,sizeof(*m),0,&fd,&st);if(m==MAP_FAILED){fprintf(stderr,"Effects prepare: %s\n",reason);return 1;}
- CopiedMirror s;uint32_t now;reason="mirror header mismatch";if(m->magic!=MIRROR_MAGIC||m->version!=MIRROR_VERSION||m->bytes!=sizeof(*m))goto done;
+ MIRROR_COPY(s);uint32_t now;reason="mirror header mismatch";if(m->magic!=MIRROR_MAGIC||m->version!=MIRROR_VERSION||m->bytes!=sizeof(*m))goto done;
  uint64_t start=command_process_start(m->pid);reason="MPC process identity or executable hash rejected";if(!start||!command_process_exact(m->pid))goto done;
  reason="copied source contended";if(settlement_snapshot(m,&s,&now,&reason)!=1)goto done;
  reason="source file or process identity changed";if(!file_current(mirror_path,fd,&st)||command_process_start(m->pid)!=start)goto done;
@@ -424,7 +424,7 @@ static int qlink_prepare_cli(const char *mirror_path,const char *output,const ch
  char *end;unsigned long index=mode?0:strtoul(index_arg,&end,10);if(!mode&&(!*index_arg||*end||index>=QLINK_SLOTS))return 2;
  float value=0;int32_t direction=0;if(mode){long n=strtol(value_arg,&end,10);if(!*value_arg||*end||n<-32||n>32||!n)return 2;direction=(int32_t)n;}else{value=strtof(value_arg,&end);if(!*value_arg||*end||!isfinite(value)||value<0||value>1)return 2;}
  int fd=-1,result=1;const char *reason="mirror mapping unavailable";struct stat st;const MirrorState *m=map_file(mirror_path,sizeof(*m),0,&fd,&st);if(m==MAP_FAILED){fprintf(stderr,"Q-Link prepare: %s\n",reason);return 1;}
- CopiedMirror s;uint32_t now;reason="mirror header mismatch";if(m->magic!=MIRROR_MAGIC||m->version!=MIRROR_VERSION||m->bytes!=sizeof(*m))goto done;
+ MIRROR_COPY(s);uint32_t now;reason="mirror header mismatch";if(m->magic!=MIRROR_MAGIC||m->version!=MIRROR_VERSION||m->bytes!=sizeof(*m))goto done;
  uint64_t start=command_process_start(m->pid);reason="MPC process identity or executable hash rejected";if(!start||!command_process_exact(m->pid))goto done;
  reason="copied source contended";if(settlement_snapshot(m,&s,&now,&reason)!=1)goto done;
  reason="source file or process identity changed";if(!file_current(mirror_path,fd,&st)||command_process_start(m->pid)!=start)goto done;
@@ -443,7 +443,7 @@ static int effects_prepare_cli(const char *mirror_path,const char *output,const 
 static int effects_chooser_cli(const char *mirror_path,const char *output,const char *slot_arg,const char *action){
  char *end;unsigned long slot=strtoul(slot_arg,&end,10);if(!*slot_arg||*end||slot>=EFFECT_SLOTS||(strcmp(action,"add")&&strcmp(action,"replace")))return 2;
  unsigned replace=!strcmp(action,"replace");int fd=-1,result=1;const char *reason="mirror mapping unavailable";struct stat st;const MirrorState *m=map_file(mirror_path,sizeof(*m),0,&fd,&st);if(m==MAP_FAILED){fprintf(stderr,"Chooser prepare: %s\n",reason);return 1;}
- CopiedMirror s;uint32_t now;reason="mirror header mismatch";if(m->magic!=MIRROR_MAGIC||m->version!=MIRROR_VERSION||m->bytes!=sizeof(*m))goto done;
+ MIRROR_COPY(s);uint32_t now;reason="mirror header mismatch";if(m->magic!=MIRROR_MAGIC||m->version!=MIRROR_VERSION||m->bytes!=sizeof(*m))goto done;
  uint64_t start=command_process_start(m->pid);reason="MPC process identity or executable hash rejected";if(!start||!command_process_exact(m->pid))goto done;
  reason="copied source contended";if(settlement_snapshot(m,&s,&now,&reason)!=1)goto done;
  reason="source file or process identity changed";if(!file_current(mirror_path,fd,&st)||command_process_start(m->pid)!=start)goto done;
@@ -459,7 +459,7 @@ static int io_prepare_cli(const char *mirror_path,const char *output,const char 
  char *end;unsigned long field=strtoul(field_arg,&end,10);if(!*field_arg||*end||field>=IO_FIELDS)return 2;
  long delta=strtol(delta_arg,&end,10);if(!*delta_arg||*end||!delta||delta<-32||delta>32)return 2;
  int fd=-1,result=1;const char *reason="mirror mapping unavailable";struct stat st;const MirrorState *m=map_file(mirror_path,sizeof(*m),0,&fd,&st);if(m==MAP_FAILED){fprintf(stderr,"I/O prepare: %s\n",reason);return 1;}
- CopiedMirror s;uint32_t now;reason="mirror header mismatch";if(m->magic!=MIRROR_MAGIC||m->version!=MIRROR_VERSION||m->bytes!=sizeof(*m))goto done;
+ MIRROR_COPY(s);uint32_t now;reason="mirror header mismatch";if(m->magic!=MIRROR_MAGIC||m->version!=MIRROR_VERSION||m->bytes!=sizeof(*m))goto done;
  uint64_t start=command_process_start(m->pid);reason="MPC process identity or executable hash rejected";if(!start||!command_process_exact(m->pid))goto done;
  reason="copied source contended";if(settlement_snapshot(m,&s,&now,&reason)!=1)goto done;
  reason="source file or process identity changed";if(!file_current(mirror_path,fd,&st)||command_process_start(m->pid)!=start)goto done;

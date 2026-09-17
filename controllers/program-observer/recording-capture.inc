@@ -100,17 +100,53 @@ static void recording_point(Context *c,unsigned site){
   if(recording_call.id||word(n)!=f+4||word(n+8)!=f||word(n+0x14)!=accepted[at].program||word(n+0x50)!=recording_track[at]||!recording_event(at,n+0x18)){trace_fail(C_TRACE_AMBIGUOUS);return;}
   recording_call=(RecordingCall){id,n,source_sp(c),1,0,0};recording_emit(c,CE_RECORD_ENTER,at,n,f+4);
  }else if(site==RC_APPLY){
-  if(recording_call.phase!=1||c->lr!=observer_image_bias+0x1c04b94||c->r[0]!=accepted[at].program||!recording_event(at,c->r[2])){trace_fail(C_TRACE_AMBIGUOUS);return;}
+  /* These callbacks are admitted for every one of their kind while a recording
+   * call is open on this thread, so they also see the application's own record
+   * activity - the same fork the effects lane's record branch runs through.
+   * Another call site, another receiver Program, or another queued event is
+   * proof the callback is not this command's: ignore it and leave this
+   * command's own callback free to arrive. The window stays a fault and still
+   * precedes the receipt. */
+  if(c->lr!=observer_image_bias+0x1c04b94||c->r[0]!=accepted[at].program||!recording_event(at,c->r[2]))return;
+  if(recording_call.phase!=1){trace_fail(C_TRACE_AMBIGUOUS);return;}
   recording_call.phase=2;effects_native_body(at);recording_emit(c,CE_RECORD_APPLY,at,n,f+4);
  }else if(site==RC_PRODUCER){
-  if(recording_call.phase!=1||recording_call.producer||c->lr!=observer_image_bias+0x1c04b60||!recording_event(at,c->r[2])||!typed(c->r[0],0x689fe14)||word(c->r[0]+0x80)!=recording_track[at]||word(c->r[0]+0x18)!=command_queues){trace_fail(C_TRACE_AMBIGUOUS);return;}
+  /* Another call site, a receiver that is not a producer, a producer on another
+   * Track, another queued event, or a second producer after this command's own
+   * was retained: all proof the callback is not this command's. */
+  if(c->lr!=observer_image_bias+0x1c04b60||!typed(c->r[0],0x689fe14)||word(c->r[0]+0x80)!=recording_track[at]||!recording_event(at,c->r[2])||recording_call.producer)return;
+  if(recording_call.phase!=1||word(c->r[0]+0x18)!=command_queues){trace_fail(C_TRACE_AMBIGUOUS);return;}
   recording_call.producer=c->r[0];recording_call.producer_sp=source_sp(c);atomic_store_explicit(recording_cp+at,c->r[0],memory_order_release);
  }else if(site==RC_ENQUEUER){
   uint32_t q=c->r[0];
-  if(!cp||c->r[4]!=cp||c->r[6]!=cp+0x1c||c->r[8]!=cp+0x18||!pointer(q)||!pointer(word(q))||word(word(q)+8)!=observer_image_bias+0x28c4078){trace_fail(C_TRACE_AMBIGUOUS);return;}
+  /* An ignored foreign producer must not leave its own follow-on callbacks
+   * fatal: an enqueuer for another producer, or any enqueuer at all before
+   * this command retained one, is not this command's. */
+  if(!cp||c->r[4]!=cp||c->r[6]!=cp+0x1c||c->r[8]!=cp+0x18)return;
+  /* The producer picks its enqueuer at run time: pthread_getspecific on a key
+   * held by the queue manager, falling back to the enqueuer embedded at
+   * manager+0x18. Both arms are concrete Enqueuer implementations that deliver
+   * the work, and the admitted constant only ever named the fallback one, so a
+   * Write-armed session faulted on a shape that was never wrong. Hardware
+   * measured the record path taking the thread-specific arm on all eight
+   * captured calls - NonLockingQueueEnqueuer, vtable +0x68989d0, RTTI
+   * +0x68ec4b4 - and completing normally once it was admitted. Both are
+   * admitted here rather than only the measured one, because the fallback arm
+   * is live code at this same call site and narrowing to eight rows of one
+   * session would only move the next fault.
+   * The image's third implementation, NoOpEnqueuer (slot 8 +0x28c8108), is
+   * deliberately NOT admitted: it drops the work, so retaining its queue would
+   * leave this lane holding a queue that never publishes. An object whose class
+   * cannot be read stays a fault - it cannot be told apart from this command's
+   * own enqueuer, and this is the only remaining reason to fail here. */
+  uint32_t enqueue=pointer(q)&&pointer(word(q))?word(word(q)+8):0;
+  if(enqueue!=observer_image_bias+0x134b794&&enqueue!=observer_image_bias+0x28c4078){trace_fail(C_TRACE_AMBIGUOUS);return;}
   recording_queue[at]=q+4;
  }else if(site==RC_ENQUEUE_RETURN){
-  if(!cp||c->r[0]>1||(c->r[0]&&!atomic_load(recording_work+at))||(!c->r[0]&&atomic_load(recording_work+at))){trace_fail(C_TRACE_AMBIGUOUS);return;}
+  /* No identity key exists on this return beyond the retained producer, so only
+   * the no-producer case can be positively cleared as foreign. */
+  if(!cp)return;
+  if(c->r[0]>1||(c->r[0]&&!atomic_load(recording_work+at))||(!c->r[0]&&atomic_load(recording_work+at))){trace_fail(C_TRACE_AMBIGUOUS);return;}
  }else if(site==RC_DONE){
   if(c->r[4]!=n||source_sp(c)+0x18!=recording_call.sp){trace_fail(C_TRACE_AMBIGUOUS);return;}
   recording_emit(c,CE_RECORD_DONE,at,n,f+4);memset(&recording_call,0,sizeof(recording_call));atomic_store_explicit(recording_first_done+at,1,memory_order_release);recording_complete(at);
@@ -134,11 +170,24 @@ static void recording_pad_execute(Context *c){
  unsigned request=recording_call.id?recording_call.id:invocation.request;
  unsigned at=command_find(command_state,request);
  if(at==COMMAND_SLOTS||!accepted[at].request.pad_owner)return;
- if((recording_call.id&&recording_call.phase!=2)||(!recording_call.id&&invocation.phase!=2)){trace_fail(C_TRACE_AMBIGUOUS);return;}
  if(recording_call.id&&invocation.request){trace_fail(C_TRACE_AMBIGUOUS);return;}
  const CommandRequest *r=&accepted[at].request;PadOwner *p=pad_owner(c->r[0]);PadParent *parent=pad_parent(accepted[at].program,0);
  unsigned f=pad_field(command_source_field(r->reserved));
- if(!recording_current(at)||atomic_load(&mirror_state->pads.error)||!p||!typed(c->r[0],0x692f650)||!parent||f==PF_COUNT||!atomic_load(&p->live)||!atomic_load(&p->complete)||atomic_load(&parent->revision)&1||atomic_load(&p->parent_owner)!=r->program_owner||atomic_load(&p->parent)!=accepted[at].program||atomic_load(&parent->slots[r->pad_index].owner)!=atomic_load(&p->incarnation)||c->r[1]!=accepted[at].controller||(uint32_t)c->d[0]!=accepted[at].native_bits||atomic_load(recording_pad_owner+at)){trace_fail(C_TRACE_AMBIGUOUS);return;}
+ /* This point is admitted for every pad execute made while a command call is
+  * open on this thread, exactly as the effects setter point is, so it also sees
+  * the application executing other pads. A receiver that is not a pad slot,
+  * another pad field, another value, or a repeat after this command's own
+  * execute was receipted is proof the execute is not this command's. */
+ if(!typed(c->r[0],0x692f650)||c->r[1]!=accepted[at].controller||(uint32_t)c->d[0]!=accepted[at].native_bits||atomic_load(recording_pad_owner+at))return;
+ /* A pad slot whose owner record cannot be resolved, or a lost identity on this
+  * command's own side, cannot be told apart from this command's receiver. */
+ if(!recording_current(at)||atomic_load(&mirror_state->pads.error)||!p||!parent||f==PF_COUNT){trace_fail(C_TRACE_AMBIGUOUS);return;}
+ /* A resolved pad belonging to another Program, another Program owner, or
+  * another slot of this Program is another pad: foreign. */
+ if(atomic_load(&p->parent_owner)!=r->program_owner||atomic_load(&p->parent)!=accepted[at].program||atomic_load(&parent->slots[r->pad_index].owner)!=atomic_load(&p->incarnation))return;
+ /* Relevance is spent; the window is proven only by the matching body and this
+  * fault still precedes the receipt. */
+ if(!atomic_load(&p->live)||!atomic_load(&p->complete)||(atomic_load(&parent->revision)&1)||(recording_call.id?recording_call.phase!=2:invocation.phase!=2)){trace_fail(C_TRACE_AMBIGUOUS);return;}
  PadScalar *v=p->fields+f;unsigned rev=atomic_load_explicit(&v->revision,memory_order_acquire),bits=atomic_load(&v->bits);
  if(!atomic_load(&v->live)||!atomic_load(&v->seed)||(rev&1)){trace_fail(C_TRACE_AMBIGUOUS);return;}
  unsigned id=atomic_load(&p->incarnation),property=c->r[0]+pad_offset(f);

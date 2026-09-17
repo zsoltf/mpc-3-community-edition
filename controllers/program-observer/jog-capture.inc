@@ -82,7 +82,16 @@ static void jog_point(Context *c,unsigned site){
   if(token()!=command_owner||!atomic_load(&command_in_hook)){trace_fail(C_OWNER);return;}
   if(site==JG_PUBLISH){
    uint32_t slot=c->r[10];unsigned unit=r->reserved-JOG_BAR;
-   if(atomic_load(jog_payload+at)||!pointer(slot)||slot>UINT32_MAX-20||c->r[7]!=command_queues+0xfc||c->r[9]!=((x+8)|1u)||word(slot)!=observer_image_bias+jog_invokers[unit]||word(slot+4)!=observer_image_bias+jog_managers[unit]||word(slot+8)!=x+8||word(slot+12)!=x||word(slot+16)!=r->bits){trace_fail(C_TRACE_AMBIGUOUS);return;}
+   if(!pointer(slot)||slot>UINT32_MAX-20){trace_fail(C_TRACE_AMBIGUOUS);return;}
+   /* Command history can notify other listeners during this facade call, and
+    * this generic publication seam sees their queues too - the master lane
+    * prefilters the same seam for the same reason, and midi and recording do it
+    * at the hook. Read only the source-owned header until our tag or one of our
+    * callables identifies relevant traffic; never interpret an unrelated
+    * callable's payload as ours. Any partial match still faces the complete
+    * proof below, including duplicate rejection. */
+   if(c->r[9]!=((x+8)|1u)&&word(slot)!=observer_image_bias+jog_invokers[unit]&&word(slot+4)!=observer_image_bias+jog_managers[unit])return;
+   if(atomic_load(jog_payload+at)||c->r[7]!=command_queues+0xfc||c->r[9]!=((x+8)|1u)||word(slot)!=observer_image_bias+jog_invokers[unit]||word(slot+4)!=observer_image_bias+jog_managers[unit]||word(slot+8)!=x+8||word(slot+12)!=x||word(slot+16)!=r->bits){trace_fail(C_TRACE_AMBIGUOUS);return;}
    atomic_store_explicit(jog_payload+at,slot+8,memory_order_release);
    event(c,CE_JOG_ENQUEUE,r->seq,slot+8,x+8,x,0,r->reserved,r->bits,0,r->epoch);
   }else{

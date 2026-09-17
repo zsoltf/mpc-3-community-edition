@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <pthread.h>
 #include <sys/mman.h>
@@ -7,12 +8,29 @@
 #ifndef COMMAND_COMPONENT
 #define COMMAND_COMPONENT
 #endif
+/* Owner publication has no revision word; only the store order stops a reader
+ * that has matched a token from pairing it with a retired lifetime's address or
+ * kind. This seam sits between the identity stores and the incarnation store
+ * and holds that order to its contract. Declared before the allocator is
+ * included, so it takes scalars rather than a ChannelOwner. */
+static unsigned channel_owner_publishes;
+static void channel_owner_publish(uint32_t,unsigned,unsigned,uint32_t,unsigned,unsigned);
+#define CHANNEL_OWNER_PUBLISH(o,a,k,i) channel_owner_publish(atomic_load(&(o)->address),atomic_load(&(o)->kind),atomic_load(&(o)->incarnation),(a),(k),(i))
+/* Counts the drain scan's own 39-word request reads for the skip regression. */
+static unsigned drain_request_reads;
+#define COMMAND_DRAIN_READ() (drain_request_reads++)
 #include "command-capture.c"
 #include "patch.c"
 #include "observer.c"
 #define MIRROR_READER_COMPONENT 1
+/* Deterministic reader seam: the reclamation regression re-identifies the
+ * matched cell here, between the probe match and copy_channel's in-window
+ * re-validation, with the pinned owner still live. */
+static void channel_read_pause(unsigned);
+#define CHANNEL_READ_PAUSE(n) channel_read_pause(n)
 #include "mirror-motor-core.h"
 #include "mirror-input-core.h"
+#include "mirror-poison.h"
 uint32_t route,exercise_adjust,dispatch_count;
 extern uint32_t saved_sp,captured_sp,captured_pair[2];
 void exercise(Context*,void*,Context*);void capture_a(void);
@@ -225,13 +243,23 @@ static void channel_fixture(unsigned n){
 }
 static void load_fixture(void){channel_fixture((word(ptr(pool_object)+0x38)-ptr(members))/4);Context c=context();c.r[0]=ptr(root_object);call(&c,M_RESET);c.r[2]=ptr(project_object);c.lr=0x17b7fb8;call(&c,M_LOAD_ENTER);c.r[0]=4;c.r[5]=ptr(file_handler);call(&c,M_LOAD_RETURN);call(&c,M_LOAD_READY);require(active()&&ready,"owner-qualified initial inventory");}
 
-static unsigned dispatched_calls,defer_audio;
+static unsigned dispatched_calls,defer_audio,queue_foreign;
 static uint32_t fake_program,fake_bits,fake_controller=7,fake_field;
 static void *fake_audio(void *unused){
  (void)unused;uint32_t tuple[5]={fake_program+0x40,fake_program,0x101,fake_controller,fake_bits};
+ uint32_t other[5]={fake_program+0x40,fake_program,0x101,fake_controller,fake_bits^1u};
  union {uint64_t align;unsigned char bytes[sizeof(Context)+8];} stack;
  Context *entry=(Context*)(stack.bytes+8),*body=(Context*)stack.bytes;
  *entry=context();entry->r[0]=ptr(tuple);call(entry,M_QUEUE_ENTER);
+ /* The same field moved from the touchscreen beside the surface: another
+  * writer's queue item, body and completion inside this request's window. */
+ if(queue_foreign){
+  Context f=context();f.r[0]=ptr(other);call(&f,M_QUEUE_ENTER);
+  f=context();f.lr=0x25178d4;f.r[0]=fake_program;f.r[1]=0x101;f.r[2]=fake_controller;f.d[0]=fake_bits^1u;call(&f,M_COMMAND_BODY);
+  f=context();f.lr=0x25178d4;f.r[0]=fake_program;f.r[1]=0x101;f.r[2]=fake_controller+1;f.d[0]=fake_bits;call(&f,M_COMMAND_BODY);
+  f=context();f.r[4]=ptr(other);f.r[3]=other[0];call(&f,M_QUEUE_DONE);
+  require(!atomic_load(&command_state->trace_error),"another writer's queue item, body and completion inside this request's window must not poison it");
+ }
  *body=context();body->lr=0x25178d4;body->r[0]=fake_program;body->r[1]=0x101;body->r[2]=fake_controller;body->d[0]=fake_bits;call(body,M_COMMAND_BODY);
  Context scalar=context();scalar.r[5]=fake_program+channel_offset(command_source_field(fake_field));scalar.d[8]=fake_bits;scalar.r[7]=accepted[0].request.bits;call(&scalar,fake_field==CF_MUTE?M_MUTE:fake_field==CF_SOLO?CH_BOOL_COMMIT:M_FLOAT);
  *body=context();body->r[4]=ptr(tuple);body->r[3]=tuple[0];call(body,M_QUEUE_DONE);return NULL;
@@ -908,7 +936,7 @@ static void heartbeat_checks(void){
     if(test==5||test==6)require(atomic_load(&command_state->slots[0].processed)==1&&atomic_load(&command_state->slots[0].rejected)==(test==5?C_EXPIRED:C_NOT_READY)&&!dispatched_calls,"deferred request still expires or rejects reset before dispatch");
     else{
      require(dispatched_calls==1&&atomic_load(&command_state->slots[0].done)==1&&!atomic_load(&command_state->slots[0].rejected),"caught-up heartbeat dispatches fullscale-to-lower value exactly once");
-     call(&drain,COMMAND_DRAIN);command_retire();CopiedMirror out;require(copy_mirror(fixture,&out)&&out.tracks[0].bits==r.bits&&atomic_load(&command_state->slots[0].sealed)==1,"actual copied source commit and done seal deferred request");
+     call(&drain,COMMAND_DRAIN);command_retire();MIRROR_COPY(out);require(copy_mirror(fixture,&out)&&out.tracks[0].bits==r.bits&&atomic_load(&command_state->slots[0].sealed)==1,"actual copied source commit and done seal deferred request");
      require(command_publish_settlement(command_state,1),"deferred request source settlement");call(&drain,COMMAND_DRAIN);command_retire();require(atomic_load(&command_state->reclaimed)==1&&dispatched_calls==1,"settled deferred request reclaims without duplicate dispatch");
     }
    }
@@ -918,20 +946,146 @@ static void heartbeat_checks(void){
  free(fixture);free(command_state);fixture=saved_fixture;mirror_state=fixture;command_state=saved_commands;dispatched_calls=0;
  puts("PASS captured bank2 fullscale-to-lower request: stale heartbeat defers unchanged, catch-up dispatches/source-settles once; malformed timing/origin, true expiry, reset and finite close remain guarded (native target substituted)");
 }
+/* The drain's ordinary slot scan reads a 39-word request for every slot it
+ * inspects. Every slot keeps its last published sequence forever, so without
+ * the skip the UI thread re-reads all thirty-two on every drain for nothing.
+ * These checks pin both directions: an already processed or reclaimed slot is
+ * not read, and a slot with fresh work still is. */
+static void drain_scan_checks(void){
+ MirrorState *saved_fixture=fixture;CommandState *saved_commands=command_state;
+ fixture=calloc(1,sizeof(*fixture));command_state=calloc(1,sizeof(*command_state));require(fixture&&command_state,"drain scan fixtures");
+ initial(1);command_initialize();observer_running=1;observer_image_bias=0;atomic_store(&command_state->alive,1);component_dispatch=fake_dispatch;dispatched_calls=0;
+ seed_fixture(0,0,0x3f000000,1);load_fixture();
+ Context drain=context();drain.r[0]=ptr(queue_object)+4;
+ drain_request_reads=0;call(&drain,COMMAND_DRAIN);
+ require(!drain_request_reads,"an idle mailbox costs the drain no request read");
+ CommandRequest r=request(0x3f400000);r.seq=1;unsigned at=command_free(command_state);
+ require(at<COMMAND_SLOTS&&command_publish_request_at(command_state,&r,at),"drain scan request publication");
+ drain_request_reads=0;call(&drain,COMMAND_DRAIN);
+ require(drain_request_reads==1&&atomic_load(&command_state->slots[at].processed)==1&&dispatched_calls==1,"a published unprocessed slot is read once and dispatched");
+ drain_request_reads=0;call(&drain,COMMAND_DRAIN);command_retire();
+ require(!drain_request_reads&&atomic_load(&command_state->slots[at].sealed)==1,"a processed slot is not re-read while its receipt seals");
+ require(command_publish_settlement(command_state,1),"drain scan source settlement");
+ drain_request_reads=0;call(&drain,COMMAND_DRAIN);command_retire();
+ require(!drain_request_reads&&atomic_load(&command_state->reclaimed)==1,"a settled slot reclaims without the scan re-reading it");
+ drain_request_reads=0;call(&drain,COMMAND_DRAIN);
+ require(!drain_request_reads,"a reclaimed slot whose published sequence remains is never read again");
+ /* Reuse of the same slot: published moves past both processed and reclaimed,
+  * so the skip must let the next request through on the very next drain. */
+ MIRROR_COPY(out);require(copy_mirror(fixture,&out),"drain scan reuse identity");
+ CommandRequest next=request(0x3f600000);next.seq=2;
+ require(command_publish_request_at(command_state,&next,at),"same slot republished");
+ drain_request_reads=0;call(&drain,COMMAND_DRAIN);
+ require(drain_request_reads==1&&atomic_load(&command_state->slots[at].processed)==2&&dispatched_calls==2,"a reused slot is read and dispatched on the first drain after publication");
+ require(!atomic_load(&command_state->trace_error)&&!atomic_load(&command_state->error),"drain scan skip changes no receipt or fault state");
+ free(fixture);free(command_state);fixture=saved_fixture;mirror_state=fixture;command_state=saved_commands;dispatched_calls=0;drain_request_reads=0;
+ puts("PASS UI drain slot scan reads a request only for a slot with fresh work: idle, processed, sealed, settled and reclaimed slots cost no 39-word read, and a reused slot is still dispatched on the next drain (native target substituted)");
+}
+/* The snapshot copy no longer clears every byte it is about to overwrite, and
+ * copy_channel no longer re-clears the text it never writes. Two separate
+ * properties, pinned separately below.
+ * P1, every byte a copy MUST write is written: two copies into oppositely
+ *     poisoned destinations agree. The text arrays are restored to zero by the
+ *     poison helper, because those are the bytes a destination is required to
+ *     start zero and the copy maintains rather than rewrites.
+ * P2, the text maintenance is exact: a destination reused across copies whose
+ *     contents differ - long name, then short name, then a name field that
+ *     stops resolving at all - is byte-for-byte identical to a destination
+ *     that has only ever seen that one state. */
+/* tails=1 compares every byte, including the text past each field's length,
+ * which agrees only when the tail maintenance is exact. tails=0 compares the
+ * scalars and the written part of each text, which is what a poisoned pair can
+ * be held to, since a poisoned destination's tails are zero by construction. */
+static int field_same(const CopiedField *a,const CopiedField *b,int tails){
+ if(memcmp(a,b,offsetof(CopiedField,text)))return 0;
+ unsigned n=tails?sizeof(a->text):(a->length<=CHANNEL_TEXT?a->length+1u:0u);
+ return !memcmp(a->text,b->text,n);
+}
+static int track_same(const CopiedTrack *a,const CopiedTrack *b,int tails){
+ if(memcmp(a,b,offsetof(CopiedTrack,fields)))return 0;
+ for(unsigned f=0;f<CF_COUNT;f++)if(!field_same(a->fields+f,b->fields+f,tails))return 0;
+ return !memcmp(&a->meter,&b->meter,sizeof(a->meter));
+}
+static int copy_same(const CopiedMirror *a,const CopiedMirror *b,int tails){
+ if(memcmp(a,b,offsetof(CopiedMirror,selection)))return 0;
+ const CopiedField *ha[]={&a->selection,&a->master,&a->playing,&a->automation,&a->loop,&a->record_mode,&a->click};
+ const CopiedField *hb[]={&b->selection,&b->master,&b->playing,&b->automation,&b->loop,&b->record_mode,&b->click};
+ for(unsigned i=0;i<sizeof(ha)/sizeof(ha[0]);i++)if(!field_same(ha[i],hb[i],tails))return 0;
+ if(memcmp(&a->position_available,&b->position_available,offsetof(CopiedMirror,tracks)-offsetof(CopiedMirror,position_available)))return 0;
+ if(a->count!=b->count)return 0;
+ for(unsigned i=0;i<a->count;i++)if(!track_same(a->tracks+i,b->tracks+i,tails))return 0;
+ if(memcmp(&a->master_meter,&b->master_meter,offsetof(CopiedMirror,pads)-offsetof(CopiedMirror,master_meter)))return 0;
+ if(a->pad_count!=b->pad_count)return 0;
+ for(unsigned i=0;i<a->pad_count;i++)if(!track_same(a->pads+i,b->pads+i,tails))return 0;
+ return 1;
+}
+static void rename_fixture(unsigned row,char *name){
+ put(ptr(track_objects[row])+0x468,ptr(name));
+ Context c=context();c.r[5]=ptr(track_objects[row])+0x440;call(&c,M_NAME);
+}
+static void snapshot_clear_checks(void){
+ MirrorState *saved_fixture=fixture;CommandState *saved_commands=command_state;
+ fixture=calloc(1,sizeof(*fixture));command_state=calloc(1,sizeof(*command_state));require(fixture&&command_state,"snapshot clear fixtures");
+ initial(3);command_initialize();observer_running=1;observer_image_bias=0;atomic_store(&command_state->alive,1);
+ /* Row 2 is deliberately left unseeded, so it has no volume cell and takes the
+  * no-incarnation path that writes none of the five cell-derived words. */
+ seed_fixture(0,0,0x3f000000,1);seed_fixture(1,0,0x3f400000,1);load_fixture();
+ MIRROR_COPY(pa);MIRROR_COPY(pb);
+ for(unsigned pass=0;pass<3;pass++){
+  /* pass 1 retires one Program owner, so its fields take copy_channel's early
+   * returns; pass 2 also kills a live volume cell, so the seqlock path stops
+   * qualifying. Both leave rows populated and the copy accepted. */
+  if(pass==1){Context d=context();d.r[0]=ptr(program_objects[1]);call(&d,CH_PROGRAM_DEATH);}
+  if(pass==2){Context d=context();d.r[0]=ptr(program_objects[0])+0x5b0;d.d[8]=0;call(&d,MIRROR_PROPERTY_DESTROY);}
+  mirror_poison(&pa,0xaa);require(copy_mirror(fixture,&pa)==1,"first poisoned copy accepted");
+  mirror_poison(&pb,0x55);require(copy_mirror(fixture,&pb)==1,"second poisoned copy accepted");
+  require(pa.count==3&&pb.count==3,"both copies see the same three rows");
+  require(copy_same(&pa,&pb,0),"every byte a copy must write is written, not inherited from the buffer");
+  /* The rows must also still carry the values, so a clear that simply zeroed
+   * everything could not pass this by making both copies identically empty. */
+  require(!pa.tracks[2].incarnation&&!pa.tracks[2].available&&!pa.tracks[2].revision&&!pa.tracks[2].bits&&!pa.tracks[2].seed&&!pa.tracks[2].updates,"a row with no volume cell reads as unavailable with no stale value");
+  require(pa.tracks[0].fields[CF_PAN].bits==0x3f000000&&!strcmp(pa.tracks[0].fields[CF_NAME].text,"Channel"),"the copy still carries the real field values and text");
+  require(!pa.tracks[0].fields[CF_MASTER].available&&!pa.tracks[0].fields[CF_SELECTION].available&&!pa.tracks[0].fields[CF_CLICK].available,"fields no track copy fills read as absent rather than as poison");
+  if(pass==0)require(pa.tracks[0].available&&pa.tracks[0].bits==0x3f000000&&pa.tracks[1].fields[CF_PAN].available,"a healthy row still reports its own volume and its Program fields");
+  if(pass>=1)require(!pa.tracks[1].fields[CF_PAN].available&&!pa.tracks[1].fields[CF_MUTE].available,"a retired Program owner withdraws its fields without leaving poison");
+  if(pass==2)require(!pa.tracks[0].available,"a dead volume cell withdraws the row value without leaving poison");
+ }
+ /* P2. One destination carried through five states against five destinations
+  * that each see exactly one. Step 2 is the long-name-then-short-name case and
+  * step 4 is the one that writes no text at all: a latched CF_NAME text fault
+  * makes every name copy return at its first check, so the tail the previous
+  * step left behind is the only thing that can differ. */
+ MIRROR_COPY(reused);MIRROR_COPY(f0);MIRROR_COPY(f1);MIRROR_COPY(f2);MIRROR_COPY(f3);MIRROR_COPY(f4);
+ CopiedMirror *fresh[]={&f0,&f1,&f2,&f3,&f4};
+ static char name_long[]="a deliberately long channel name here",name_short[]="Hi",name_max[]="a name of ninety characters that is very nearly the longest this observer will ever copy!";
+ static char *names[]={NULL,name_long,name_short,name_max,NULL};
+ for(unsigned step=0;step<5;step++){
+  if(step&&names[step])rename_fixture(0,names[step]);
+  if(step==4){put(ptr(track_objects[0])+0x468,1);Context c=context();c.r[5]=ptr(track_objects[0])+0x440;call(&c,M_NAME);}
+  require(copy_mirror(fixture,&reused)==1,"reused destination accepts the copy");
+  require(copy_mirror(fixture,fresh[step])==1,"fresh destination accepts the copy");
+  require(copy_same(&reused,fresh[step],1),"a destination reused across differing copies is byte-for-byte a freshly zeroed one");
+  if(step&&step<4)require(reused.tracks[0].fields[CF_NAME].available&&!strcmp(reused.tracks[0].fields[CF_NAME].text,names[step])&&reused.tracks[0].fields[CF_NAME].length==strlen(names[step]),"each renamed step really changed the copied text");
+  if(step==4)require(!reused.tracks[0].fields[CF_NAME].available&&!reused.tracks[0].fields[CF_NAME].length&&!reused.tracks[0].fields[CF_NAME].text[0],"a name field that stops resolving leaves no part of the previous name behind");
+ }
+ free(fixture);free(command_state);fixture=saved_fixture;mirror_state=fixture;command_state=saved_commands;
+ puts("PASS snapshot copy writes every byte it must and maintains the text it does not rewrite: oppositely poisoned copies agree across healthy rows, a row with no volume cell, a retired Program owner and a dead volume cell, and one destination reused through a long name, a short name, a ninety-character name and a name that stops resolving is byte-for-byte a freshly zeroed destination (native objects substituted)");
+}
 static void channel_checks(void){
  MirrorState *save=fixture;CommandState *csave=command_state;fixture=calloc(1,sizeof(*fixture));command_state=calloc(1,sizeof(*command_state));require(fixture&&command_state,"channel fixtures");
  require(mmap((void*)0x6935000,4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED,-1,0)!=MAP_FAILED,"Track method fixture");put(0x693557c,0x26500f8);
  initial(2);command_initialize();observer_running=1;observer_image_bias=0;atomic_store(&command_state->alive,1);component_dispatch=fake_dispatch;
  seed_fixture(0,0,0x3f000000,1);seed_fixture(1,0,0x3f000000,1);load_fixture();
- CopiedMirror out;require(copy_mirror(fixture,&out),"retained channel snapshot");
+ MIRROR_COPY(out);require(copy_mirror(fixture,&out),"retained channel snapshot");
  for(unsigned i=0;i<2;i++)for(unsigned f=CF_PAN;f<CF_MASTER;f++)if(f!=CF_SELECTION)require(out.tracks[i].fields[f].available&&out.tracks[i].fields[f].seed==1,"all field default births joined through independent Track/Program owners");
  require(out.selection.available&&!out.selection.bits&&out.tracks[0].fields[CF_PAN].bits==0x3f000000&&!strcmp(out.tracks[0].fields[CF_NAME].text,"Channel"),"selection/pan/default name copied at source");
  Context drain=context();drain.r[0]=ptr(queue_object)+4;
  unsigned fields[]={CF_PAN,CF_MUTE,CF_SOLO,CF_ARM,CF_SELECTION,CF_SEND1,CF_SEND2,CF_SEND3,CF_SEND4};
  for(unsigned i=0;i<sizeof(fields)/sizeof(fields[0]);i++){
-  unsigned field=fields[i];require(copy_mirror(fixture,&out),"fresh channel request identity");CopiedField volume;const CopiedField *f=copied_field(&out,out.tracks,command_source_field(field),&volume);
+  unsigned field=fields[i];require(copy_mirror(fixture,&out),"fresh channel request identity");MIRROR_FIELD(volume);const CopiedField *f=copied_field(&out,out.tracks,command_source_field(field),&volume);
   CommandRequest r=request(command_float(field)?0x3f400000:1);r.reserved=field;r.field_incarnation=f->incarnation;r.before_bits=f->bits;r.before_revision=f->revision;
-  submit_fixture(r);unsigned seq=i+1;
+  queue_foreign=field==CF_MUTE||field==CF_SOLO;
+  submit_fixture(r);queue_foreign=0;unsigned seq=i+1;
   require(atomic_load(&command_state->slots[0].done)==seq&&!atomic_load(&command_state->slots[0].rejected)&&!atomic_load(&command_state->trace_error),"all typed and owner command families reach matching source completion");
   call(&drain,COMMAND_DRAIN);command_retire();require(atomic_load(&command_state->slots[0].sealed)==seq&&copy_mirror(fixture,&out),"channel evidence seals after source flights");f=copied_field(&out,out.tracks,command_source_field(field),&volume);
   require(f->available&&f->bits==(field==CF_SELECTION?ptr(track_objects[0]):r.bits),"actual copied source state settles each family");
@@ -944,8 +1098,8 @@ static void channel_checks(void){
  for(unsigned send=0;send<4;send++){f.c.r[5]=p+0x428+0x38*(send+1);f.c.r[3]=0x3e800000;call(&f.c,CH_SEND_COPY);}
  f.c.r[4]=p+0x48;f.c.r[2]=f.c.r[3]=f.c.r[6]=1;f.stack[0x8c/4]=0x236faf4;f.stack[0x11c/4]=0x2370710;f.stack[0x184/4]=0x2370a7c;f.stack[0x19c/4]=0x2514334;f.stack[0x188/4]=p;
  call(&f.c,CH_MUTE_COPY);call(&f.c,CH_SOLO_COPY);call(&f.c,CH_SOLO_AUDIO_COPY);call(&f.c,CH_EFFECTIVE_COPY);
- unsigned copied[]={CF_PAN,CF_MUTE,CF_SOLO,CF_SOLO_AUDIO,CF_EFFECTIVE_MUTE};for(unsigned i=0;i<5;i++){CopiedField field;require(copy_channel(&fixture->channel,channel_owner_id(p),copied[i],&field)&&field.seed==2&&!field.updates&&field.bits==(i?1:0x3e800000),"nonzero copy seed without changes");}
- Context c=context();c.r[0]=p+0x3d0;call(&c,MIRROR_PROPERTY_DESTROY);CopiedField field;require(!copy_channel(&fixture->channel,channel_owner_id(p),CF_PAN,&field)&&copy_channel(&fixture->channel,channel_owner_id(p),CF_MUTE,&field),"property death isolates unavailable field");
+ unsigned copied[]={CF_PAN,CF_MUTE,CF_SOLO,CF_SOLO_AUDIO,CF_EFFECTIVE_MUTE};for(unsigned i=0;i<5;i++){MIRROR_FIELD(field);require(copy_channel(&fixture->channel,channel_owner_id(p),copied[i],&field)&&field.seed==2&&!field.updates&&field.bits==(i?1:0x3e800000),"nonzero copy seed without changes");}
+ Context c=context();c.r[0]=p+0x3d0;call(&c,MIRROR_PROPERTY_DESTROY);MIRROR_FIELD(field);require(!copy_channel(&fixture->channel,channel_owner_id(p),CF_PAN,&field)&&copy_channel(&fixture->channel,channel_owner_id(p),CF_MUTE,&field),"property death isolates unavailable field");
  c.r[0]=p;call(&c,CH_PROGRAM_DEATH);require(!copy_channel(&fixture->channel,channel_owner_id(p),CF_MUTE,&field),"Program death closes bound field owner");
 
  /* New non-Track state owners and source-return BBT use real publication code;
@@ -967,8 +1121,461 @@ static void channel_checks(void){
  command_close();require(command_finalize(),"channel source finite closure");free(fixture);free(command_state);fixture=save;mirror_state=save;command_state=csave;dispatched_calls=0;
  puts("PASS channel default/copy seeds, independent field/owner death, retained readout; queued pan/mute/Solo and synchronous Track arm/Project selection source settlement (native calls substituted)");
 }
+/* Channel table reclamation. One saved-project load costs a few hundred field
+ * cells; a bump-only table exhausts CHANNEL_FIELDS after a handful of loads and
+ * then registers no name or colour for anything loaded afterwards. This churns
+ * far past both capacities and holds the observable contract instead of the
+ * mechanism: the current generation always reads back, the app-global owners
+ * and their cells are never victims, retired lifetimes resolve to nothing, the
+ * directory stays inside a pinned bound, and an unsatisfiable birth stays
+ * visible instead of being wiped by the next success. */
+#define RECLAIM_GENERATIONS 60u
+#define RECLAIM_OWNERS 25u
+#define RECLAIM_GLOBALS 7u
+#define RECLAIM_TRACK_FIELDS 4u
+#define RECLAIM_PROGRAM_FIELDS 9u
+#define RECLAIM_CELLS (RECLAIM_TRACK_FIELDS+RECLAIM_PROGRAM_FIELDS)
+#define RECLAIM_DIRECTORY_BOUND 7700u
+#define RECLAIM_OWNER_DIRECTORY_BOUND 3400u
+#define CLUSTER_GENERATIONS 40u
+#define CLUSTER_OWNERS 48u
+#define CLUSTER_LIVE 8u
+#define CLUSTER_FIELDS 4u
+static unsigned channel_read_probe;
+static ChannelCell *channel_read_target;
+static uint32_t channel_read_property,channel_read_owner;
+static void channel_owner_publish(uint32_t seen_address,unsigned seen_kind,unsigned seen_incarnation,uint32_t address,unsigned kind,unsigned incarnation){
+ channel_owner_publishes++;
+ require(seen_address==address&&seen_kind==kind,"an owner's address and kind are published before its incarnation");
+ require(seen_incarnation!=incarnation,"an owner's incarnation is published last, after the address and kind it names");
+}
+/* Mode 1 re-identifies the matched cell completely; mode 2 changes only its
+ * owner_incarnation, so the in-window property and field clauses both still
+ * match and the owner clause is the only thing left to reject. */
+static void channel_read_pause(unsigned at){
+ if(at||!channel_read_probe)return;
+ unsigned mode=channel_read_probe;channel_read_probe=0;
+ ChannelCell *c=channel_read_target;unsigned rev=atomic_load(&c->revision);
+ atomic_store(&c->revision,rev+1);atomic_thread_fence(memory_order_release);
+ atomic_store(&c->live,0);
+ if(mode==1){atomic_store(&c->property,channel_read_property);atomic_store(&c->field,CF_COLOR);atomic_store(&c->bits,0x0badf00d);atomic_store(&c->length,0);}
+ atomic_store(&c->owner_incarnation,channel_read_owner);atomic_store(&c->live,1);
+ atomic_thread_fence(memory_order_release);atomic_store(&c->revision,rev+2);
+}
+static uint32_t reclaim_float(float v){uint32_t bits;memcpy(&bits,&v,4);return bits;}
+/* Odd stride in the hashed word: a power-of-two spacing folds every owner into
+ * 32 buckets of the 8192-word directory. The clustering churn below uses that
+ * spacing deliberately; this one must not, or it would measure probe exhaustion
+ * instead of reclamation. */
+static uint32_t reclaim_owner_address(unsigned generation,unsigned index,unsigned program){return 0x40000000u+((generation*RECLAIM_OWNERS+index)*2u+program)*0x1030u;}
+static const unsigned reclaim_track_fields[RECLAIM_TRACK_FIELDS]={CF_NAME,CF_COLOR,CF_ARM,CF_MIDI_VOLUME};
+static const unsigned reclaim_program_fields[RECLAIM_PROGRAM_FIELDS]={CF_PAN,CF_MUTE,CF_SOLO,CF_SOLO_AUDIO,CF_EFFECTIVE_MUTE,CF_SEND1,CF_SEND2,CF_SEND3,CF_SEND4};
+static uint32_t reclaim_value(unsigned generation,unsigned index,unsigned field){
+ switch(field){
+  case CF_COLOR:return 0xff000000u|((generation&0xfffu)<<12)|index;
+  case CF_ARM:case CF_MUTE:case CF_SOLO_AUDIO:return (generation+index)&1;
+  case CF_SOLO:case CF_EFFECTIVE_MUTE:return (generation+index+1)&1;
+  case CF_MIDI_VOLUME:return reclaim_float((float)(index%50)/100.0f);
+  case CF_PAN:return reclaim_float((float)((index+generation)%50)/100.0f+0.25f);
+  default:return reclaim_float((float)((index+field)%25)/100.0f);
+ }
+}
+static void reclaim_name(unsigned generation,unsigned index,char text[CHANNEL_TEXT],unsigned *length){
+ int n=snprintf(text,CHANNEL_TEXT,"Gen%03u-Track%03u",generation,index);*length=(unsigned)n;
+}
+static void reclaim_birth_generation(unsigned generation){
+ for(unsigned i=0;i<RECLAIM_OWNERS;i++){
+  uint32_t t=reclaim_owner_address(generation,i,0),p=reclaim_owner_address(generation,i,1);
+  channel_owner_birth(t,CO_TRACK);channel_owner_birth(p,CO_PROGRAM);
+  for(unsigned f=0;f<RECLAIM_TRACK_FIELDS;f++){
+   unsigned field=reclaim_track_fields[f];
+   if(field==CF_NAME){char text[CHANNEL_TEXT];unsigned length;reclaim_name(generation,i,text,&length);channel_birth(t,t+channel_offset(field),field,0,text,length,1);}
+   else channel_birth(t,t+channel_offset(field),field,reclaim_value(generation,i,field),NULL,0,1);
+  }
+  for(unsigned f=0;f<RECLAIM_PROGRAM_FIELDS;f++){unsigned field=reclaim_program_fields[f];channel_birth(p,p+channel_offset(field),field,reclaim_value(generation,i,field),NULL,0,1);}
+ }
+}
+static void reclaim_require_generation(const ChannelState *s,unsigned generation){
+ for(unsigned i=0;i<RECLAIM_OWNERS;i++){
+  uint32_t t=reclaim_owner_address(generation,i,0),p=reclaim_owner_address(generation,i,1);
+  unsigned track_owner=channel_owner_id(t),program_owner=channel_owner_id(p);MIRROR_FIELD(f);
+  require(track_owner&&program_owner,"churned generation keeps its own live owners");
+  require(channel_owner_slot(track_owner)&&channel_owner_slot(program_owner),"a live owner token still names its own slot");
+  for(unsigned k=0;k<RECLAIM_TRACK_FIELDS;k++){
+   unsigned field=reclaim_track_fields[k];
+   require(copy_channel(s,track_owner,field,&f),"every field of the current generation still resolves to its own cell");
+   if(field==CF_NAME){char text[CHANNEL_TEXT];unsigned length;reclaim_name(generation,i,text,&length);require(f.length==length&&!strcmp(f.text,text),"reclaimed table returns this cell's own name text");}
+   else require(f.bits==reclaim_value(generation,i,field),"reclaimed table returns this cell's own value");
+   require(f.property==t+channel_offset(field)&&f.owner_incarnation==track_owner,"resolved cell carries its own property and owner lifetime");
+  }
+  for(unsigned k=0;k<RECLAIM_PROGRAM_FIELDS;k++){
+   unsigned field=reclaim_program_fields[k];
+   require(copy_channel(s,program_owner,field,&f)&&f.bits==reclaim_value(generation,i,field),"Program-owned fields of the current generation resolve with their own value");
+   require(f.property==p+channel_offset(field)&&f.owner_incarnation==program_owner,"Program cell carries its own property and owner lifetime");
+  }
+ }
+}
+static uint32_t reclaim_free_head(const ChannelState *s,uint32_t base){
+ for(unsigned n=1;n<65536u;n++){uint32_t a=base+n*0x1030u;if(!atomic_load(s->owner_directory+channel_hash(a)))return a;}
+ return 0;
+}
+static unsigned reclaim_directory_used(const ChannelState *s){unsigned n=0;for(unsigned i=0;i<CHANNEL_HASH;i++)if(atomic_load(s->field_directory+i))n++;return n;}
+static unsigned reclaim_owner_directory_used(const ChannelState *s){unsigned n=0;for(unsigned i=0;i<CHANNEL_HASH;i++)if(atomic_load(s->owner_directory+i))n++;return n;}
+/* Chain integrity over the whole table, not only the current generation: every
+ * cell of a live lifetime must still be reachable through its own property.
+ * Zeroing a retired directory word instead of leaving it occupied truncates the
+ * chain it sits in, and this is what sees it. */
+static void reclaim_require_chains(const ChannelState *s,const char *why){
+ unsigned used=atomic_load(&s->fields_used);
+ for(unsigned i=0;i<used;i++){
+  const ChannelCell *c=s->fields+i;
+  unsigned id=atomic_load(&c->owner_incarnation),slot=channel_owner_slot(id);
+  if(!atomic_load(&c->live)||!slot)continue;
+  if(!atomic_load(&s->owners[slot-1].live)||atomic_load(&s->owners[slot-1].incarnation)!=id)continue;
+  require(channel_cell(atomic_load(&c->property))==c,why);
+ }
+}
+static uint32_t cluster_owner_address(unsigned generation,unsigned index){return 0x60000000u+(generation*CLUSTER_OWNERS+index)*0x1000u;}
+static const unsigned cluster_fields[CLUSTER_FIELDS]={CF_NAME,CF_COLOR,CF_ARM,CF_MIDI_VOLUME};
+static uint32_t cluster_value(unsigned generation,unsigned index,unsigned field){
+ switch(field){
+  case CF_COLOR:return 0xfe000000u|((generation&0xffu)<<8)|index;
+  case CF_ARM:return (generation+index)&1;
+  default:return reclaim_float((float)((generation+index)%50)/100.0f);
+ }
+}
+/* Deliberately power-of-two spaced, the case the spread churn above cannot see:
+ * every address folds into the same 32 of the 8192 directory buckets, so chains
+ * run deep and a retired word sits in the middle of live keys. A rolling window
+ * of generations stays alive at once, so a truncated chain loses a key that is
+ * still being read rather than one that is already gone. */
+static void cluster_birth(unsigned generation){
+ for(unsigned i=0;i<CLUSTER_OWNERS;i++){
+  uint32_t t=cluster_owner_address(generation,i);channel_owner_birth(t,CO_TRACK);
+  for(unsigned f=0;f<CLUSTER_FIELDS;f++){
+   unsigned field=cluster_fields[f];
+   if(field==CF_NAME){char text[CHANNEL_TEXT];unsigned length;reclaim_name(900+generation,i,text,&length);channel_birth(t,t+channel_offset(field),field,0,text,length,1);}
+   else channel_birth(t,t+channel_offset(field),field,cluster_value(generation,i,field),NULL,0,1);
+  }
+ }
+}
+static void cluster_require(const ChannelState *s,unsigned generation){
+ for(unsigned i=0;i<CLUSTER_OWNERS;i++){
+  uint32_t t=cluster_owner_address(generation,i);unsigned owner=channel_owner_id(t);MIRROR_FIELD(f);
+  require(owner,"a clustered generation inside the live window keeps its own owner");
+  for(unsigned k=0;k<CLUSTER_FIELDS;k++){
+   unsigned field=cluster_fields[k];
+   require(copy_channel(s,owner,field,&f)&&f.property==t+channel_offset(field)&&f.owner_incarnation==owner,"a clustered live property still resolves to its own cell");
+   if(field==CF_NAME){char text[CHANNEL_TEXT];unsigned length;reclaim_name(900+generation,i,text,&length);require(f.length==length&&!strcmp(f.text,text),"a clustered live name still reads its own text");}
+   else require(f.bits==cluster_value(generation,i,field),"a clustered live field still reads its own value");
+  }
+ }
+}
+static void cluster_phase(ChannelState *ch){
+ for(unsigned g=0;g<CLUSTER_GENERATIONS;g++){
+  cluster_birth(g);
+  if(g>=CLUSTER_LIVE)for(unsigned i=0;i<CLUSTER_OWNERS;i++)channel_owner_death(cluster_owner_address(g-CLUSTER_LIVE,i));
+  unsigned lo=g+1>CLUSTER_LIVE?g+1-CLUSTER_LIVE:0;
+  for(unsigned gen=lo;gen<=g;gen++)cluster_require(ch,gen);
+  reclaim_require_chains(ch,"a retired directory word never truncates the probe chain of a live clustered key");
+ }
+ for(unsigned g=CLUSTER_GENERATIONS>CLUSTER_LIVE?CLUSTER_GENERATIONS-CLUSTER_LIVE:0;g<CLUSTER_GENERATIONS;g++)for(unsigned i=0;i<CLUSTER_OWNERS;i++)channel_owner_death(cluster_owner_address(g,i));
+}
+static void channel_reclaim_checks(void){
+ MirrorState *save=fixture;CommandState *csave=command_state;fixture=calloc(1,sizeof(*fixture));command_state=calloc(1,sizeof(*command_state));require(fixture&&command_state,"reclamation fixtures");
+ initial(0);command_initialize();observer_running=1;observer_image_bias=0;atomic_store(&command_state->alive,1);
+ ChannelState *ch=&fixture->channel;
+ /* App-global owners: born once, never killed, exactly the owner kinds the
+  * device probe found at 1 live / 0 dead across two saved-project loads. */
+ static const unsigned global_kinds[RECLAIM_GLOBALS]={CO_MIXER,CO_TIMELINE,CO_CLICK,CO_LOOP,CO_AUTOMATION,CO_RECORDING,CO_PROJECT};
+ static const unsigned global_fields[RECLAIM_GLOBALS]={CF_MASTER,CF_PLAYING,CF_CLICK,CF_LOOP,CF_AUTOMATION,CF_RECORD_MODE,CF_SELECTION};
+ static const uint32_t global_values[RECLAIM_GLOBALS]={0x3f000000u,1,1,0,2,3,0x00c0ffeeu};
+ uint32_t global_address[RECLAIM_GLOBALS];unsigned global_owner[RECLAIM_GLOBALS];const ChannelCell *global_cell[RECLAIM_GLOBALS];const ChannelOwner *global_slot[RECLAIM_GLOBALS];
+ for(unsigned g=0;g<RECLAIM_GLOBALS;g++){
+  global_address[g]=0x30000000u+g*0x1030u;
+  channel_owner_birth(global_address[g],global_kinds[g]);
+  channel_birth(global_address[g],global_address[g]+channel_offset(global_fields[g]),global_fields[g],global_values[g],NULL,0,1);
+  global_owner[g]=channel_owner_id(global_address[g]);
+  global_cell[g]=channel_cell(global_address[g]+channel_offset(global_fields[g]));
+  global_slot[g]=channel_owner(global_address[g]);
+  require(global_owner[g]&&global_cell[g]!=NULL&&global_slot[g]!=NULL,"app-global owner and cell registered");
+ }
+ unsigned first_track_owner=0,first_track_field=0;uint32_t first_track=0;
+ for(unsigned generation=0;generation<RECLAIM_GENERATIONS;generation++){
+  reclaim_birth_generation(generation);
+  require(atomic_load(&ch->fields_used)<=CHANNEL_FIELDS,"field table never grows past its own capacity");
+  require(atomic_load(&ch->owners_used)<=CHANNEL_OWNERS,"owner table never grows past its own capacity");
+  reclaim_require_generation(ch,generation);
+  for(unsigned g=0;g<RECLAIM_GLOBALS;g++){MIRROR_FIELD(f);require(copy_channel(ch,global_owner[g],global_fields[g],&f)&&f.bits==global_values[g],"app-global field survives every project generation");}
+  if(!generation){
+   first_track=reclaim_owner_address(0,0,0);first_track_owner=channel_owner_id(first_track);
+   const ChannelCell *c=channel_cell(first_track+channel_offset(CF_NAME));require(c!=NULL,"first generation name cell");first_track_field=atomic_load(&c->incarnation);
+  }
+  for(unsigned i=0;i<RECLAIM_OWNERS;i++){channel_owner_death(reclaim_owner_address(generation,i,0));channel_owner_death(reclaim_owner_address(generation,i,1));}
+ }
+ /* Both tables are churned well past their own capacity, so neither can have
+  * satisfied this by growing. */
+ require(RECLAIM_GENERATIONS*RECLAIM_OWNERS*RECLAIM_CELLS>2u*CHANNEL_FIELDS&&RECLAIM_GENERATIONS*RECLAIM_OWNERS*2u>CHANNEL_OWNERS,"churn clearly exceeds both capacities");
+ require(atomic_load(&ch->fields_used)==CHANNEL_FIELDS&&channel_reclaims,"field capacity is reached and satisfied by reuse, not by growth");
+ require(atomic_load(&ch->owners_used)==CHANNEL_OWNERS&&channel_owner_reclaims,"owner capacity is reached and satisfied by reuse, not by growth");
+ reclaim_require_chains(ch,"every live lifetime's cell stays reachable through its own property after the churn");
+ unsigned directory=reclaim_directory_used(ch),owner_directory=reclaim_owner_directory_used(ch);
+ require(directory<CHANNEL_HASH&&directory<=RECLAIM_DIRECTORY_BOUND,"field directory occupancy stays under its pinned bound");
+ require(owner_directory<CHANNEL_HASH&&owner_directory<=RECLAIM_OWNER_DIRECTORY_BOUND,"owner directory occupancy stays under its pinned bound, near the owner table it describes");
+ require(!channel_refusals&&!channel_owner_refusals,"no birth in the whole churn was refused");
+ /* A directory this full has windows with no empty word left. channel_birth only
+  * ever stores a key inside its own probe window, so a full walk with no match
+  * is proof of absence; answering "indeterminate" there would silently disable
+  * unrelated_source_key's hook-admission fast path exactly when the table is
+  * busiest. */
+ for(unsigned i=0;i<4096;i++)require(known_channel_key(0x7f000000u+i*0x40u)==0,"an absent key is still reported absent once the directory has no empty word left");
+ for(unsigned f=0;f<CHANNEL_FIELD_KINDS;f++)require(!atomic_load(ch->errors+f),"sustained churn leaves no latched channel error");
+ /* Only dead lifetimes are reused: each global owner is still the same slot
+  * with the same token, and each global cell is still the same slot. */
+ for(unsigned g=0;g<RECLAIM_GLOBALS;g++){
+  require(channel_owner(global_address[g])==global_slot[g]&&channel_owner_id(global_address[g])==global_owner[g],"an app-global owner slot is never taken as a reclamation victim");
+  require(channel_cell(global_address[g]+channel_offset(global_fields[g]))==global_cell[g],"an app-global cell is never taken as a reclamation victim");
+  require(atomic_load(&global_cell[g]->owner_incarnation)==global_owner[g]&&atomic_load(&global_cell[g]->field)==global_fields[g],"app-global cell keeps its own identity across the churn");
+ }
+ /* A retired lifetime resolves to nothing rather than to whatever now owns its
+  * old slot, and the slot it used has demonstrably been handed to someone else. */
+ MIRROR_FIELD(stale);
+ require(first_track_owner&&!copy_channel(ch,first_track_owner,CF_NAME,&stale),"a retired owner token reads no value, not the new lifetime's");
+ require(channel_owner_slot(first_track_owner)&&atomic_load(&ch->owners[channel_owner_slot(first_track_owner)-1].incarnation)!=first_track_owner,"the retired owner's slot now carries a different lifetime token");
+ require(!channel_cell(first_track+channel_offset(CF_NAME))||atomic_load(&channel_cell(first_track+channel_offset(CF_NAME))->owner_incarnation)!=first_track_owner,"the retired property no longer resolves to a cell of its old lifetime");
+ /* In-flight command safety: the pair a queued gesture pins cannot be honoured
+  * against whatever occupies the slots now. This is the triple request_cell,
+  * master_copy and midi_current all carry. */
+ {
+  ChannelCell *c=channel_cell(first_track+channel_offset(CF_NAME));
+  int honoured=c&&atomic_load(&c->live)&&atomic_load(&c->field)==CF_NAME&&atomic_load(&c->owner_incarnation)==first_track_owner&&atomic_load(&c->incarnation)==first_track_field&&channel_owner_id(first_track)==first_track_owner;
+  require(!honoured,"a gesture pinned to a reclaimed cell's owner and field incarnation cannot submit against the new occupant");
+ }
+ /* The clustering regime: long chains, where zeroing a retired directory word
+  * instead of leaving it occupied loses live keys. */
+ cluster_phase(ch);
+ require(!channel_refusals&&!channel_owner_refusals,"the clustered churn is satisfied without a single refusal");
+ /* Exhaustion that reuse cannot satisfy must stay visible: revive every
+  * lifetime so the scan has no victim at all. */
+ unsigned refusals=channel_refusals;
+ uint32_t spare=cluster_owner_address(CLUSTER_GENERATIONS,0),witness=cluster_owner_address(CLUSTER_GENERATIONS,1);
+ char text[CHANNEL_TEXT],seen[CHANNEL_TEXT];unsigned length,seen_length;
+ reclaim_name(999,1,text,&length);reclaim_name(998,2,seen,&seen_length);
+ channel_owner_birth(spare,CO_TRACK);channel_owner_birth(witness,CO_TRACK);
+ unsigned spare_owner=channel_owner_id(spare),witness_owner=channel_owner_id(witness);
+ require(spare_owner&&witness_owner,"spare and witness owners registered before the forced refusal");
+ channel_birth(witness,witness+channel_offset(CF_NAME),CF_NAME,0,seen,seen_length,1);
+ MIRROR_FIELD(named);
+ require(copy_channel(ch,witness_owner,CF_NAME,&named)&&!strcmp(named.text,seen),"witness name registered before the forced refusal");
+ /* Give every cell and every owner a live lifetime, so the scan has no victim
+  * at all and the birth genuinely cannot be satisfied. Both tables are put back
+  * exactly as they were afterwards. */
+ unsigned used=atomic_load(&ch->owners_used);
+ uint32_t *held_cell=malloc(CHANNEL_FIELDS*sizeof(uint32_t)),*held_owner=malloc(CHANNEL_OWNERS*sizeof(uint32_t));
+ require(held_cell!=NULL&&held_owner!=NULL,"forced-refusal scratch");
+ for(unsigned i=0;i<CHANNEL_FIELDS;i++){held_cell[i]=atomic_load(&ch->fields[i].owner_incarnation);atomic_store(&ch->fields[i].owner_incarnation,spare_owner);}
+ for(unsigned i=0;i<used;i++){held_owner[i]=atomic_load(&ch->owners[i].live);atomic_store(&ch->owners[i].live,1);}
+ channel_birth(spare,spare+channel_offset(CF_NAME),CF_NAME,0,text,length,1);
+ require(channel_refusals>refusals&&atomic_load(ch->errors+CF_NAME)==CH_CAPACITY,"an unsatisfiable birth is refused and recorded where the reader can see it");
+ require(!copy_channel(ch,spare_owner,CF_NAME,&named),"the refused cell itself is unavailable, which is the dash the owner sees");
+ for(unsigned i=0;i<CHANNEL_FIELDS;i++)atomic_store(&ch->fields[i].owner_incarnation,held_cell[i]);
+ for(unsigned i=0;i<used;i++)atomic_store(&ch->owners[i].live,held_owner[i]);
+ free(held_cell);free(held_owner);
+ require(copy_channel(ch,witness_owner,CF_NAME,&named)&&!strcmp(named.text,seen),"a recorded capacity refusal no longer dashes the names that did register");
+ channel_birth(spare,spare+channel_offset(CF_NAME),CF_NAME,0,text,length,1);
+ require(copy_channel(ch,channel_owner_id(spare),CF_NAME,&named)&&named.length==length&&!strcmp(named.text,text),"the same birth succeeds once lifetimes are retired again");
+ require(atomic_load(ch->errors+CF_NAME)==CH_CAPACITY,"the refusal stays recorded after the later success instead of being wiped");
+ /* Owner-slot reuse is safe for a reader only because of seven token guards:
+  * three in copy_channel (owner level, and the cell-level match before and
+  * inside the seqlock window) and four in copy_general (mixer, sends, editor,
+  * zoom). None of them does any work unless a retired token's slot is actually
+  * occupied by a LIVE lifetime, and the churn above never leaves one in that
+  * state by arithmetic accident. Build it on purpose, with the real allocator:
+  * pick an address whose directory chain starts on an empty word, so the
+  * in-window victim rule cannot fire and the cursor scan chooses the slot. */
+ uint32_t alias_a=reclaim_free_head(ch,0x48000000u),alias_b=reclaim_free_head(ch,0x49000000u);
+ uint32_t alias_p=reclaim_free_head(ch,0x4a000000u),alias_q=reclaim_free_head(ch,0x4b000000u);
+ require(alias_a&&alias_b&&alias_p&&alias_q,"four addresses whose owner chains start empty");
+ /* Track pair: retire a lifetime, then hand its own slot to a live lifetime of
+  * the same kind, with the retired lifetime's CF_NAME cell sitting exactly
+  * where the new lifetime's address resolves it. */
+ channel_owner_birth(alias_a,CO_TRACK);
+ unsigned alias_old=channel_owner_id(alias_a),alias_slot=channel_owner_slot(alias_old);
+ require(alias_old&&alias_slot,"retired-lifetime owner registered");
+ char aliasname[CHANNEL_TEXT];unsigned aliaslen;reclaim_name(996,1,aliasname,&aliaslen);
+ channel_birth(alias_a,alias_b+channel_offset(CF_NAME),CF_NAME,0,aliasname,aliaslen,1);
+ channel_owner_death(alias_a);
+ channel_owner_cursor=alias_slot-1;channel_owner_birth(alias_b,CO_TRACK);
+ unsigned alias_new=channel_owner_id(alias_b);
+ require(alias_new&&channel_owner_slot(alias_new)==alias_slot&&alias_new!=alias_old,"the retired token's own slot now carries a different live lifetime of the same kind");
+ ChannelCell *aliased=channel_cell(alias_b+channel_offset(CF_NAME));
+ require(aliased!=NULL&&atomic_load(&aliased->live)&&atomic_load(&aliased->owner_incarnation)==alias_old,"the retired lifetime's cell still sits where the new lifetime's address resolves it");
+ require(!copy_channel(ch,alias_old,CF_NAME,&named),"a retired owner token does not read the cell that its own reused slot now resolves to");
+ require(!copy_channel(ch,alias_new,CF_NAME,&named),"a live lifetime does not adopt the retired lifetime's cell left at its own property");
+ channel_birth(alias_b,alias_b+channel_offset(CF_COLOR),CF_COLOR,0xfd000000u,NULL,0,1);
+ require(copy_channel(ch,alias_new,CF_COLOR,&named)&&named.bits==0xfd000000u,"the live lifetime still reads its own cells, so the two checks above are not passing on a dead path");
+ /* Program pair, for the send-owner guard, which additionally matches address
+  * and kind: the retired token must name a slot holding a live Program at the
+  * same address. */
+ channel_owner_birth(alias_p,CO_PROGRAM);
+ unsigned prog_old=channel_owner_id(alias_p),prog_slot=channel_owner_slot(prog_old);
+ require(prog_old&&prog_slot,"retired Program lifetime registered");
+ channel_owner_death(alias_p);
+ channel_owner_cursor=prog_slot-1;channel_owner_birth(alias_q,CO_PROGRAM);
+ unsigned prog_new=channel_owner_id(alias_q);
+ require(prog_new&&channel_owner_slot(prog_new)==prog_slot&&prog_new!=prog_old,"the retired Program token's slot now carries a different live Program");
+ /* copy_general: every cached owner word the bridge reads is a token, and each
+  * one is matched against the slot it names. */
+ GeneralState *g=&fixture->general;MIRROR_COPY(view);
+ atomic_store(&fixture->ready,1);atomic_store(&g->sends_revision,2);atomic_store(&g->sends_epoch,atomic_load(&fixture->epoch));
+ atomic_store(&g->sends_programs[0],alias_q);atomic_store(&g->sends_owners[0],prog_new);
+ atomic_store(&g->sends_mixer,global_owner[0]);atomic_store(&ch->mixer_owner,global_owner[0]);
+ atomic_store(&g->editor_owner,alias_new);atomic_store(&g->zoom_owner,alias_new);
+ require(copy_mirror(fixture,&view),"reader snapshot over the aliased tables");
+ require(view.editor_owner==alias_new&&view.zoom_owner==alias_new,"a live editor and zoom token still resolve");
+ require(view.send_owners[0]==prog_new&&view.send_programs[0]==alias_q,"a live send owner still resolves");
+ atomic_store(&g->editor_owner,alias_old);atomic_store(&g->zoom_owner,alias_new);
+ require(copy_mirror(fixture,&view)&&!view.editor_owner&&view.zoom_owner==alias_new,"a retired editor token does not resolve through its reused slot");
+ atomic_store(&g->editor_owner,alias_new);atomic_store(&g->zoom_owner,alias_old);
+ require(copy_mirror(fixture,&view)&&view.editor_owner==alias_new&&!view.zoom_owner,"a retired zoom token does not resolve through its reused slot");
+ atomic_store(&g->zoom_owner,alias_new);
+ atomic_store(&g->sends_owners[0],prog_old);
+ require(copy_mirror(fixture,&view)&&!view.send_owners[0]&&!view.send_programs[0],"a retired send-owner token does not resolve through its reused slot at the same address");
+ atomic_store(&g->sends_owners[0],prog_new);
+ atomic_store(&g->sends_mixer,alias_old);atomic_store(&ch->mixer_owner,alias_old);
+ require(copy_mirror(fixture,&view)&&!view.send_owners[0]&&!view.send_programs[0],"a retired mixer token does not open the send block through its reused slot");
+ atomic_store(&g->sends_mixer,global_owner[0]);atomic_store(&ch->mixer_owner,global_owner[0]);
+ require(copy_mirror(fixture,&view)&&view.send_owners[0]==prog_new,"the send block reopens for the live mixer token, so the two checks above are not passing on a dead path");
+ atomic_store(&fixture->ready,0);atomic_store(&g->sends_revision,0);atomic_store(&g->editor_owner,0);atomic_store(&g->zoom_owner,0);
+ atomic_store(&g->sends_owners[0],0);atomic_store(&g->sends_programs[0],0);atomic_store(&g->sends_mixer,0);atomic_store(&ch->mixer_owner,0);
+ /* Reader contract: a cell re-identified under its seqlock between the probe
+  * match and the payload read is never attributed to the matched property. */
+ unsigned pinned=channel_owner_id(witness);
+ channel_read_target=channel_cell(witness+channel_offset(CF_NAME));
+ channel_read_property=spare+0x5f0;channel_read_owner=channel_owner_id(spare);channel_read_probe=1;
+ atomic_store(ch->errors+CF_NAME,CH_OK);
+ require(pinned&&channel_read_target&&!copy_channel(ch,pinned,CF_NAME,&named),"a cell rewritten under its seqlock is not attributed to the previously matched property");
+ require(!channel_read_probe,"the reader reached the re-identification seam");
+ /* Same seam, owner lifetime only: the cell keeps its property and its field,
+  * so the in-window owner match is the single thing standing between the reader
+  * and a payload the token it asked with no longer owns. */
+ channel_birth(witness,witness+channel_offset(CF_NAME),CF_NAME,0,seen,seen_length,1);
+ pinned=channel_owner_id(witness);channel_read_target=channel_cell(witness+channel_offset(CF_NAME));
+ channel_read_owner=alias_new;channel_read_probe=2;
+ require(pinned&&channel_read_target&&copy_channel(ch,pinned,CF_NAME,&named)==0,"a cell whose owner lifetime is rewritten under its seqlock is not attributed to the token that matched it");
+ require(!channel_read_probe,"the reader reached the owner-only re-identification seam");
+ require(channel_owner_publishes>RECLAIM_GENERATIONS*RECLAIM_OWNERS*2u,"every owner publication in the churn went through the store-order seam");
+ command_close();require(command_finalize(),"reclamation source finite closure");free(fixture);free(command_state);fixture=save;mirror_state=save;command_state=csave;dispatched_calls=0;
+ printf("PASS channel table reclamation:%u generations x%u owners =%u field and%u owner births against%u/%u capacities stay capped and are satisfied by reuse, every live property and owner reads its own value through the reader, app-global owners and cells are never victims, a retired token whose own slot now holds a live same-kind lifetime resolves to nothing through copy_channel and through every cached mixer/send/editor/zoom word, pinned gestures resolve to nothing, a clustered %u-generation churn keeps every chain intact, %u field and %u owner directory words of%u stay occupied, and an unsatisfiable birth stays recorded\n",RECLAIM_GENERATIONS,RECLAIM_OWNERS*2u,RECLAIM_GENERATIONS*RECLAIM_OWNERS*RECLAIM_CELLS,RECLAIM_GENERATIONS*RECLAIM_OWNERS*2u,CHANNEL_FIELDS,CHANNEL_OWNERS,CLUSTER_GENERATIONS,directory,owner_directory,CHANNEL_HASH);
+}
+/* The reuse path republishes a reclaimed cell's identity and payload inside one
+ * seqlock window. Nothing above can see that: under the reclamation predicate a
+ * victim's owner is already dead, so every consumer refuses it on owner
+ * liveness whether or not the window exists. These two threads look at the
+ * cells directly, which is the contract the cross-process bridge depends on. */
+#define SEQLOCK_FILL_OWNERS 128u
+#define SEQLOCK_OWNER_CELLS 32u
+#define SEQLOCK_ROUNDS 3000u
+static _Atomic unsigned seqlock_stop,seqlock_reads,seqlock_torn,seqlock_writes;
+static uint32_t seqlock_property(unsigned serial){return 0x70000000u+serial*0x30u;}
+static void seqlock_text(uint32_t property,uint32_t words[CHANNEL_TEXT/4]){for(unsigned i=0;i<CHANNEL_TEXT/4;i++)words[i]=property*(i+1)+i;}
+/* Every cell this fixture creates is a CF_NAME whose whole payload is a pure
+ * function of its own property, so one stable window showing one lifetime's
+ * identity over another lifetime's payload is a torn publication. */
+static void *seqlock_reader(void *arg){
+ const ChannelState *s=arg;uint32_t expect[CHANNEL_TEXT/4],words[CHANNEL_TEXT/4];unsigned base=0;
+ while(!atomic_load_explicit(&seqlock_stop,memory_order_acquire)){
+  base=(base+256u)&(CHANNEL_FIELDS-1u);
+  for(unsigned k=0;k<256u;k++){
+   unsigned i=(base+k)&(CHANNEL_FIELDS-1u);
+   const ChannelCell *c=s->fields+i;
+   unsigned rev=atomic_load_explicit(&c->revision,memory_order_acquire);
+   if(!rev||(rev&1))continue;
+   uint32_t property=atomic_load_explicit(&c->property,memory_order_relaxed),bits=atomic_load_explicit(&c->bits,memory_order_relaxed);
+   unsigned field=atomic_load_explicit(&c->field,memory_order_relaxed),live=atomic_load_explicit(&c->live,memory_order_relaxed),length=atomic_load_explicit(&c->length,memory_order_relaxed);
+   for(unsigned w=0;w<CHANNEL_TEXT/4;w++)words[w]=atomic_load_explicit(c->text+w,memory_order_relaxed);
+   atomic_thread_fence(memory_order_acquire);
+   if(rev!=atomic_load_explicit(&c->revision,memory_order_relaxed))continue;
+   atomic_fetch_add_explicit(&seqlock_reads,1,memory_order_relaxed);
+   if(!live)continue;
+   seqlock_text(property,expect);
+   if(field!=CF_NAME||bits!=property||length!=CHANNEL_TEXT||memcmp(words,expect,sizeof(words)))atomic_fetch_add_explicit(&seqlock_torn,1,memory_order_relaxed);
+  }
+ }
+ return NULL;
+}
+/* Two writers on one cell. channel_write acquires the seqlock with a CAS and
+ * the loser drops its update, so a stable window always shows one writer's
+ * whole payload. A plain load-then-store lets both proceed and mixes them. */
+static ChannelCell *seqlock_shared;
+static void *seqlock_writer(void *arg){
+ uintptr_t which=(uintptr_t)arg;uint32_t words[CHANNEL_TEXT/4];
+ for(unsigned n=0;n<200000u&&!atomic_load_explicit(&seqlock_stop,memory_order_acquire);n++){
+  uint32_t property=seqlock_property(which?7u:9u);
+  seqlock_text(property,words);
+  channel_write(seqlock_shared,property,(const char*)words,CHANNEL_TEXT,0);
+  atomic_fetch_add_explicit(&seqlock_writes,1,memory_order_relaxed);
+ }
+ return NULL;
+}
+static void *seqlock_shared_reader(void *unused){
+ (void)unused;uint32_t words[CHANNEL_TEXT/4],expect[CHANNEL_TEXT/4];
+ while(!atomic_load_explicit(&seqlock_stop,memory_order_acquire)){
+  const ChannelCell *c=seqlock_shared;
+  unsigned rev=atomic_load_explicit(&c->revision,memory_order_acquire);if(!rev||(rev&1))continue;
+  uint32_t bits=atomic_load_explicit(&c->bits,memory_order_relaxed);
+  for(unsigned w=0;w<CHANNEL_TEXT/4;w++)words[w]=atomic_load_explicit(c->text+w,memory_order_relaxed);
+  atomic_thread_fence(memory_order_acquire);
+  if(rev!=atomic_load_explicit(&c->revision,memory_order_relaxed))continue;
+  atomic_fetch_add_explicit(&seqlock_reads,1,memory_order_relaxed);
+  seqlock_text(bits,expect);
+  if(memcmp(words,expect,sizeof(words)))atomic_fetch_add_explicit(&seqlock_torn,1,memory_order_relaxed);
+ }
+ return NULL;
+}
+static void channel_seqlock_checks(void){
+ MirrorState *save=fixture;CommandState *csave=command_state;fixture=calloc(1,sizeof(*fixture));command_state=calloc(1,sizeof(*command_state));require(fixture&&command_state,"seqlock fixtures");
+ initial(0);command_initialize();observer_running=1;observer_image_bias=0;atomic_store(&command_state->alive,1);
+ ChannelState *ch=&fixture->channel;
+ atomic_store(&seqlock_stop,0);atomic_store(&seqlock_reads,0);atomic_store(&seqlock_torn,0);atomic_store(&seqlock_writes,0);
+ uint32_t words[CHANNEL_TEXT/4];unsigned serial=0;
+ for(unsigned o=0;o<SEQLOCK_FILL_OWNERS;o++){
+  uint32_t owner=0x20000000u+o*0x1030u;channel_owner_birth(owner,CO_TRACK);
+  for(unsigned k=0;k<SEQLOCK_OWNER_CELLS;k++){uint32_t property=seqlock_property(serial++);seqlock_text(property,words);channel_birth(owner,property,CF_NAME,property,(const char*)words,CHANNEL_TEXT,1);}
+  channel_owner_death(owner);
+ }
+ require(atomic_load(&ch->fields_used)==CHANNEL_FIELDS&&!channel_refusals,"seqlock fixture fills the field table exactly once");
+ pthread_t reader;require(!pthread_create(&reader,NULL,seqlock_reader,ch),"seqlock reader thread");
+ unsigned before=channel_reclaims;
+ for(unsigned round=0;round<SEQLOCK_ROUNDS;round++){
+  uint32_t owner=0x21000000u+round*0x1030u;channel_owner_birth(owner,CO_TRACK);
+  for(unsigned k=0;k<SEQLOCK_OWNER_CELLS;k++){uint32_t property=seqlock_property(serial++);seqlock_text(property,words);channel_birth(owner,property,CF_NAME,property,(const char*)words,CHANNEL_TEXT,1);}
+  channel_owner_death(owner);
+ }
+ atomic_store_explicit(&seqlock_stop,1,memory_order_release);require(!pthread_join(reader,NULL),"seqlock reader joins");
+ require(channel_reclaims-before>=SEQLOCK_ROUNDS*SEQLOCK_OWNER_CELLS/2u,"the churn ran against a full table and reclaimed");
+ require(atomic_load(&seqlock_reads)>1000u,"the reader observed stable windows while the reclaimer ran");
+ require(!atomic_load(&seqlock_torn),"no stable window ever shows one lifetime's identity over another lifetime's payload");
+ /* Second phase: two writers, one cell. */
+ atomic_store(&seqlock_stop,0);atomic_store(&seqlock_reads,0);atomic_store(&seqlock_torn,0);
+ uint32_t host=0x22000000u;channel_owner_birth(host,CO_TRACK);
+ uint32_t shared=seqlock_property(7u);seqlock_text(shared,words);
+ channel_birth(host,shared,CF_NAME,shared,(const char*)words,CHANNEL_TEXT,1);
+ seqlock_shared=channel_cell(shared);require(seqlock_shared!=NULL,"shared write target");
+ pthread_t w0,w1,r0;
+ require(!pthread_create(&r0,NULL,seqlock_shared_reader,NULL)&&!pthread_create(&w0,NULL,seqlock_writer,(void*)0)&&!pthread_create(&w1,NULL,seqlock_writer,(void*)1),"two writers and a reader on one cell");
+ require(!pthread_join(w0,NULL)&&!pthread_join(w1,NULL),"both writers finish");
+ atomic_store_explicit(&seqlock_stop,1,memory_order_release);require(!pthread_join(r0,NULL),"shared reader joins");
+ require(atomic_load(&seqlock_writes)>=2u*200000u&&atomic_load(&seqlock_reads)>1000u,"both writers ran against a live reader");
+ require(!atomic_load(&seqlock_torn),"two concurrent writers never leave a stable window holding a mixed payload");
+ command_close();require(command_finalize(),"seqlock source finite closure");free(fixture);free(command_state);fixture=save;mirror_state=save;command_state=csave;dispatched_calls=0;
+ printf("PASS reclamation seqlock discipline:%u concurrent reads over a table being reclaimed under it and%u concurrent writes to one cell leave no stable window holding a torn or mixed payload\n",atomic_load(&seqlock_reads),atomic_load(&seqlock_writes));
+}
 static unsigned char jog_audio_object[0x400],jog_sequencer_object[0x408],jog_timeline_object[0x200],jog_time_object[0x100],jog_async_object[0x48];
 static uint32_t jog_native_slots[COMMAND_SLOTS][5],*jog_native_slot;static unsigned jog_fixture_ops[COMMAND_SLOTS],jog_fixture_op,jog_fixture_fault,jog_fixture_calls,jog_fixture_epoch,jog_fixture_defer;
+/* An unrelated listener's queue published on the same generic seam while a jog
+ * submission is open, the way master_unrelated_slot models it for master. */
+static uint32_t jog_unrelated_slot[5]={0x1477d3c,0x1472d90,0,0,0};static unsigned jog_fixture_foreign;
 static void *jog_audio_fixture(void *unused){
  (void)unused;union {uint64_t align;unsigned char bytes[sizeof(Context)+0x30];} frames;
  Context *enter=(Context*)(frames.bytes+0x30),*done=(Context*)frames.bytes;
@@ -981,6 +1588,10 @@ static void jog_dispatch_fixture(uint32_t x,unsigned op,int32_t delta){
  require(x==ptr(jog_async_object)&&command_jog_delta((uint32_t)delta),"signed relative native facade ABI");
  jog_native_slot[0]=jog_invokers[unit];jog_native_slot[1]=jog_managers[unit];jog_native_slot[2]=x+8;jog_native_slot[3]=x;jog_native_slot[4]=(uint32_t)delta;
  if(jog_fixture_fault)jog_native_slot[1]+=4;
+ if(jog_fixture_foreign){
+  Context u=context();u.r[7]=ptr(queue_object)+0x14;u.r[9]=ptr(project_object)|1;u.r[10]=ptr(jog_unrelated_slot);call(&u,JG_PUBLISH);
+  require(!atomic_load(&command_state->trace_error),"unrelated native history publication on the shared seam must not poison an open jog submission");
+ }
  Context c=context();c.r[7]=ptr(queue_object)+0xfc;c.r[9]=(x+8)|1;c.r[10]=ptr(jog_native_slot);call(&c,JG_PUBLISH);
  if(jog_fixture_fault||jog_fixture_defer){c.r[0]=1;call(&c,JG_BAR_RESULT+3*unit);return;}
  /* Real audio may finish as soon as publication resumes, before the native
@@ -1011,7 +1622,7 @@ static void jog_checks(void){
  MirrorState *saved=fixture;CommandState *saved_command=command_state;
  fixture=calloc(1,sizeof(*fixture));command_state=calloc(1,sizeof(*command_state));require(fixture&&command_state,"jog component state");
  for(unsigned trial=0;trial<6;trial++){
-  memset(command_state,0,sizeof(*command_state));initial(1);command_initialize();observer_running=1;observer_image_bias=0;atomic_store(&command_state->alive,1);component_jog_dispatch=jog_dispatch_fixture;jog_fixture_fault=trial==3;jog_fixture_epoch=trial==2?2:0;jog_fixture_calls=0;jog_fixture_defer=trial==5;
+  memset(command_state,0,sizeof(*command_state));initial(1);command_initialize();observer_running=1;observer_image_bias=0;atomic_store(&command_state->alive,1);component_jog_dispatch=jog_dispatch_fixture;jog_fixture_fault=trial==3;jog_fixture_epoch=trial==2?2:0;jog_fixture_calls=0;jog_fixture_defer=trial==5;jog_fixture_foreign=trial==0;
   uint32_t a=ptr(jog_audio_object),s=ptr(jog_sequencer_object),t=ptr(jog_timeline_object),u=ptr(jog_time_object),x=ptr(jog_async_object);
   put(ptr(root_object)+0x2e4,a);put(a+0xa8,ptr(queue_object));put(a+0x3d8,x);put(a+0x3bc,s);put(a+0x3a4,t);put(a+0x3a0,u);put(x,0x689fdac);put(x+8,ptr(queue_object));put(x+0x40,s);put(t,0x69091b0);put(s+0x400,t);put(s+0x3fc,u);
   seed_fixture(0,0,0x3f000000,1);load_fixture();
@@ -1093,6 +1704,9 @@ static void *master_audio_fixture(void *unused){
  (void)unused;union {uint64_t align;unsigned char bytes[sizeof(Context)+8];} frames;
  Context *enter=(Context*)(frames.bytes+8),*done=(Context*)frames.bytes;uint32_t m=ptr(jog_audio_object)+0x260;
  *enter=context();enter->r[0]=ptr(master_fixture_slot+2);call(enter,MS_ENTER);
+ /* Automation Write armed: a master setter call on another Mixer object inside
+  * this command's window is proof it is not this command's own call. */
+ if(master_fixture_trial==7){Context foreign=context();foreign.r[0]=ptr(jog_audio_object);foreign.r[1]=0;foreign.d[0]=0x3f400000;call(&foreign,MS_SET_ENTER);foreign=context();foreign.r[4]=ptr(jog_audio_object);call(&foreign,MS_SET_DONE);}
  Context setter=context();setter.r[0]=m;setter.r[1]=0;setter.d[0]=master_fixture_trial==2?0x3e800000:0x3f200000;call(&setter,MS_SET_ENTER);
  if(master_fixture_trial!=1){Context scalar=context();scalar.r[5]=m+0xa8;scalar.d[8]=setter.d[0];call(&scalar,M_FLOAT);}
  setter=context();setter.r[4]=m;call(&setter,MS_SET_DONE);
@@ -1115,11 +1729,11 @@ static void master_dispatch_fixture(uint32_t f,unsigned index,float value){
 }
 static void master_checks(void){
  MirrorState *saved=fixture;CommandState *saved_command=command_state;fixture=calloc(1,sizeof(*fixture));command_state=calloc(1,sizeof(*command_state));require(fixture&&command_state,"master state fixture");
- for(unsigned trial=0;trial<7;trial++){
+ for(unsigned trial=0;trial<8;trial++){
   master_fixture_trial=trial;master_fixture_calls=0;memset(command_state,0,sizeof(*command_state));initial(1);command_initialize();observer_running=1;observer_image_bias=0;atomic_store(&command_state->alive,1);component_master_dispatch=master_dispatch_fixture;
   uint32_t a=ptr(jog_audio_object),m=a+0x260,f=ptr(master_fixture_factory);memset(jog_audio_object,0,sizeof(jog_audio_object));put(ptr(root_object)+0x2e4,a);put(ptr(root_object)+0x318,f);put(a+0xa8,ptr(queue_object));put(m,0x6898b34);put(f,0x6899fa0);put(f+4,ptr(queue_object));put(f+0x10,ptr(queue_object));put(f+0x14,ptr(project_object));put(f+0x30,word(ptr(project_object)+0xab0));put(f+0x40,m);
   Context frame=context();frame.r[0]=m;call(&frame,CH_MIXER_BIRTH);frame.r[4]=m;frame.r[5]=trial==1?0x3f200000:0x3f000000;call(&frame,CH_MASTER_BIRTH);seed_fixture(0,0,0x3f000000,1);load_fixture();
-  CopiedMirror out;require(copy_mirror(fixture,&out)&&out.master.available,"actual retained master field joins current embedded Mixer");
+  MIRROR_COPY(out);require(copy_mirror(fixture,&out)&&out.master.available,"actual retained master field joins current embedded Mixer");
   CommandRequest r={.pid=command_state->pid,.start_lo=command_state->start_lo,.start_hi=command_state->start_hi,.origin_sec=command_state->origin_sec,.origin_nsec=command_state->origin_nsec,.epoch=epoch,.bits=0x3f200000,.expires=120000,.before_bits=out.master.bits,.before_revision=out.master.revision,.reserved=CF_MASTER,.field_incarnation=out.master.incarnation,.project_owner=out.project_owner,.global_owner=out.master.owner_incarnation};
   if(trial==4){frame.r[0]=f;call(&frame,MS_FACTORY_DEATH);}
   unsigned at=submit_fixture(r);CommandSlot *slot=command_state->slots+at;
@@ -1130,13 +1744,18 @@ static void master_checks(void){
   in.flights[at]=(InputFlight){.flight=1,.field=CF_MASTER,.bits=r.bits,.expires=120000,.before_revision=r.before_revision,.field_incarnation=r.field_incarnation,.property=m+0xa8,.global_owner=r.global_owner,.global_epoch=r.epoch};
   input_drain(&in,&bank,&out,1);require(!in.error&&in.settled==1,"actual producer events consumed by production master settlement policy");
   require(out.master.bits==(trial==2?0x3e800000:r.bits)&&out.master.revision==(trial==1?r.before_revision:r.before_revision+2),"native no-change and history-adjusted actual source are not desired-value acknowledgements");
-  unsigned commits=0;for(unsigned lane=0;lane<COMMAND_LANES;lane++)for(unsigned j=0;j<atomic_load(&slot->lanes[lane].published);j++){CommandEvent e;require(command_event_read(slot->lanes+lane,1,j,&e),"master retained event read");commits+=e.kind==CE_MASTER_COMMIT;}
-  require(commits==(trial==1?0:1),"no manufactured commit for native no-op");command_retire();require(command_idle(command_state),"master settled source request reclaims independently");
+  unsigned commits=0,sets=0;for(unsigned lane=0;lane<COMMAND_LANES;lane++)for(unsigned j=0;j<atomic_load(&slot->lanes[lane].published);j++){CommandEvent e;require(command_event_read(slot->lanes+lane,1,j,&e),"master retained event read");commits+=e.kind==CE_MASTER_COMMIT;sets+=e.kind==CE_MASTER_SET;}
+  require(commits==(trial==1?0:1)&&sets==1,"no manufactured commit for native no-op, and exactly one setter receipt beside foreign master traffic");command_retire();require(command_idle(command_state),"master settled source request reclaims independently");
  }
  observer_running=0;put(ptr(root_object)+0x318,0);put(ptr(root_object)+0x2e4,0);free(fixture);free(command_state);fixture=saved;mirror_state=saved;command_state=saved_command;
  puts("PASS master hard-float factory ABI, retained command/payload correlation, early audio completion, actual source/consumer settlement, no-change/history-adjusted value, unrelated history publication/delayed callback, duplicate exact publication, malformed callable and dead factory rejection (native body substituted)");
 }
 static uint32_t recording_fixture_n[24],recording_fixture_w[34],recording_fixture_cp[48],recording_fixture_q[4],recording_fixture_vtable[4];
+/* The application's own record activity reaching the same callbacks while this
+ * command's recording call is open: a producer on another Track, and applies
+ * from another call site and for another receiver Program. */
+static uint32_t recording_foreign_cp[48],recording_foreign_q[4];static unsigned recording_foreign;
+enum {RS_LOCKING,RS_NONLOCKING,RS_NOOP,RS_UNREADABLE};static unsigned recording_shape;
 static unsigned recording_trial;
 static void *recording_second_fixture(void *unused){
  (void)unused;union {uint64_t align;unsigned char bytes[sizeof(Context)+0x30];} frames;
@@ -1149,10 +1768,25 @@ static void *recording_first_fixture(void *unused){
  Context *enter=(Context*)(frames.bytes+0x18),*end=(Context*)frames.bytes;
  uint32_t n=ptr(recording_fixture_n+2),cp=ptr(recording_fixture_cp),p=ptr(program_objects[0]);
  *enter=context();enter->r[0]=n;call(enter,RC_ENTER);
+ if(recording_foreign){
+  uint32_t fcp=ptr(recording_foreign_cp);
+  put(fcp,0x689fe14);put(fcp+0x80,ptr(track_objects[1]));put(fcp+0x18,ptr(queue_object));recording_foreign_q[0]=ptr(recording_fixture_vtable);
+  Context f=context();f.r[0]=fcp;f.r[2]=n+0x18;f.lr=0x1c04b60;call(&f,RC_PRODUCER);
+  f=context();f.r[0]=ptr(recording_foreign_q);f.r[4]=fcp;f.r[6]=fcp+0x1c;f.r[8]=fcp+0x18;call(&f,RC_ENQUEUER);
+  f=context();f.r[0]=p;f.r[2]=n+0x18;f.lr=0x1c04b60;call(&f,RC_APPLY);
+  f=context();f.r[0]=ptr(program_objects[1]);f.r[2]=n+0x18;f.lr=0x1c04b94;call(&f,RC_APPLY);
+  require(!atomic_load(&command_state->trace_error),"the application's own record callbacks inside this command's recording call must not poison it");
+ }
  if(recording_trial!=1){
   if(recording_trial>=2){
    Context c=context();c.r[0]=cp;c.r[2]=n+0x18;c.lr=0x1c04b60;call(&c,RC_PRODUCER);
    c=context();c.r[0]=ptr(recording_fixture_q);c.r[4]=cp;c.r[6]=cp+0x1c;c.r[8]=cp+0x18;call(&c,RC_ENQUEUER);
+   if(recording_foreign){
+    uint32_t fcp=ptr(recording_foreign_cp);
+    Context f=context();f.r[0]=fcp;f.r[2]=n+0x18;f.lr=0x1c04b60;call(&f,RC_PRODUCER);
+    f=context();f.r[0]=ptr(recording_foreign_q);f.r[4]=fcp;f.r[6]=fcp+0x1c;f.r[8]=fcp+0x18;call(&f,RC_ENQUEUER);
+    require(!atomic_load(&command_state->trace_error),"another producer and its enqueuer after this command's own was retained must not poison it");
+   }
    c=context();c.r[7]=ptr(recording_fixture_q)+4;c.r[9]=(cp+0x18)|1u;c.r[10]=ptr(recording_fixture_w);call(&c,JG_PUBLISH);
    if(recording_trial==4){call(&c,JG_PUBLISH);return NULL;}
    /* The real native second queue may finish before its producer returns. */
@@ -1170,20 +1804,34 @@ static void recording_dispatch_fixture(uint32_t f,uint32_t p,unsigned kind,unsig
  uint32_t n=ptr(recording_fixture_n+2),w=ptr(recording_fixture_w+2),cp=ptr(recording_fixture_cp);
  recording_fixture_n[0]=0x13cf830;recording_fixture_n[1]=0x13d18b0;put(n,f+4);put(n+8,f);put(n+0xc,0x101);put(n+0x10,7);put(n+0x14,p);put(n+0x20,2);put(n+0x28,0x101);put(n+0x2c,bits);put(n+0x30,7);put(n+0x50,ptr(track_objects[0]));
  recording_fixture_w[0]=0x1bbce38;recording_fixture_w[1]=0x1bbf2e8;put(w,cp+0x18);put(w+8,cp);put(w+0xc,ptr(track_objects[0]));put(w+0x18,1234);put(w+0x20,2);put(w+0x28,0x101);put(w+0x2c,bits);put(w+0x30,7);
- put(cp,0x689fe14);put(cp+0x80,ptr(track_objects[0]));put(cp+0x18,ptr(queue_object));recording_fixture_q[0]=ptr(recording_fixture_vtable);recording_fixture_vtable[2]=0x28c4078;
+ put(cp,0x689fe14);put(cp+0x80,ptr(track_objects[0]));put(cp+0x18,ptr(queue_object));/* The producer chooses its enqueuer: RS_NONLOCKING is the thread-specific arm
+  * hardware measured on the record path, RS_LOCKING the embedded fallback,
+  * RS_NOOP the implementation that drops the work, RS_UNREADABLE an object
+  * whose class cannot be read. */
+ recording_fixture_q[0]=recording_shape==RS_UNREADABLE?1u:ptr(recording_fixture_vtable);
+ recording_fixture_vtable[2]=recording_shape==RS_NONLOCKING?0x134b794:recording_shape==RS_NOOP?0x28c8108:0x28c4078;
  Context c=context();c.r[7]=ptr(queue_object)+0xfc;c.r[9]=(f+4)|1u;c.r[10]=ptr(recording_fixture_n);call(&c,JG_PUBLISH);
  pthread_t first;require(!pthread_create(&first,NULL,recording_first_fixture,NULL)&&!pthread_join(first,NULL),"first GUI recording queue callback on ARM source thread (native body substituted)");
  command_retire();require(!atomic_load(&command_state->slots[0].sealed),"GUI submission flight prevents recording reclaim before facade return");
 }
 static void recording_checks(void){
  MirrorState *saved=fixture;CommandState *csaved=command_state;fixture=calloc(1,sizeof(*fixture));command_state=calloc(1,sizeof(*command_state));require(fixture&&command_state,"recording state fixture");
- for(unsigned trial=0;trial<5;trial++){
-  recording_trial=trial;memset(command_state,0,sizeof(*command_state));initial(1);command_initialize();observer_running=1;observer_image_bias=0;atomic_store(&command_state->alive,1);component_recording_dispatch=recording_dispatch_fixture;
+ for(unsigned trial=0;trial<8;trial++){
+  recording_trial=trial>=5?2:trial;recording_shape=trial==5?RS_NONLOCKING:trial==6?RS_NOOP:trial==7?RS_UNREADABLE:RS_LOCKING;recording_foreign=trial==0||trial==2;memset(command_state,0,sizeof(*command_state));initial(1);command_initialize();observer_running=1;observer_image_bias=0;atomic_store(&command_state->alive,1);component_recording_dispatch=recording_dispatch_fixture;
   seed_fixture(0,0,0x3f000000,1);load_fixture();CommandRequest r=request(0x3f200000);unsigned at=submit_fixture(r);CommandSlot *slot=command_state->slots+at;
+  if(trial==6||trial==7){require(atomic_load(&command_state->trace_error)==C_TRACE_AMBIGUOUS&&!recording_queue[at]&&!atomic_load(recording_work+at),"an enqueuer that drops the work, and one whose class cannot be read, are both refused and retain neither queue nor recorder job");continue;}
+  if(trial==5){
+   /* The arm the device actually takes: a thread-specific enqueuer, not the
+    * one embedded at manager+0x18, so a regression cannot silently go back to
+    * modelling only the fallback. The retained identity is q+4, which the
+    * second publication then has to match. */
+   require(recording_fixture_vtable[2]==0x134b794&&ptr(recording_fixture_q)!=word(ptr(recording_fixture_cp)+0x18)+0x18,"trial models the thread-specific NonLockingQueueEnqueuer arm, not the embedded fallback");
+   require(recording_queue[at]==ptr(recording_fixture_q)+4,"the admitted thread-specific enqueuer retains its own queue identity");
+  }
   if(trial==4){require(atomic_load(&command_state->trace_error)==C_TRACE_AMBIGUOUS&&!atomic_load(&slot->done),"duplicate exact recorder publication cannot certify completion");continue;}
   if(trial==3){require(!atomic_load(&slot->done)&&atomic_load(active_request),"first callback alone cannot complete a published recorder job");pthread_t second;require(!pthread_create(&second,NULL,recording_second_fixture,NULL)&&!pthread_join(second,NULL),"second callback can finish after first and GUI return");}
   require(atomic_load(&slot->done)==1&&!atomic_load(&slot->rejected)&&!atomic_load(&command_state->trace_error),"recording callback completion retains source identity");command_retire();require(atomic_load(&slot->sealed)==1,"both native flights leave before record evidence seals");
-  atomic_store(&fixture->heartbeat,1);CopiedMirror out;require(copy_mirror(fixture,&out),"recording source copied");MirrorInput in={.commands=command_state};MirrorBank bank;bank_init(&bank);bank_apply(&bank,&out,1);
+  atomic_store(&fixture->heartbeat,1);MIRROR_COPY(out);require(copy_mirror(fixture,&out),"recording source copied");MirrorInput in={.commands=command_state};MirrorBank bank;bank_init(&bank);bank_apply(&bank,&out,1);
   in.flights[at]=(InputFlight){.flight=1,.field=CF_VOLUME,.bits=r.bits,.expires=120000,.before_revision=r.before_revision,.property=ptr(program_objects[0])+0x5b0,.target={r.epoch,r.serial,r.binding,r.incarnation,ptr(track_objects[0]),ptr(program_objects[0]),r.track_owner,r.program_owner}};
   input_drain(&in,&bank,&out,1);require(!in.error&&in.settled==1,"production input consumes first/second recording callback proof without demanding per-point persistence");
   require(out.tracks[0].bits==(trial==1?r.before_bits:r.bits),"no ClipPlayer native no-op preserves actual source value");command_retire();require(command_idle(command_state),"recording handling reclaims only after consumer settlement");
@@ -1297,7 +1945,7 @@ static void global_dispatch_fixture(unsigned op,uint32_t target,uint32_t functio
 }
 static void *transport_queue_runner(void *unused){(void)unused;transport_queue_component_run();return 0;}
 static void request_meter_bank(unsigned offset){
- CopiedMirror out;require(copy_mirror(fixture,&out),"meter bank source copy");
+ MIRROR_COPY(out);require(copy_mirror(fixture,&out),"meter bank source copy");
  MirrorInput in={.commands=command_state};MirrorBank bank;bank_init(&bank);bank_apply(&bank,&out,atomic_load(&fixture->heartbeat));
  if(offset==UINT32_MAX){for(unsigned i=0;i<out.count&&i<MIRROR_BANK;i++)bank.strips[i]=bank_identity(&out,out.tracks+i);}
  else{bank.offset=offset;bank_apply(&bank,&out,atomic_load(&fixture->heartbeat));}
@@ -1351,7 +1999,7 @@ static void duplicate_used(unsigned slot,unsigned used){duplicate_sequence_objec
  * app's own UI drain service it, and return the refusal code (0 on acceptance).
  * The slot is retired either way, so the mailbox is idle for the next case. */
 static unsigned duplicate_case(uint32_t editor,unsigned *seq_out,unsigned *at_out){
- CopiedMirror out;require(copy_mirror(fixture,&out),"duplicate snapshot");
+ MIRROR_COPY(out);require(copy_mirror(fixture,&out),"duplicate snapshot");
  CommandRequest r={.epoch=epoch,.expires=120000,.reserved=GLOBAL_SEQ_DUPLICATE,.project_owner=out.project_owner,.global_owner=channel_owner_id(editor)};
  duplicate_order_count=duplicate_order_overflow=0;duplicate_block=0;duplicate_name_at=duplicate_free_at=0;
  memset(duplicate_block_words,0,sizeof duplicate_block_words);
@@ -1506,7 +2154,7 @@ static void sequence_duplicate_checks(uint32_t editor,uint32_t audio){
   require(state_source==1&&state_destination==2,"the slot record names the source and the destination the block carried");
   require(end_bits==1,"the end carries the submission, not a claim about the copy's contents");}
  command_retire();require(atomic_load(&command_state->slots[at].sealed)==seq,"the duplicate seals after its synchronous return");
- {CopiedMirror out;require(copy_mirror(fixture,&out),"duplicate settled snapshot");
+ {MIRROR_COPY(out);require(copy_mirror(fixture,&out),"duplicate settled snapshot");
   MirrorInput in={.commands=command_state};MirrorBank bank;bank_init(&bank);
   unsigned tick=atomic_load(&fixture->heartbeat)+1;atomic_store(&fixture->heartbeat,tick);
   require(copy_mirror(fixture,&out),"duplicate settled snapshot readback");bank_apply(&bank,&out,tick);
@@ -1623,7 +2271,7 @@ static void general_checks(void){
  put(key_fixture_peer,KEY_PEER_VTABLE_RVA);put(key_fixture_peer+KEY_PEER_COMPONENT,window);key_press_result=1;
  for(unsigned i=0;i<28;i++){
   unsigned op=i<3?CF_AUTOMATION:i<14?GLOBAL_SAVE+i-3:i<22?GLOBAL_PAGE_MAIN+i-14:i<26?GLOBAL_PLAY+i-22:i==26?GLOBAL_KEY_TAB:GLOBAL_KEY_BACKTAB,bits=i<3?i:0;
-  CopiedMirror out;require(copy_mirror(fixture,&out),"general initial snapshot");
+  MIRROR_COPY(out);require(copy_mirror(fixture,&out),"general initial snapshot");
   uint32_t target=op==CF_AUTOMATION?g:command_transport(op)?responder:op==GLOBAL_SAVE||command_page(op)||command_key(op)||command_history(op)?e:z,field=op==CF_AUTOMATION?out.automation.incarnation:0;
   CommandRequest r={.epoch=epoch,.bits=bits,.expires=120000,.reserved=op,.field_incarnation=field,.project_owner=out.project_owner,.global_owner=command_transport(op)?out.editor_owner:channel_owner_id(target)};
   unsigned copies=transport_queue_component_manager_count(0),destroys=transport_queue_component_manager_count(1),holder_count=word(e+0x2cc);
@@ -1679,7 +2327,7 @@ static void general_checks(void){
   * press and no completion. The first case is the one that fired on the device
   * with the old Editor-derived lookup. */
  for(unsigned bad=0;bad<4;bad++){
-  CopiedMirror out;require(copy_mirror(fixture,&out),"key refusal snapshot");
+  MIRROR_COPY(out);require(copy_mirror(fixture,&out),"key refusal snapshot");
   CommandRequest r={.epoch=epoch,.expires=120000,.reserved=GLOBAL_KEY_TAB,.project_owner=out.project_owner,.global_owner=channel_owner_id(e)};
   unsigned char neighbour=(unsigned char)(0xa5u&~key_bitmap_mask(GLOBAL_KEY_TAB));uint32_t modifiers_before=0x3000u+bad;
   key_call_count=key_call_overflow=0;key_fixture_op=GLOBAL_KEY_TAB;
@@ -1700,7 +2348,7 @@ static void general_checks(void){
  /* Failed submissions and retired callbacks must neither block the next
   * transport nor fabricate completion. The native queue is substituted. */
  CommandState *transport_saved=command_state;command_state=calloc(1,sizeof(*command_state));require(command_state!=NULL,"isolated transport cancellation process fixture");command_initialize();command_queues=ptr(queue_object);atomic_store(&command_state->alive,1);
- CopiedMirror transport_snapshot;require(copy_mirror(fixture,&transport_snapshot),"transport cancellation identities");
+ MIRROR_COPY(transport_snapshot);require(copy_mirror(fixture,&transport_snapshot),"transport cancellation identities");
  CommandRequest transport_request={.epoch=epoch,.expires=120000,.reserved=GLOBAL_PLAY,.project_owner=transport_snapshot.project_owner,.global_owner=transport_snapshot.editor_owner};
  unsigned transport_before=transport_calls,holder_before=word(e+0x2cc);
  transport_queue_component_fail(1);unsigned refused_at=submit_fixture(transport_request),refused_seq=atomic_load(&command_state->published);transport_queue_component_fail(0);
@@ -1720,7 +2368,7 @@ static void general_checks(void){
   * consumer receipts. Native facade bodies and downstream jobs are substituted. */
  unsigned tick=15;toggle_calls=toggle_fault=0;
  for(unsigned op=GLOBAL_RECORD_TOGGLE;op<=GLOBAL_LOOP_TOGGLE;op++)for(unsigned initial_value=0;initial_value<(op==GLOBAL_RECORD_TOGGLE?5u:2u);initial_value++){
-  CopiedMirror out;require(copy_mirror(fixture,&out),"intent copied identities");MirrorInput in={.commands=command_state};MirrorBank bank;bank_init(&bank);bank_apply(&bank,&out,tick);
+  MIRROR_COPY(out);require(copy_mirror(fixture,&out),"intent copied identities");MirrorInput in={.commands=command_state};MirrorBank bank;bank_init(&bank);bank_apply(&bank,&out,tick);
   /* Queue a rapid pair, then change actual state as a touchscreen would. The
    * stale copied bits are intentionally not refreshed before either request. */
   input_global_add(&in,&out,op,0,tick);input_global_add(&in,&out,op,0,tick);
@@ -1738,7 +2386,7 @@ static void general_checks(void){
  }
  require(toggle_calls==18,"all mode/toggle pairs reached native facade once per press");
  /* Missing current Sequence refuses before native entry and releases its slot. */
- put(ptr(project_object)+0xe4,0);CopiedMirror absent;require(copy_mirror(fixture,&absent),"absent Sequence snapshot");
+ put(ptr(project_object)+0xe4,0);MIRROR_COPY(absent);require(copy_mirror(fixture,&absent),"absent Sequence snapshot");
  CommandRequest absent_request={.epoch=epoch,.expires=120000,.reserved=GLOBAL_LOOP_TOGGLE,.project_owner=absent.project_owner,.global_owner=absent.project_owner};
  unsigned absent_at=submit_fixture(absent_request),absent_seq=atomic_load(&command_state->published);command_retire();
  require(atomic_load(&command_state->slots[absent_at].rejected)==C_IDENTITY&&atomic_load(&command_state->slots[absent_at].reclaimed)==absent_seq&&command_idle(command_state),"no Sequence refuses without dispatch, receipt or stranded slot");
@@ -1750,7 +2398,7 @@ static void general_checks(void){
   /* Separate command-process fixture for each incomplete native invocation.
    * Production never resets or reclaims such an unproved invocation. */
   command_state=calloc(1,sizeof(*command_state));require(command_state!=NULL,"isolated failed-intent process fixture");command_initialize();command_queues=ptr(queue_object);atomic_store(&command_state->alive,1);
-  toggle_fault=fault;put(ptr(project_object)+0xe4,toggle_sequence);CopiedMirror out;require(copy_mirror(fixture,&out),"fault intent identities");
+  toggle_fault=fault;put(ptr(project_object)+0xe4,toggle_sequence);MIRROR_COPY(out);require(copy_mirror(fixture,&out),"fault intent identities");
   CommandRequest r={.epoch=epoch,.expires=120000,.reserved=GLOBAL_LOOP_TOGGLE,.project_owner=out.project_owner,.global_owner=out.project_owner};unsigned at=submit_fixture(r);
   if(atomic_load(&command_state->slots[at].rejected)!=C_SOURCE_CHANGED||atomic_load(&command_state->slots[at].done)==atomic_load(&command_state->slots[at].published))fprintf(stderr,"intent fault=%u reject=%u done=%u seq=%u trace=%u\n",fault,atomic_load(&command_state->slots[at].rejected),atomic_load(&command_state->slots[at].done),atomic_load(&command_state->slots[at].published),atomic_load(&command_state->trace_error));
   require(atomic_load(&command_state->slots[at].rejected)==C_SOURCE_CHANGED&&atomic_load(&command_state->slots[at].done)!=atomic_load(&command_state->slots[at].published),"missing configured commit/current-link loss cannot complete intent");
@@ -1776,7 +2424,7 @@ static void send_destination_checks(void){
  for(unsigned i=0;i<4;i++)seed_fixture(i,0,0x3f000000,1);
  uint32_t a=ptr(recording_fixture_audio),m=a+0x260,send[4]={ptr(program_objects[2]),ptr(program_objects[0]),ptr(program_objects[3]),ptr(program_objects[1])};put(ptr(root_object)+0x2e4,a);put(m,0x6898b34);
  Context c=context();c.r[0]=m;call(&c,CH_MIXER_BIRTH);load_fixture();for(unsigned i=0;i<4;i++)put(send[i],0x6931f70);put(m+0x78,ptr(send));put(m+0x7c,ptr(send)+16);put(m+0x80,ptr(send)+16);
- c=context();c.r[0]=ptr(queue_object)+4;send_destinations(&c);CopiedMirror out;require(copy_mirror(fixture,&out),"actual source-reader send snapshot");
+ c=context();c.r[0]=ptr(queue_object)+4;send_destinations(&c);MIRROR_COPY(out);require(copy_mirror(fixture,&out),"actual source-reader send snapshot");
  for(unsigned i=0;i<4;i++)require(out.send_programs[i]==send[i]&&out.send_owners[i]==channel_owner_id(send[i]),"native Mixer order survives independent Track order");
  channel_owner_death(send[1]);require(copy_mirror(fixture,&out)&&!out.send_programs[1]&&out.send_programs[0],"retired destination cannot inherit a name from retained stale identity");
  send[1]=send[0];send_destinations(&c);require(copy_mirror(fixture,&out)&&!out.send_programs[0]&&!out.send_programs[3],"duplicate native membership clears destination mapping");
@@ -1815,7 +2463,7 @@ static void bus_membership_checks(void){
   }else{
    require(!atomic_load(&fixture->meters.error)&&atomic_load(&fixture->meters.tokens)==2&&tracks[0].meter&&tracks[1].meter,"mixed native bus and ProgramPool meters retain separate demand");
    require(dispatched_calls==1&&atomic_load(&slot->done)==1&&!atomic_load(&slot->rejected)&&!atomic_load(&command_state->trace_error),"bus command reaches exact native method and completes");command_retire();
-   c=context();c.r[7]=p+0x2f4;call(&c,ME_STEREO);atomic_store(&fixture->heartbeat,1);CopiedMirror out;require(copy_mirror(fixture,&out)&&out.tracks[0].meter.available,"bus source meter reaches production reader");
+   c=context();c.r[7]=p+0x2f4;call(&c,ME_STEREO);atomic_store(&fixture->heartbeat,1);MIRROR_COPY(out);require(copy_mirror(fixture,&out)&&out.tracks[0].meter.available,"bus source meter reaches production reader");
    MirrorInput in={.commands=command_state};MirrorBank bank;bank_init(&bank);bank_apply(&bank,&out,1);
    in.flights[at]=(InputFlight){.flight=1,.field=CF_VOLUME,.bits=r.bits,.expires=120000,.before_revision=r.before_revision,.property=p+0x5b0,.target={r.epoch,r.serial,r.binding,r.incarnation,ptr(track_objects[0]),p,r.track_owner,r.program_owner}};
    input_drain(&in,&bank,&out,1);require(!in.error&&in.settled==1,"bus command actual source settles through production consumer");command_retire();require(command_idle(command_state),"bus settled command reclaims");
@@ -1837,7 +2485,7 @@ static void meter_interest_checks(void){
  request_meter_bank(8);call(&c,COMMAND_DRAIN);require(atomic_load(&fixture->meters.tokens)==4&&!tracks[0].meter&&tracks[8].meter,"bank move releases old and binds remaining four");
  atomic_store(&fixture->heartbeat,1001);call(&c,COMMAND_DRAIN);require(!atomic_load(&fixture->meters.tokens),"expired bridge lease releases demand");
  request_meter_bank(0);call(&c,COMMAND_DRAIN);require(atomic_load(&fixture->meters.tokens)==8,"fresh reconnect restores current bank");
- CopiedMirror out;require(copy_mirror(fixture,&out),"disconnect source");MirrorInput in={.commands=command_state};MirrorBank bank;bank_init(&bank);bank_apply(&bank,&out,1001);input_meter_interest(&in,&bank,&out,1001,0);call(&c,COMMAND_DRAIN);
+ MIRROR_COPY(out);require(copy_mirror(fixture,&out),"disconnect source");MirrorInput in={.commands=command_state};MirrorBank bank;bank_init(&bank);bank_apply(&bank,&out,1001);input_meter_interest(&in,&bank,&out,1001,0);call(&c,COMMAND_DRAIN);
  require(!atomic_load(&fixture->meters.tokens),"disconnect releases demand without waiting for source close");
  atomic_store(&command_state->stop_requested,1);call(&c,COMMAND_DRAIN);require(atomic_load(&fixture->meters.closed),"disabled interest still completes source close");
  observer_running=0;free(fixture);free(command_state);fixture=saved;mirror_state=saved;command_state=csaved;
@@ -1884,7 +2532,10 @@ static void retired_key_checks(void){
   require(!atomic_load(&command_state->error)&&(family?atomic_load(&channel_cell(property)->revision):atomic_load(&lookup(property)->revision))==revision,"retired late scalar and duplicate death preserve existing lifetime behavior");
   accepted[0].request.seq=1;accepted[0].request.reserved=family?CF_PAN:CF_VOLUME;accepted[0].property=property;atomic_store(active_request,1);
   call(&c,M_FLOAT);require(atomic_load(&command_state->trace_error)==C_TRACE_AMBIGUOUS,"active-request retired scalar retains prior zero-revision ambiguity");
-  atomic_store(active_request,0);atomic_store(&command_state->trace_error,0);
+  /* The trace latch now also records its call site in admission_detail, so
+   * resetting fault state between phases must clear both. The assertion below
+   * still proves no ENROLLMENT fault occurred in the phase that follows. */
+  atomic_store(active_request,0);atomic_store(&command_state->trace_error,0);atomic_store(&command_state->admission_detail,0);
   local_lane=0;for(unsigned lane=0;lane<COMMAND_LANES;lane++){atomic_store(&lane_claims[lane].busy,1);atomic_store(&command_state->lane_tokens[lane],lane+1);}c.r[0]=c.r[5]=0x55555000;
   call(&c,M_FLOAT);call(&c,MIRROR_PROPERTY_DESTROY);
   require(!local_lane&&!atomic_load(&command_state->error)&&!atomic_load(&command_state->admission_detail),"stable exact absence skips enrollment despite full lane registry");
@@ -1994,7 +2645,7 @@ static void mode_acceptance_checks(void){
   if(mode_test_case>=2)put(k+0x5c,mode_test_case==3?15:3); /* later touchscreen supersession/unavailability */
   mode_callbacks_fixture(mode_expected[at]);require(atomic_load(&slot->done)==r.seq&&!atomic_load(&command_state->trace_error),"all published controller jobs drain even after acceptance failure");
   call(&drain,COMMAND_DRAIN);command_retire();
-  MirrorInput in={.commands=command_state};MirrorBank bank;bank_init(&bank);CopiedMirror out;require(copy_mirror(fixture,&out),"mode consumer copied state");out.heartbeat=100;
+  MirrorInput in={.commands=command_state};MirrorBank bank;bank_init(&bank);MIRROR_COPY(out);require(copy_mirror(fixture,&out),"mode consumer copied state");out.heartbeat=100;
   in.flights[at]=(InputFlight){.flight=r.seq,.field=QLINK_MODE,.expires=120000,.qlink_request=r};
   input_drain(&in,&bank,&out,100);
   if(mode_test_case<2){require(atomic_load(&command_state->error)==mode_accept_error[at]&&!atomic_load(&slot->sealed)&&!atomic_load(&slot->settled)&&!in.settled,"failed acceptance closes only after callbacks without seal or success");}
@@ -2083,7 +2734,7 @@ static void io_audio_checks(void){
  Context drain=context();drain.r[0]=command_queues+4;io_service(&drain);
  require(io_current.fields[IO_MONITOR].status==IO_READY&&io_current.fields[IO_MONITOR].choice_count==4&&!strcmp(io_current.fields[IO_MONITOR].text,"Off")&&io_current.fields[IO_AUDIO_IN].status==IO_READY&&io_current.fields[IO_AUDIO_IN].choice_count==3&&!strcmp(io_current.fields[IO_AUDIO_IN].text,"Input 1,2"),"Audio Monitor and dynamic Audio In READY through actual service");
  require(io_current.fields[IO_AUDIO_OUT].status==IO_READY&&io_current.fields[IO_AUDIO_OUT].choice_count==2&&!strcmp(io_current.fields[IO_AUDIO_OUT].text,"Out 1/2"),"nested common bind exposes Audio Out on first selected-track service without reselection");
- CopiedMirror out;require(copy_mirror(fixture,&out)&&out.io_available,"actual I/O copied reader");MirrorInput in={.commands=command_state};MirrorBank bank;bank_init(&bank);bank.assignment=BA_IO;bank_apply(&bank,&out,0);
+ MIRROR_COPY(out);require(copy_mirror(fixture,&out)&&out.io_available,"actual I/O copied reader");MirrorInput in={.commands=command_state};MirrorBank bank;bank_init(&bank);bank.assignment=BA_IO;bank_apply(&bank,&out,0);
  input_io_edit(&in,&bank,&out,IO_AUDIO_IN,2,0);input_io_submit(&in,&bank,&out,0);CommandRequest r;require(command_request_read(command_state->slots,1,&r)&&r.io_connector==ac&&r.io_field==IO_AUDIO_IN&&r.bits==2,"Audio In encoder intent uses actual AC/field/catalogue identity");
  Track *target=NULL;uint32_t connector=0;IOField actual={0};require(!io_resolve(&drain,&r,&target,&connector,&actual)&&connector==ac&&actual.value==0,"Audio In typed request admitted against actual source");
  /* This request was never dispatched; reset fixture ownership before testing
@@ -2135,7 +2786,7 @@ static void io_monitor_dispatch_checks(void){
  Context c=context();c.r[0]=connector;call(&c,IO_CONNECTOR_BIRTH);c.r[4]=connector;call(&c,IO_CONNECTOR_READY);
  union {uint64_t alignment;unsigned char bytes[sizeof(Context)+64];} frame;Context *bind=(Context*)(frame.bytes+64),*bound=(Context*)frame.bytes;*bind=context();bind->r[0]=connector;bind->r[2]=t->track;call(bind,IO_BIND_ENTER);*bound=context();bound->r[4]=connector;call(bound,IO_BIND_DONE);
  IOInterest *interest=&command_state->io_interest;atomic_store(&interest->revision,2);atomic_store(&interest->enabled,1);atomic_store(&interest->epoch,epoch);atomic_store(&interest->serial,t->serial);atomic_store(&interest->until,120000);
- Context drain=context();drain.r[0]=command_queues+4;io_service(&drain);CopiedMirror out;require(copy_mirror(fixture,&out)&&out.io_available&&out.io.fields[0].status==IO_READY&&out.io.fields[0].value==2,"Monitor Auto copied source ready");MirrorBank bank;bank_init(&bank);bank.assignment=BA_IO;bank_apply(&bank,&out,0);MirrorInput in={.commands=command_state};input_io_edit(&in,&bank,&out,IO_MONITOR,1,0);input_io_submit(&in,&bank,&out,0);call(&drain,COMMAND_DRAIN);
+ Context drain=context();drain.r[0]=command_queues+4;io_service(&drain);MIRROR_COPY(out);require(copy_mirror(fixture,&out)&&out.io_available&&out.io.fields[0].status==IO_READY&&out.io.fields[0].value==2,"Monitor Auto copied source ready");MirrorBank bank;bank_init(&bank);bank.assignment=BA_IO;bank_apply(&bank,&out,0);MirrorInput in={.commands=command_state};input_io_edit(&in,&bank,&out,IO_MONITOR,1,0);input_io_submit(&in,&bank,&out,0);call(&drain,COMMAND_DRAIN);
  if(io_monitor_publication_fault){require(io_fault[0]==C_TRACE_AMBIGUOUS&&atomic_load(&command_state->error)==C_TRACE_AMBIGUOUS&&!atomic_load(&command_state->slots[0].returned),"wrong payload/duplicate exact prepared source remains ambiguous");goto release_monitor;}
  require(!atomic_load(&command_state->error)&&atomic_load(&command_state->slots[0].returned)==1&&!atomic_load(&command_state->slots[0].done)&&io_queue_result[0]==2,"actual typed Monitor dispatch executes native callback and retains queued obligation");
  c=context();c.r[0]=ptr(io_monitor_queued)+8;call(&c,IO_MONITOR_ENTER);c.r[2]=t->track+0x3fc;c.r[1]=3;call(&c,IO_MONITOR_AUDIO);c.r[2]=0;call(&c,IO_MONITOR_DONE);call(&drain,COMMAND_DRAIN);command_retire();require(copy_mirror(fixture,&out),"Monitor postcallback copy");out.heartbeat=100;input_drain(&in,&bank,&out,100);command_retire();require(!in.error&&in.settled==1&&command_idle(command_state)&&in.flights[0].io_events[5].bits==3,"real callback-forwarded Merge source completes and reclaims through actual consumer");
@@ -2184,7 +2835,7 @@ static void io_sync_dispatch_checks(void){
   void *stub=mmap(NULL,4096,PROT_READ|PROT_WRITE|PROT_EXEC,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);require(stub!=MAP_FAILED,"MIDI commit gate");build_stub(stub,io_sync_commit,0);uint32_t *patch=(uint32_t*)(uintptr_t)anchor[io_sync_commit];jump(&patch,ptr(stub));jump(&patch,ptr(capture_a));__builtin___clear_cache(stub,(char*)stub+4096);__builtin___clear_cache((char*)(uintptr_t)anchor[io_sync_commit],(char*)patch);
   patch=(uint32_t*)(uintptr_t)functions[f];jump(&patch,ptr(io_sync_gui_fixture));__builtin___clear_cache((char*)(uintptr_t)functions[f],(char*)patch);
   IOInterest *interest=&command_state->io_interest;atomic_store(&interest->revision,2);atomic_store(&interest->enabled,1);atomic_store(&interest->epoch,epoch);atomic_store(&interest->serial,t->serial);atomic_store(&interest->until,120000);
-  Context drain=context();drain.r[0]=command_queues+4;io_service(&drain);CopiedMirror out;require(copy_mirror(fixture,&out)&&out.io.fields[io_sync_field].status==IO_READY,"actual four-MIDI copied source ready");MirrorBank bank;bank_init(&bank);bank.assignment=BA_IO;bank_apply(&bank,&out,0);MirrorInput in={.commands=command_state};input_io_edit(&in,&bank,&out,io_sync_field,1,0);input_io_submit(&in,&bank,&out,0);call(&drain,COMMAND_DRAIN);
+  Context drain=context();drain.r[0]=command_queues+4;io_service(&drain);MIRROR_COPY(out);require(copy_mirror(fixture,&out)&&out.io.fields[io_sync_field].status==IO_READY,"actual four-MIDI copied source ready");MirrorBank bank;bank_init(&bank);bank.assignment=BA_IO;bank_apply(&bank,&out,0);MirrorInput in={.commands=command_state};input_io_edit(&in,&bank,&out,io_sync_field,1,0);input_io_submit(&in,&bank,&out,0);call(&drain,COMMAND_DRAIN);
   require(!io_fault[0]&&!atomic_load(&command_state->error)&&atomic_load(&command_state->slots[0].returned)==1,"sync native receipts survive unrelated publications and post-call rebind");
   if(io_sync_test==4){require(!atomic_load(&command_state->slots[0].done)&&observer_running,"odd sync source remains healthy pending");atomic_fetch_add(&channel_cell(property)->revision,1);call(&drain,COMMAND_DRAIN);}
   command_retire();require(copy_mirror(fixture,&out),"sync completion copy");out.heartbeat=100;input_drain(&in,&bank,&out,100);command_retire();require(!in.error&&in.settled==1&&command_idle(command_state)&&observer_running,"sync receipt consumer settles/reclaims after native rebind");require(io_sync_test<5?in.flights[0].io_events[5].revision>0:in.flights[0].io_events[5].revision==0,"retired/reused sync source unavailable, never positive");
@@ -2224,7 +2875,7 @@ static void io_completion_checks(void){
   if(test<2){unsigned revision=atomic_load(&audio->revision);atomic_store(&audio->revision,revision+1);io_complete(&drain);command_retire();require(atomic_load(io_finished)==1&&!io_receipted(0)&&!atomic_load(&command_state->slots[0].done)&&!atomic_load(&command_state->slots[0].sealed)&&!atomic_load(&command_state->error)&&observer_running,"post-DONE secondary source publication leaves healthy pending obligation");atomic_store(&audio->revision,revision+2);}
   if(test>=6){atomic_store(&audio->live,0);if(test==7)channel_birth(t->track,apply,tag+1,wanted,NULL,0,1);}
   io_complete(&drain);command_retire();require(io_receipted(0)&&!atomic_load(&command_state->error)&&observer_running&&atomic_load(&command_state->slots[0].sealed)==1,"admitted I/O closes after selection/interest change without current connector");
-  MirrorInput in={.commands=command_state};in.flights[0]=(InputFlight){.flight=1,.field=IO_PARAMETER,.expires=120000,.io_request=r};CopiedMirror out;require(copy_mirror(fixture,&out),"I/O completion copied reader");out.heartbeat=100;MirrorBank bank;bank_init(&bank);input_drain(&in,&bank,&out,100);command_retire();require(!in.error&&in.settled==1&&command_idle(command_state),"actual I/O receipt consumer reclaims original queued obligation");require(test<4?in.flights[0].io_events[5].revision>0:in.flights[0].io_events[5].revision==0,"retired/reused original source never positively settles");
+  MirrorInput in={.commands=command_state};in.flights[0]=(InputFlight){.flight=1,.field=IO_PARAMETER,.expires=120000,.io_request=r};MIRROR_COPY(out);require(copy_mirror(fixture,&out),"I/O completion copied reader");out.heartbeat=100;MirrorBank bank;bank_init(&bank);input_drain(&in,&bank,&out,100);command_retire();require(!in.error&&in.settled==1&&command_idle(command_state),"actual I/O receipt consumer reclaims original queued obligation");require(test<4?in.flights[0].io_events[5].revision>0:in.flights[0].io_events[5].revision==0,"retired/reused original source never positively settles");
   free(fixture);free(command_state);
  }
  fixture=saved;mirror_state=saved;command_state=saved_command;
@@ -2267,7 +2918,7 @@ static void create_source_checks(void){
   if(failure==4)put(pool+0x38,word(pool+0x34)+3);
   call(close,M_CREATE_READY);
   if(failure)require(!active()&&!ready&&!creating.token,"malformed close, reused Project, changed root or malformed inventory fails closed");
-  else{CopiedMirror out;require(active()&&ready&&!creating.token&&copy_mirror(fixture,&out)&&out.ready&&out.count==1&&out.tracks[0].bits==0x3f000000,"blank completion publishes actual copied consumer inventory and constructor value");}
+  else{MIRROR_COPY(out);require(active()&&ready&&!creating.token&&copy_mirror(fixture,&out)&&out.ready&&out.count==1&&out.tracks[0].bits==0x3f000000,"blank completion publishes actual copied consumer inventory and constructor value");}
  }
  free(fixture);free(command_state);fixture=NULL;command_state=NULL;
  puts("PASS blank creation actual source dispatch, foreign-thread automatic completion exclusion, teardown/add and copied inventory; native creator bodies/objects substituted, no native blank acceptance claim");
@@ -2313,7 +2964,7 @@ int main(int argc,char **argv){
  void *v=mmap((void*)0x6930000,4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED,-1,0);require(v!=(void*)-1,"fixture Drum vtable page");put(0x6930c28,0x250ba74);put(0x6930c78,0x1375c68);
  key_statics_reserve();
  fixture=command_file(argv[1],sizeof(MirrorState));command_state=command_file(argv[2],sizeof(CommandState));require(fixture!=MAP_FAILED&&command_state!=MAP_FAILED,"exclusive actual shared output files");
- pointer_device_checks();wheel_data_checks();focus_press_checks();processor_lifecycle_checks();repair_checks();external_close_checks();new_project_checks();heartbeat_checks();channel_checks();jog_checks();master_checks();recording_checks();general_checks();send_destination_checks();bus_membership_checks();meter_interest_checks();registration_overlap_checks();mode_acceptance_checks();io_audio_checks();io_monitor_dispatch_checks();io_sync_dispatch_checks();io_completion_checks();
+ pointer_device_checks();wheel_data_checks();focus_press_checks();processor_lifecycle_checks();repair_checks();external_close_checks();new_project_checks();heartbeat_checks();drain_scan_checks();snapshot_clear_checks();channel_checks();channel_reclaim_checks();channel_seqlock_checks();jog_checks();master_checks();recording_checks();general_checks();send_destination_checks();bus_membership_checks();meter_interest_checks();registration_overlap_checks();mode_acceptance_checks();io_audio_checks();io_monitor_dispatch_checks();io_sync_dispatch_checks();io_completion_checks();
  initial(1);command_state->magic=COMMAND_MAGIC;command_state->version=COMMAND_VERSION;command_state->bytes=sizeof(*command_state);command_state->capacity=COMMAND_SLOTS;command_state->pid=getpid();uint64_t start=command_process_start(getpid());command_state->start_lo=start;command_state->start_hi=start>>32;command_state->origin_sec=fixture->origin_sec;command_state->origin_nsec=fixture->origin_nsec;command_state->seconds=WINDOW_SECONDS;atomic_store(&command_state->alive,1);
  command_initialize();observer_running=1;observer_image_bias=0;component_dispatch=fake_dispatch;
  seed_fixture(0,0,0x3f000000,1);load_fixture();
@@ -2326,7 +2977,7 @@ int main(int argc,char **argv){
  call(&drain,COMMAND_DRAIN);command_retire();require(atomic_load(&command_state->slots[0].done)==1&&!atomic_load(active_request)&&!atomic_load(&command_state->slots[0].sealed)&&!atomic_load(&command_state->reclaimed),"late admitted old-sequence flight blocks seal and reuse");
  atomic_store_explicit(&pause_resume,1,memory_order_release);require(!pthread_join(audio,NULL),"retired old-sequence hook exits");atomic_store(&pause_at,0);
  call(&drain,COMMAND_DRAIN);command_retire();require(atomic_load(&command_state->slots[0].sealed)==1&&!atomic_load(&command_state->reclaimed),"owner seals evidence separately from client settlement");
- CopiedMirror out;require(copy_mirror(fixture,&out)&&playable(out.tracks[0].vptr)&&out.tracks[0].bits==first.bits,"actual register commit is authoritative MMV7");
+ MIRROR_COPY(out);require(copy_mirror(fixture,&out)&&playable(out.tracks[0].vptr)&&out.tracks[0].bits==first.bits,"actual register commit is authoritative MMV7");
  atomic_store_explicit(&command_state->slots[0].settled,1,memory_order_release);call(&drain,COMMAND_DRAIN);command_retire();require(atomic_load(&command_state->reclaimed)==1,"sealed settled transaction becomes reusable");
  defer_audio=0;
  for(unsigned seq=2;seq<=32;seq++){

@@ -8,7 +8,7 @@ static __thread MasterCall master_call __attribute__((tls_model("initial-exec"))
 static void master_initialize(void){atomic_store(&master_factory,0);atomic_store(&master_dead_factory,0);master_submission=0;memset(&master_call,0,sizeof(master_call));for(unsigned i=0;i<COMMAND_SLOTS;i++){atomic_store(master_payload+i,0);master_c[i]=master_b[i]=master_enqueue[i]=0;}}
 static int master_copy(unsigned at,uint32_t *bits,uint32_t *revision){
  ChannelCell *cell=channel_cell(accepted[at].property);const CommandRequest *r=&accepted[at].request;
- if(!cell||atomic_load(&cell->field)!=CF_MASTER||atomic_load(&cell->incarnation)!=r->field_incarnation||atomic_load(&cell->owner_incarnation)!=r->global_owner||!atomic_load(&cell->live)||!channel_owner_id(accepted[at].program)||atomic_load(&mirror_state->channel.errors[CF_MASTER]))return 0;
+ if(!cell||atomic_load(&cell->field)!=CF_MASTER||atomic_load(&cell->incarnation)!=r->field_incarnation||atomic_load(&cell->owner_incarnation)!=r->global_owner||!atomic_load(&cell->live)||!channel_owner_id(accepted[at].program)||channel_fault(atomic_load(&mirror_state->channel.errors[CF_MASTER])))return 0;
  for(unsigned n=0;n<4;n++){unsigned rev=atomic_load_explicit(&cell->revision,memory_order_acquire);if(rev&1)continue;unsigned value=atomic_load_explicit(&cell->bits,memory_order_relaxed);atomic_thread_fence(memory_order_acquire);if(rev==atomic_load_explicit(&cell->revision,memory_order_relaxed)){*bits=value;*revision=rev;return rev!=0;}}
  return 0;
 }
@@ -26,7 +26,7 @@ static unsigned master_resolve(Context *c,const CommandRequest *r,uint32_t *fact
  if(!typed(root,0x68d7bf8)||word(root+0x24c)!=project||!typed(project,0x6933c4c)||word(project+0xa94)!=pool||!typed(pool,0x68ad2c4))return C_IDENTITY;
  uint32_t a=word(root+0x2e4),f=word(root+0x318);if(!pointer(a)||a>UINT32_MAX-0x400)return C_NATIVE_MEMBERSHIP;uint32_t m=a+0x260;
  if(!typed(m,0x6898b34)||!typed(f,0x6899fa0)||f!=atomic_load(&master_factory)||f==atomic_load(&master_dead_factory)||word(f+4)!=command_queues||word(f+0x10)!=command_queues||word(f+0x14)!=project||word(f+0x30)!=word(project+0xab0)||word(f+0x40)!=m||word(root+0xf8)!=command_queues||word(a+0xa8)!=command_queues)return C_NATIVE_MEMBERSHIP;
- ChannelCell *cell=channel_cell(m+0xa8);if(channel_owner_id(m)!=r->global_owner||atomic_load(&mirror_state->channel.mixer_owner)!=r->global_owner||!cell||!atomic_load(&cell->live)||atomic_load(&cell->incarnation)!=r->field_incarnation||atomic_load(&cell->owner_incarnation)!=r->global_owner||atomic_load(&mirror_state->channel.errors[CF_MASTER]))return C_IDENTITY;
+ ChannelCell *cell=channel_cell(m+0xa8);if(channel_owner_id(m)!=r->global_owner||atomic_load(&mirror_state->channel.mixer_owner)!=r->global_owner||!cell||!atomic_load(&cell->live)||atomic_load(&cell->incarnation)!=r->field_incarnation||atomic_load(&cell->owner_incarnation)!=r->global_owner||channel_fault(atomic_load(&mirror_state->channel.errors[CF_MASTER])))return C_IDENTITY;
  if(word(root+0x318)!=f||word(root+0x2e4)!=a)return C_NATIVE_MEMBERSHIP;
  *factory=f;*mixer=m;return 0;
 }
@@ -89,8 +89,14 @@ static void master_point(Context *c,unsigned site){
  const CommandRequest *r=&accepted[at].request;uint32_t m=accepted[at].program,cmd=master_c[at],payload=atomic_load(master_payload+at);
  if(source_requests[at]!=r->seq){trace_fail(C_TRACE_AMBIGUOUS);return;}
  if(site==MS_ENTER){if(master_call.id||word(payload)!=cmd+0x34||word(payload+4)!=cmd||word(payload+8)!=master_b[at]){trace_fail(C_TRACE_AMBIGUOUS);return;}master_call=(MasterCall){r->seq,payload,source_sp(c),0,1,0,0};event(c,CE_MASTER_ENTER,r->seq,payload,cmd+0x34,m,0,CF_MASTER,r->bits,0,atomic_load(&mirror_state->epoch));}
- else if(site==MS_SET_ENTER){if(master_call.phase!=1||c->r[0]!=m||c->r[1]){trace_fail(C_TRACE_AMBIGUOUS);return;}master_call.phase=2;master_call.set_sp=source_sp(c);event(c,CE_MASTER_SET,r->seq,payload,cmd+0x34,m,0,CF_MASTER,(uint32_t)c->d[0],m+0xa8,0);}
- else if(site==MS_SET_DONE){if(master_call.phase!=2||c->r[4]!=m||source_sp(c)!=master_call.set_sp||!master_copy(at,&master_call.value,&master_call.revision)){trace_fail(C_TRACE_AMBIGUOUS);return;}master_call.phase=3;event(c,CE_MASTER_VALUE,r->seq,payload,cmd+0x34,m,0,CF_MASTER,master_call.value,m+0xa8,master_call.revision);}
+ /* Unlike the other lanes, nothing before this point filters the receiver: the
+  * hook admits every master setter call made while this command's native call
+  * is on the thread. A call on another Mixer object is proof it is not this
+  * command's own, so it is ignored, relevance before correctness. The index
+  * argument stays a fault: its meaning for a foreign writer is not established
+  * here, so a call this lane cannot attribute must still fail. */
+ else if(site==MS_SET_ENTER){if(c->r[0]!=m)return;if(master_call.phase!=1||c->r[1]){trace_fail(C_TRACE_AMBIGUOUS);return;}master_call.phase=2;master_call.set_sp=source_sp(c);event(c,CE_MASTER_SET,r->seq,payload,cmd+0x34,m,0,CF_MASTER,(uint32_t)c->d[0],m+0xa8,0);}
+ else if(site==MS_SET_DONE){if(c->r[4]!=m)return;if(master_call.phase!=2||source_sp(c)!=master_call.set_sp||!master_copy(at,&master_call.value,&master_call.revision)){trace_fail(C_TRACE_AMBIGUOUS);return;}master_call.phase=3;event(c,CE_MASTER_VALUE,r->seq,payload,cmd+0x34,m,0,CF_MASTER,master_call.value,m+0xa8,master_call.revision);}
  else if(site==MS_DONE){if(master_call.phase!=3||master_call.payload!=payload||source_sp(c)+8!=master_call.sp){trace_fail(C_TRACE_AMBIGUOUS);return;}event(c,CE_MASTER_DONE,r->seq,payload,cmd+0x34,m,0,CF_MASTER,master_call.value,0,atomic_load(&mirror_state->epoch));memset(&master_call,0,sizeof(master_call));atomic_store_explicit(active_request+at,0,memory_order_seq_cst);atomic_store_explicit(&command_state->slots[at].done,r->seq,memory_order_release);}
 }
 static void master_commit(Context *c,unsigned at){

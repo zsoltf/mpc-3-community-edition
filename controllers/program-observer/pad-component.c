@@ -36,12 +36,28 @@ static void instrument_swap(unsigned a,unsigned b){
  Context *entry=(Context*)(frames.bytes+0x20),*end=(Context*)frames.bytes;
  *entry=context();entry->r[0]=ptr(program_objects[0]);entry->r[1]=a;entry->r[2]=b;call(entry,PD_SWAP);
  uint32_t before=pad_vector[a];pad_vector[a]=pad_vector[b];pad_vector[b]=before;
- CopiedMirror s;require(copy_mirror(fixture,&s)&&!s.pads[a].available&&!s.pads[b].available,"swap hides both slots before either direct native vector write can be consumed");
+ MIRROR_COPY(s);require(copy_mirror(fixture,&s)&&!s.pads[a].available&&!s.pads[b].available,"swap hides both slots before either direct native vector write can be consumed");
  instrument_bind(a,pad_vector[a]);instrument_bind(b,pad_vector[b]);
  *end=context();call(end,PD_SWAPPED);require(!atomic_load(&fixture->pads.error),"nested binds publish atomically at outer swap completion");
 }
+static unsigned pad_foreign;
+/* This point is admitted for every pad execute made while a command call is
+ * open on this thread, so the application executing other pads reaches it.
+ * Every call here is positively not this command's execute: a receiver that is
+ * not a pad slot, another bound pad slot of the same Program, another pad
+ * field, another value, or, after the real execute, a repeat. */
+static void pad_foreign_executes(unsigned after){
+ unsigned other=pad_slot?pad_slot-1:pad_slot+1;Context f;
+ if(after){f=context();f.r[0]=pad_vector[pad_slot];f.r[1]=pad_code;f.d[0]=pad_desired;call(&f,PD_EXECUTE);return;}
+ f=context();f.r[0]=ptr(program_objects[0]);f.r[1]=pad_code;f.d[0]=pad_desired;call(&f,PD_EXECUTE);
+ if(pad_vector[other]){f=context();f.r[0]=pad_vector[other];f.r[1]=pad_code;f.d[0]=pad_desired;call(&f,PD_EXECUTE);}
+ f=context();f.r[0]=pad_vector[pad_slot];f.r[1]=pad_code^1u;f.d[0]=pad_desired;call(&f,PD_EXECUTE);
+ f=context();f.r[0]=pad_vector[pad_slot];f.r[1]=pad_code;f.d[0]=pad_desired^1u;call(&f,PD_EXECUTE);
+}
 static void pad_set(void){
+ if(pad_foreign){pad_foreign_executes(0);require(!atomic_load(&command_state->trace_error),"another pad's execute inside this pad command's window must not poison it");}
  Context c=context();c.r[0]=pad_vector[pad_slot];c.r[1]=pad_code;c.d[0]=pad_desired;call(&c,PD_EXECUTE);
+ if(pad_foreign){pad_foreign_executes(1);require(!atomic_load(&command_state->trace_error),"a repeated pad execute after this command's own was receipted must not poison it");}
  unsigned field=pad_code==0x206?CF_VOLUME:pad_code==0x205?CF_PAN:pad_code==0x20e?CF_MUTE:CF_SOLO_AUDIO;
  c=context();c.r[5]=pad_vector[pad_slot]+pad_offset(pad_field(field));c.d[8]=pad_desired;c.r[7]=pad_desired?1:0;call(&c,field==CF_MUTE?M_MUTE:field==CF_SOLO_AUDIO?CH_BOOL_COMMIT:M_FLOAT);
 }
@@ -91,7 +107,7 @@ static void pad_setup(void){
 }
 static void pad_command(unsigned field,int replacement){
  unsigned now=atomic_load(&fixture->heartbeat);
- CopiedMirror s;require(copy_mirror(fixture,&s),"copied pad inventory");MirrorBank bank;bank_init(&bank);bank_view(&bank,BV_DRUM_PADS,now);bank_apply(&bank,&s,now);MirrorInput in={.commands=command_state};
+ MIRROR_COPY(s);require(copy_mirror(fixture,&s),"copied pad inventory");MirrorBank bank;bank_init(&bank);bank_view(&bank,BV_DRUM_PADS,now);bank_apply(&bank,&s,now);MirrorInput in={.commands=command_state};
  if(field==CF_VOLUME)input_pitch(&in,&bank,0,12000,now);else input_control(&in,&bank,&s,0,field,12,field==CF_MUTE||field==CF_SOLO,now);
  input_pump(&in,&bank,&s,now);unsigned seq=atomic_load(&command_state->published),at=command_find(command_state,seq);require(at<COMMAND_SLOTS&&!in.error,"production pad input publishes pointer-free command");
  CommandRequest r;require(command_request_read(command_state->slots+at,seq,&r)&&r.pad_owner&&r.pad_index==0&&r.reserved==field,"request separates parent binding, slot and submitted Instrument");
@@ -124,7 +140,7 @@ static void pad_command(unsigned field,int replacement){
  command_retire();require(command_idle(command_state),"pad transaction reclaimed only after all source hooks and settlement");
 }
 static void pad_mixed_controls(void){
- unsigned now=atomic_load(&fixture->heartbeat);CopiedMirror s;copy_mirror(fixture,&s);MirrorBank b;bank_init(&b);bank_view(&b,BV_DRUM_PADS,0);bank_apply(&b,&s,1);MirrorInput in={.commands=command_state};
+ unsigned now=atomic_load(&fixture->heartbeat);MIRROR_COPY(s);copy_mirror(fixture,&s);MirrorBank b;bank_init(&b);bank_view(&b,BV_DRUM_PADS,0);bank_apply(&b,&s,1);MirrorInput in={.commands=command_state};
  for(unsigned i=0;i<8;i++){input_pitch(&in,&b,i,2000+300*i,now);input_pitch(&in,&b,i,(ordinary_pad?6000:5000)+400*i,now);input_control(&in,&b,&s,i,CF_PAN,3,0,now);}
  input_pump(&in,&b,&s,now);require(!in.error&&input_pending(&in)==16,"eight faders and eight pans independently publish coalesced desires");
  Context c=context();c.r[0]=ptr(queue_object)+4;call(&c,COMMAND_DRAIN);command_retire();atomic_store(&fixture->heartbeat,now+1);copy_mirror(fixture,&s);bank_apply(&b,&s,now+1);input_drain(&in,&b,&s,now+1);
@@ -135,13 +151,21 @@ static void pad_mixed_controls(void){
 }
 int main(void){
  alarm(30);void *v=mmap((void*)0x6930000,4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED,-1,0);require(v!=MAP_FAILED,"fixture native type page");put(0x6930c28,0x250ba74);put(0x6930c78,0x1375c68);pad_setup();
- CopiedMirror lazy;memset(&lazy,0xa5,sizeof(lazy));require(copy_mirror_view(fixture,&lazy,0)&&!lazy.pad_count&&lazy.pads[0].serial==0xa5a5a5a5,"normal mixer does not inspect or clear 128 pad rows");
- CopiedMirror s;require(copy_mirror(fixture,&s)&&s.pad_count==128&&s.pads[127].available&&s.pads[127].bits==0x3f000000,"all untouched offscreen pad values come from constructor register capture despite poisoned native memory");
+ /* Only the pad rows are poisoned. A copy destination must be zero at first
+  * use (MIRROR_COPY), but the pad region is exempt from that rule because
+  * copy_pad memsets a whole CopiedTrack before writing it, so no byte of a pad
+  * row is ever inherited. That is what lets this check still say what it says:
+  * a normal mixer copy does not inspect or clear the 128 pad rows. */
+ MIRROR_COPY(lazy);memset(lazy.pads,0xa5,sizeof(lazy.pads));require(copy_mirror_view(fixture,&lazy,0)&&!lazy.pad_count&&lazy.pads[0].serial==0xa5a5a5a5,"normal mixer does not inspect or clear 128 pad rows");
+ MIRROR_COPY(s);require(copy_mirror(fixture,&s)&&s.pad_count==128&&s.pads[127].available&&s.pads[127].bits==0x3f000000,"all untouched offscreen pad values come from constructor register capture despite poisoned native memory");
  MirrorBank bank;bank_init(&bank);bank_view(&bank,BV_DRUM_PADS,0);bank_apply(&bank,&s,1);bank.offset=120;bank_apply(&bank,&s,1);ChannelWire w=channel_wire(&s,s.pads+127,CF_VOLUME);require(!memcmp(w.name,"H16",3)&&!s.pads[127].fields[CF_NAME].available&&!s.pads[127].fields[CF_COLOR].available&&!w.led[3],"native pad labels, unsupported metadata/selection absent");
  require(bank.strips[7].pad_index==127&&bank_due(&bank,7,10)==8192,"last bank selects offscreen H16 motor feedback");
  pad_command(CF_VOLUME,1);pad_command(CF_PAN,0);pad_command(CF_MUTE,0);pad_command(CF_SOLO,0);pad_mixed_controls();pad_command(CF_PAN,2);
+ /* The application executing other pads while this pad command is in flight. */
+ pad_foreign=1;pad_command(CF_MUTE,0);pad_command(CF_SOLO,0);pad_foreign=0;
  ordinary_pad=1;
  pad_command(CF_PAN,0);pad_command(CF_VOLUME,1);pad_command(CF_MUTE,0);pad_command(CF_SOLO,0);pad_command(CF_PAN,2);
+ pad_foreign=1;pad_command(CF_MUTE,0);pad_command(CF_SOLO,0);pad_foreign=0;
  /* Sixteen concurrent ordinary pad controls used to produce OTHER_COMMIT
   * with no queue receipt, freezing the bridge on its first adjustment. */
  pad_mixed_controls();

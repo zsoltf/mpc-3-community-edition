@@ -3,11 +3,11 @@
 set -eu
 payload=/usr/share/mpclearn/mcu
 state=/data/mpclearn-image
-stage=/data/mpclearn-model.v0_2_0
-revision=81f3086-v0_2_0
+stage=/data/mpclearn-model.v0_2_2
+revision=1ffe005-v0_2_2
 # Known prior releases upgrade into the separate new stage; their stages stay.
-known_revisions='6d70695-mcu-direct-r2 ce4ccce-mcu-perf-r3 9000390-mcu-perf-r4 4d060dc-mouse-r5'
-known_stages='/data/mpclearn-model.mcu-direct-r2 /data/mpclearn-model.mcu-perf-r3 /data/mpclearn-model.mcu-perf-r4 /data/mpclearn-model.mouse-r5'
+known_revisions='6d70695-mcu-direct-r2 ce4ccce-mcu-perf-r3 9000390-mcu-perf-r4 4d060dc-mouse-r5 81f3086-v0_2_0'
+known_stages='/data/mpclearn-model.mcu-direct-r2 /data/mpclearn-model.mcu-perf-r3 /data/mpclearn-model.mcu-perf-r4 /data/mpclearn-model.mouse-r5 /data/mpclearn-model.v0_2_0'
 known(){ for item in $2;do [ "$1" != "$item" ] || return 0;done;return 1; }
 [ "$(id -u)" = 0 ] || exit 2
 for path in /data /etc;do [ -d "$path" ] && [ ! -L "$path" ] || exit 2;done

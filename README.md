@@ -54,12 +54,12 @@ the stock system files.
 
 ## Status
 
-Release v0.2.0, an experimental pre-release. Tested on one MPC Live II with one
+Release v0.2.2, an experimental pre-release. Tested on one MPC Live II with one
 X-Touch and one mouse; long sessions and other hardware are not covered. Known
 limit: a fast wheel spin on some sliders overshoots. The centre-button Enter and
 one-press Duplicate Sequence are built but disabled in this build pending an
 asynchronous redesign. Details are in the
-[release notes](docs/releases/v0.2.0.md).
+[release notes](docs/releases/v0.2.2.md).
 
 **Back up your projects and keep the official firmware available** before
 trying this.

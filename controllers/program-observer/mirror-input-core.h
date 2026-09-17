@@ -129,6 +129,19 @@ static inline const CopiedTrack *input_track(const CopiedMirror *s,const MotorId
  }
  return NULL;
 }
+/* Same result as input_track for a bank strip, without the linear scan when
+ * bank_apply's recorded row still carries the strip's own identity. Track
+ * serials are allocated by a monotonic counter (mirror-capture.c bump), so at
+ * most one row can match and the validated row is the row the scan would find.
+ * A row that no longer matches, or a strip with no recorded row, falls back. */
+static inline const CopiedTrack *bank_strip_track(const CopiedMirror *s,const MirrorBank *bank,unsigned strip){
+ const MotorIdentity *id=bank->strips+strip;int row=bank->strip_row[strip];
+ if(row>=0&&(unsigned)row<s->count&&s->ready&&s->epoch==id->epoch&&!id->pad_owner){
+  const CopiedTrack *t=s->tracks+row;
+  if(t->serial==id->serial&&t->binding==id->binding&&t->incarnation==id->incarnation&&t->track==id->track&&t->program==id->program&&t->track_owner==id->track_owner&&t->program_owner==id->program_owner)return t;
+ }
+ return input_track(s,id);
+}
 static inline const CopiedTrack *input_target(const CopiedMirror *s,const MotorIdentity *id,CopiedTrack *pad){
  const CopiedTrack *t=input_track(s,id);if(t||!id->pad_owner)return t;
  MotorIdentity parent=*id;parent.pad_owner=parent.pad_index=parent.pad_generation=0;
@@ -225,7 +238,7 @@ static inline void input_pitch(MirrorInput *in,MirrorBank *bank,unsigned strip,i
 static inline void input_control_bound(MirrorInput *in,const MirrorBank *bank,const CopiedMirror *s,unsigned strip,unsigned field,int delta,int push,uint32_t now,const MotorIdentity *id,unsigned scope){
  if(strip>=MIRROR_BANK||!bank->ready||!command_supported(field)||in->error||now>UINT32_MAX-120000)return;
  const CopiedTrack *t=input_track(s,id);if(field==CF_VOLUME&&t&&midi_volume(t->vptr))field=CF_MIDI_VOLUME;if(!t||(id->pad_owner&&!pad_controller(field)))return;
- CopiedField volume;const CopiedField *f=copied_field(s,t,command_source_field(field),&volume);
+ MIRROR_FIELD(volume);const CopiedField *f=copied_field(s,t,command_source_field(field),&volume);
  if(!f||!f->available||((command_float(field)||field==CF_MUTE||field==CF_SOLO)&&!(field==CF_MIDI_VOLUME?midi_volume(t->vptr):mixable(t->vptr))))return;
  InputGesture *g=&in->desires[strip][field];if(memcmp(&g->identity,id,sizeof(*id)))memset(g,0,sizeof(*g));InputFlight *flight=input_existing(in,id,field);uint32_t bits;
  if(command_float(field)){float value;uint32_t prior=g->pending?g->bits:flight?flight->bits:f->bits;memcpy(&value,&prior,4);value=push?(field==CF_PAN?0.5f:field==CF_VOLUME&&bank->assignment==BA_SEND&&scope==3?0.707945764f:0.0f):value+(float)delta/127.0f;if(value<0)value=0;if(value>1)value=1;memcpy(&bits,&value,4);}
@@ -969,7 +982,7 @@ static inline void input_pump_mode(MirrorInput *in,MirrorBank *bank,const Copied
    if(s->heartbeat<=tx->done_tick)continue;
    unsigned retired=0;
    if(tx->pad_seen){
-    CopiedField actual;unsigned field_id=command_source_field(tx->field);
+    MIRROR_FIELD(actual);unsigned field_id=command_source_field(tx->field);
     if(!copy_pad_receipt(s,tx->pad_execution.bits,tx->target.program,tx->target.program_owner,field_id,&actual)||actual.property!=tx->pad_execution.capture+pad_offset(pad_field(field_id))){in->error=C_IDENTITY;return;}
     if(actual.revision<tx->commit_revision)continue;
     if((tx->commit_revision&&actual.revision==tx->commit_revision&&actual.bits!=tx->bits)||(!tx->commit_revision&&tx->pad_execution.property!=tx->bits)){in->error=C_TRACE_AMBIGUOUS;return;}
@@ -981,7 +994,7 @@ static inline void input_pump_mode(MirrorInput *in,MirrorBank *bank,const Copied
    INPUT_LOG("PAD_DONE request=%u slot=%u submitted_instrument=%u executed_instrument=%u source_revision=%u completed_old_binding=%u native_no_set=%u; current motors use current membership only\n",tx->flight,tx->target.pad_index,tx->target.pad_owner,tx->pad_seen?tx->pad_execution.bits:0,tx->commit_revision,retired,!tx->pad_seen);continue;
   }
   const CopiedTrack *t=input_track(s,&tx->target);
-  CopiedField volume;const CopiedField *field=t?copied_field(s,t,command_source_field(tx->field),&volume):NULL;
+  MIRROR_FIELD(volume);const CopiedField *field=t?copied_field(s,t,command_source_field(tx->field),&volume):NULL;
   if(!field||!field->available||(tx->field&&field->incarnation!=tx->field_incarnation)){in->error=C_IDENTITY;return;}
   if(done&&sealed&&tx->recording_seen){
    if(tx->phase||!input_recording_proof(in,tx))return;
@@ -1105,7 +1118,7 @@ static inline void input_pump_mode(MirrorInput *in,MirrorBank *bank,const Copied
   if(input_existing(in,&g->identity,field_id))continue;
   if(now>g->expires){in->error=C_EXPIRED;return;}
   CopiedTrack pad_target;const CopiedTrack *t=input_target(s,&g->identity,&pad_target);
-  CopiedField volume;const CopiedField *field=t?copied_field(s,t,command_source_field(field_id),&volume):NULL;
+  MIRROR_FIELD(volume);const CopiedField *field=t?copied_field(s,t,command_source_field(field_id),&volume):NULL;
   if(!field||!field->available||(field_id&&field->incarnation!=g->field_incarnation)){g->pending=0;continue;}
   int equal;
   if(field_id==CF_VOLUME||field_id==CF_MIDI_VOLUME){float current,desired;memcpy(&current,&field->bits,4);memcpy(&desired,&g->bits,4);float resolution=field_id==CF_MIDI_VOLUME?127.0f:16383.0f;equal=(int)(current*resolution+0.5f)==(int)(desired*resolution+0.5f);}

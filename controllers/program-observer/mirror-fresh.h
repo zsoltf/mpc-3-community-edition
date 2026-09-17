@@ -9,7 +9,7 @@ static inline int mirror_snapshot_current(const MirrorState *s,const CopiedMirro
   v->revision==atomic_load_explicit(&s->revision,memory_order_acquire);
 }
 static inline int mirror_selection_current(const MirrorState *s,const CopiedMirror *v){
- CopiedField f;copy_channel(&s->channel,atomic_load(&s->channel.project_owner),CF_SELECTION,&f);
+ MIRROR_FIELD(f);copy_channel(&s->channel,atomic_load(&s->channel.project_owner),CF_SELECTION,&f);
  return f.available==v->selection.available&&f.revision==v->selection.revision&&
   f.incarnation==v->selection.incarnation&&f.bits==v->selection.bits;
 }
@@ -24,8 +24,8 @@ static inline int mirror_motor_current(const MirrorState *s,const CopiedMirror *
  if(f->empty)return mirror_snapshot_current(s,v,now);
  const MotorIdentity *id=&f->identity;const CopiedTrack *t=NULL;
  for(unsigned i=0;i<v->count;i++)if(v->tracks[i].serial==id->serial){t=v->tracks+i;break;}
- if(!t||t->binding!=id->binding||t->program_owner!=id->program_owner||!id->program_owner||id->program_owner>CHANNEL_OWNERS||!atomic_load(&s->channel.owners[id->program_owner-1].live))return 0;
- unsigned field=bank_field(bank,strip);CopiedField value;
+ if(!t||t->binding!=id->binding||t->program_owner!=id->program_owner||!channel_owner_slot(id->program_owner)||!atomic_load(&s->channel.owners[channel_owner_slot(id->program_owner)-1].live)||atomic_load(&s->channel.owners[channel_owner_slot(id->program_owner)-1].incarnation)!=id->program_owner)return 0;
+ unsigned field=bank_field(bank,strip);MIRROR_FIELD(value);
  if(id->pad_owner){
   CopiedTrack pad;if(!copy_pad(v,t,id->pad_index,&pad)||pad.pad_owner!=id->pad_owner||pad.pad_generation!=id->pad_generation||field>=CF_COUNT)return 0;
   value=pad.fields[field];

@@ -5,6 +5,7 @@ if [ "$#" -ne 3 ];then echo 'mirror-input-build.sh /local/exact/MPC /native/owne
 # Reuse the unchanged command producer build; accepted prior packages remain
 # in their root-owned frozen candidate directories before this regeneration.
 ./command-build.sh "$1" "$2" "$3"
+./mirror-guard.sh
 mkdir -p package/mirror-input
 cp package/command/* package/mirror-input/
 docker run --rm --network none -v "$PWD/..:/controllers:ro" -v "$PWD:/src:ro" -v "$PWD/../stop-route.h:/stop-route.h:ro" -v "$PWD/package/mirror-input:/out" mpclearn-controls-build sh -ec '

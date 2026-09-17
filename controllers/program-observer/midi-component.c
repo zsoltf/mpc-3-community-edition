@@ -6,7 +6,7 @@
 #include "channel-wire.h"
 static uint32_t midi_fixture_payload[32] __attribute__((aligned(8)));
 static uint32_t midi_fixture_bits,midi_fixture_track;
-static unsigned midi_fixture_auto,midi_fixture_calls,midi_fixture_duplicate,midi_fixture_no_set;
+static unsigned midi_fixture_auto,midi_fixture_calls,midi_fixture_duplicate,midi_fixture_no_set,midi_fixture_automation;
 static uint32_t midi_lookup_fixture(uint32_t p,uint32_t name){
  require(p==ptr(pool_object)&&name>=ptr(track_objects[0])+0x468,"native name preflight ABI");
  return midi_fixture_duplicate?ptr(track_objects[0]):name-0x468;
@@ -17,9 +17,23 @@ static void *midi_apply_fixture(void *unused){
  uint32_t n=ptr(midi_fixture_payload+2),t=midi_fixture_track;
  *entry=context();entry->r[0]=n;call(entry,midi_fixture_auto?MI_AUTO_ENTER:MI_ENTER);
  if(!midi_fixture_no_set){
+  /* Automation Write armed: the application writes this Track level through its
+   * own record path inside the command's window. Each injected call is
+   * positively not this command's - another call site, another value, or a
+   * repeat after this command's own call and commit were receipted. */
+  Context f;
+  if(midi_fixture_automation){
+   f=context();f.r[0]=t+0x28c;f.lr=0x264d500;f.d[0]=midi_fixture_bits;call(&f,MI_SET);
+   f=context();f.r[0]=t+0x28c;f.lr=0x264d478;f.d[0]=midi_fixture_bits^1u;call(&f,MI_SET);
+  }
   Context c=context();c.r[0]=t+0x28c;c.lr=0x264d478;c.d[0]=midi_fixture_bits;call(&c,MI_SET);
   ChannelCell *v=channel_cell(t+0x28c);
+  if(midi_fixture_automation){
+   f=context();f.r[0]=t+0x28c;f.lr=0x264d478;f.d[0]=midi_fixture_bits;call(&f,MI_SET);
+   f=context();f.r[5]=t+0x28c;f.d[8]=midi_fixture_bits^1u;call(&f,M_FLOAT);
+  }
   if(atomic_load(&v->bits)!=midi_fixture_bits){c=context();c.r[5]=t+0x28c;c.d[8]=midi_fixture_bits;call(&c,M_FLOAT);}
+  if(midi_fixture_automation){f=context();f.r[5]=t+0x28c;f.d[8]=midi_fixture_bits;call(&f,M_FLOAT);}
  }
  *end=context();end->r[4]=n;end->r[3]=word(n)+4;call(end,midi_fixture_auto?MI_AUTO_DONE:MI_DONE);return NULL;
 }
@@ -55,13 +69,18 @@ static void midi_setup(void){
  component_midi_dispatch=midi_dispatch_fixture;component_midi_lookup=midi_lookup_fixture;
 }
 static void midi_command(unsigned pitch,int negative){
- unsigned now=atomic_load(&fixture->heartbeat);CopiedMirror s;require(copy_mirror(fixture,&s),"source copy");MirrorBank bank;bank_init(&bank);bank_apply(&bank,&s,now);MirrorInput in={.commands=command_state};
+ unsigned now=atomic_load(&fixture->heartbeat);MIRROR_COPY(s);require(copy_mirror(fixture,&s),"source copy");MirrorBank bank;bank_init(&bank);bank_apply(&bank,&s,now);MirrorInput in={.commands=command_state};
  input_pitch(&in,&bank,1,pitch,now);input_pump(&in,&bank,&s,now);unsigned seq=atomic_load(&command_state->published),at=command_find(command_state,seq);
  require(in.submitted==1&&!in.error&&at<COMMAND_SLOTS,"MIDI fader publishes typed request");CommandRequest r;require(command_request_read(command_state->slots+at,seq,&r)&&r.reserved==CF_MIDI_VOLUME&&r.field_incarnation==s.tracks[1].fields[CF_MIDI_VOLUME].incarnation,"Track-owned volume field identity");
  Context c=context();c.r[0]=ptr(queue_object)+4;call(&c,COMMAND_DRAIN);
  if(midi_fixture_duplicate){require(atomic_load(&command_state->slots[at].rejected)==C_NATIVE_MEMBERSHIP&&!atomic_load(&command_state->slots[at].dispatched),"duplicate name refuses before native factory");return;}
  if(atomic_load(&command_state->error)||atomic_load(&command_state->trace_error))fprintf(stderr,"MIDI native error=%u trace=%u rejected=%u\n",atomic_load(&command_state->error),atomic_load(&command_state->trace_error),atomic_load(&command_state->slots[at].rejected));
- require(!atomic_load(&command_state->error)&&!atomic_load(&command_state->trace_error)&&atomic_load(&command_state->slots[at].done)==seq,"both native factory branches capture queue/set/commit/DONE");command_retire();
+ require(!atomic_load(&command_state->error)&&!atomic_load(&command_state->trace_error)&&atomic_load(&command_state->slots[at].done)==seq,"both native factory branches capture queue/set/commit/DONE");
+ if(midi_fixture_automation){unsigned sets=0,commits=0;
+  for(unsigned lane=0;lane<COMMAND_LANES;lane++){CommandLane *l=command_state->slots[at].lanes+lane;unsigned n=atomic_load(&l->published);
+   for(unsigned i=0;i<n;i++){CommandEvent e;if(command_event_read(l,seq,i,&e)){sets+=e.kind==CE_MIDI_SET;commits+=e.kind==CE_MIDI_COMMIT;}}}
+  require(sets==1&&commits==1,"armed automation: exactly one MIDI set and commit receipt beside the record path's own writes");}
+ command_retire();
  atomic_store(&fixture->heartbeat,now+1);require(copy_mirror(fixture,&s),"post-body source copy");bank_apply(&bank,&s,now+1);
  if(negative){
   CommandState *missing=malloc(sizeof(*missing));require(missing!=NULL,"negative receipt copy");memcpy(missing,command_state,sizeof(*missing));unsigned removed=0;
@@ -73,7 +92,7 @@ static void midi_command(unsigned pitch,int negative){
 }
 int main(void){
  alarm(30);void *v=mmap((void*)0x6930000,0x4000,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED,-1,0);require(v!=MAP_FAILED,"fixture type pages");put(0x6930c28,0x250ba74);put(0x6930c78,0x1375c68);midi_native_event_install();midi_setup();
- CopiedMirror s;require(copy_mirror(fixture,&s)&&s.tracks[1].available&&s.tracks[1].bits==0x3f800000&&!volume_capable(s.tracks[2].vptr),"default MIDI127 comes from ctor registers; CV remains unavailable");
+ MIRROR_COPY(s);require(copy_mirror(fixture,&s)&&s.tracks[1].available&&s.tracks[1].bits==0x3f800000&&!volume_capable(s.tracks[2].vptr),"default MIDI127 comes from ctor registers; CV remains unavailable");
  ChannelWire w=channel_wire(&s,s.tracks+1,CF_VOLUME);require(!memcmp(w.value,"127",3),"MIDI LCD uses integer127 not audio dB");
  require(!s.tracks[1].fields[CF_PAN].available&&!s.tracks[1].fields[CF_SEND1].available,"unsupported MIDI pan and sends unavailable");
  /* A downstream CC cache change has no captured-state property identity. */
@@ -87,5 +106,7 @@ int main(void){
  copy_mirror(fixture,&s);bank_apply(&bank,&s,32);MirrorInput stale={.commands=command_state};input_pitch(&stale,&bank,1,7000,32);unsigned old=s.tracks[1].fields[CF_MIDI_VOLUME].incarnation;
  c=context();c.r[0]=ptr(track_objects[1])+0x28c;call(&c,MIRROR_PROPERTY_DESTROY);copy_mirror(fixture,&s);require(!s.tracks[1].available,"retired Track level unavailable");midi_seed(1);copy_mirror(fixture,&s);require(s.tracks[1].available&&s.tracks[1].fields[CF_MIDI_VOLUME].incarnation!=old,"same-address property receives new retained incarnation");input_pump(&stale,&bank,&s,32);require(!stale.submitted,"old property gesture cannot target new incarnation");
  free(fixture);free(command_state);midi_setup();unsigned calls=midi_fixture_calls;midi_fixture_duplicate=1;midi_command(5000,0);require(midi_fixture_calls==calls,"name ambiguity never reaches the factory");
+ /* Armed automation Write beside a MIDI Track level moved from the controller. */
+ midi_fixture_duplicate=0;free(fixture);free(command_state);midi_setup();midi_fixture_automation=1;midi_command(9000,0);midi_fixture_automation=0;
  puts("PASS MIDI retained default/source, 0/midpoint/127 LCD and faders, ordinary plus automation receipts, missing-commit refusal, no-set completion, redundant CC admission, mixed audio/MIDI, duplicate-name preflight; pinned native event constructor executed; factory/callback bodies/lookup/scheduling and physical MIDI substituted");free(fixture);free(command_state);munmap((void*)0x2402000,4096);munmap(v,0x4000);return 0;
 }

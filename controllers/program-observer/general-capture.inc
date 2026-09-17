@@ -90,7 +90,7 @@ static unsigned global_toggle_target(const CommandRequest *r,uint32_t *target,ui
   *target=owner;*function=observer_image_bias+0x1beaad0;*property=owner+0xc;field=CF_CLICK;
  }else return C_NOT_READY;
  ChannelCell *cell=channel_cell(*property);ChannelOwner *o=channel_owner(owner);
- if(!o||atomic_load(&o->kind)!=channel_kind(field)||channel_owner_id(owner)!=r->global_owner||!cell||!atomic_load(&cell->live)||atomic_load(&cell->owner_incarnation)!=r->global_owner||atomic_load(&cell->incarnation)!=r->field_incarnation||atomic_load(&mirror_state->channel.errors[field]))return C_IDENTITY;
+ if(!o||atomic_load(&o->kind)!=channel_kind(field)||channel_owner_id(owner)!=r->global_owner||!cell||!atomic_load(&cell->live)||atomic_load(&cell->owner_incarnation)!=r->global_owner||atomic_load(&cell->incarnation)!=r->field_incarnation||channel_fault(atomic_load(&mirror_state->channel.errors[field])))return C_IDENTITY;
  unsigned raw=field==CF_RECORD_MODE?word(owner+0x528):*(const volatile unsigned char*)(uintptr_t)(owner+0x34);
  if(raw>(field==CF_RECORD_MODE?4u:1u))return C_SOURCE_FAILURE;
  *value=field==CF_RECORD_MODE?(raw==1||raw==3):raw;return 0;

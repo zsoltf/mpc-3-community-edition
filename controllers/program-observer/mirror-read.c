@@ -16,6 +16,18 @@ typedef struct {uint32_t property,incarnation,owner_incarnation,revision,bits,up
 typedef struct {uint32_t incarnation,available,tick,token,revision,left,right,enabled,site;} CopiedMeter;
 typedef struct {uint32_t serial,track,program,kind,incarnation,binding,vptr,revision,bits,updates,seed,available,track_owner,program_owner,meter_id,pad_owner,pad_index,pad_generation;CopiedField fields[CF_COUNT];CopiedMeter meter;} CopiedTrack;
 typedef struct {uint32_t epoch,generation,revision,count,ready,heartbeat,error,alive,allocated,project_owner,selected_serial;CopiedField selection,master,playing,automation,loop,record_mode,click;uint32_t position_available,position_error,position_tick,position_token,bar,beat,clock;CopiedTrack tracks[MIRROR_TRACKS];CopiedMeter master_meter;uint32_t meter_error,meter_cells,meter_tokens,meter_closed,automation_detail_available,automation_mixed,automation_count,automation_detail_tick,automation_generation,editor_owner,zoom_owner;uint32_t send_programs[4],send_owners[4],sends_source_revision;EffectsCopy effects;uint32_t effects_available,effects_source_revision;QLinkCopy qlinks;uint32_t qlinks_available,qlinks_source_revision;IOCopy io;uint32_t io_available;uint32_t pad_count,pad_error;const PadState *pad_source;CopiedTrack pads[PAD_SLOTS];} CopiedMirror;
+/* Copy destinations. The copy does not re-clear the bytes it never writes, so
+ * a destination must be all zero before its FIRST use; after that the copy
+ * maintains that property itself (see copy_channel). MIRROR_COPY and
+ * MIRROR_FIELD are the only way to declare one, and they give it static
+ * storage duration, which the language zero-initialises - so the precondition
+ * is a property of C rather than of a caller remembering to memset.
+ * mirror-guard.sh fails the build if any other declaration of a CopiedMirror
+ * or CopiedField object appears in the tree. Static storage is safe here
+ * because no copy runs on more than one thread: no pthread entry point in this
+ * tree performs one, and every copy is made by its own owner's loop. */
+#define MIRROR_COPY(name) static CopiedMirror name
+#define MIRROR_FIELD(name) static CopiedField name
 static void copy_meter(const MeterState *s,unsigned id,const CopiedMirror *snapshot,CopiedMeter *out){
  memset(out,0,sizeof(*out));out->incarnation=id;
  if(!id||id>METER_CELLS||atomic_load(&s->error)||!snapshot->ready)return;
@@ -36,23 +48,54 @@ static inline int midi_volume(uint32_t vptr){return vptr==0x6932338;}
 static inline int volume_capable(uint32_t vptr);
 static inline int mixable(uint32_t vptr){return vptr&&vptr!=0x6932338&&vptr!=0x6930a14;}
 static inline int volume_capable(uint32_t vptr){return mixable(vptr)||midi_volume(vptr);}
+/* Component-only deterministic seam: a fixture reclaims the matched cell here,
+ * between the probe match and the in-window re-validation below. */
+#ifndef CHANNEL_READ_PAUSE
+#define CHANNEL_READ_PAUSE(n) ((void)0)
+#endif
 static int copy_channel(const ChannelState *s,unsigned owner_id,unsigned field,CopiedField *out){
- memset(out,0,sizeof(*out));out->error=atomic_load_explicit(s->errors+field,memory_order_acquire);
- if(!owner_id||owner_id>CHANNEL_OWNERS||out->error)return 0;
- const ChannelOwner *o=s->owners+owner_id-1;
+ /* Clear the scalars, and of the 97-byte text only the bytes this destination
+  * can actually be holding. The invariant that makes that exact: on exit from
+  * every path below, text[length..] is zero. A name cell is zero-padded by the
+  * producer (channel_payload), so the 24 words copied out carry zeros past the
+  * name; no other field ever writes text at all; and a destination starts zero
+  * (MIRROR_COPY). out->length is not a first-use marker - it is written on
+  * every path including every early return, so it always describes what this
+  * destination is holding, and clearing [0,length] restores the all-zero tail.
+  * It is read before the scalar clear for that reason. This is the whole
+  * saving: about 100 bytes on each of the hundreds of calls a copy makes. */
+ unsigned dirty=out->length;if(dirty>CHANNEL_TEXT)dirty=CHANNEL_TEXT;
+ memset(out,0,offsetof(CopiedField,text));
+ if(dirty)memset(out->text,0,dirty+1);
+ out->error=atomic_load_explicit(s->errors+field,memory_order_acquire);
+ unsigned slot=channel_owner_slot(owner_id);
+ if(!slot||channel_fault(out->error))return 0;
+ const ChannelOwner *o=s->owners+slot-1;
  if(!atomic_load_explicit(&o->live,memory_order_acquire)||atomic_load(&o->kind)!=channel_kind(field)||atomic_load(&o->incarnation)!=owner_id)return 0;
  unsigned property=atomic_load_explicit(&o->address,memory_order_relaxed)+channel_offset(field),h=((property>>4)*2654435761u)&(CHANNEL_HASH-1);const ChannelCell *c=NULL;
  for(unsigned i=0;i<MIRROR_PROBES;i++){unsigned n=atomic_load_explicit(s->field_directory+((h+i)&(CHANNEL_HASH-1)),memory_order_acquire);if(!n||n>CHANNEL_FIELDS)return 0;const ChannelCell *p=s->fields+n-1;if(atomic_load_explicit(&p->property,memory_order_relaxed)==property){c=p;break;}}
+/* A pre-filter, not the guard: it is the same comparison on the same words as
+ * the in-window one below, on the same thread, so any state it rejects the
+ * in-window clause rejects too and removing it alone changes nothing
+ * observable. It stays because it is free and keeps the common mismatch out of
+ * the retry loop; the in-window clause is the one that is load-bearing and the
+ * one the fixture pins. */
  if(!c||atomic_load(&c->owner_incarnation)!=owner_id||atomic_load(&c->field)!=field)return 0;
+ CHANNEL_READ_PAUSE(0);
  for(unsigned retry=0;retry<4;retry++){
   unsigned rev=atomic_load_explicit(&c->revision,memory_order_acquire);if(rev&1)continue;
+  /* The probe matched the property outside this window. The observer can
+   * reclaim a cell for a different property between the match and the payload
+   * read, so identity is re-established inside the window before anything is
+   * copied out; a reclaim bumps revision by two, so the window check closes it. */
+  if(atomic_load_explicit(&c->property,memory_order_relaxed)!=property||atomic_load_explicit(&c->field,memory_order_relaxed)!=field||atomic_load_explicit(&c->owner_incarnation,memory_order_relaxed)!=owner_id)return 0;
   out->property=property;out->incarnation=atomic_load_explicit(&c->incarnation,memory_order_relaxed);out->owner_incarnation=owner_id;out->bits=atomic_load_explicit(&c->bits,memory_order_relaxed);out->updates=atomic_load_explicit(&c->updates,memory_order_relaxed);out->seed=atomic_load_explicit(&c->seed,memory_order_relaxed);out->length=atomic_load_explicit(&c->length,memory_order_relaxed);
   if(out->length>CHANNEL_TEXT)return 0;
   if(field==CF_NAME)for(unsigned i=0;i<CHANNEL_TEXT/4;i++){uint32_t w=atomic_load_explicit(c->text+i,memory_order_relaxed);memcpy(out->text+i*4,&w,4);}
   out->text[out->length]=0;
   unsigned live=atomic_load_explicit(&c->live,memory_order_relaxed);atomic_thread_fence(memory_order_acquire);
   if(rev!=atomic_load_explicit(&c->revision,memory_order_relaxed))continue;
-  out->revision=rev;out->available=live&&atomic_load_explicit(&o->live,memory_order_acquire)&&out->seed&&!atomic_load_explicit(s->errors+field,memory_order_acquire);
+  out->revision=rev;out->available=live&&atomic_load_explicit(&o->live,memory_order_acquire)&&out->seed&&!channel_fault(atomic_load_explicit(s->errors+field,memory_order_acquire));
   if((field==CF_MIDI_VOLUME||field==CF_PAN||(field>=CF_SEND1&&field<=CF_MASTER))){float value;memcpy(&value,&out->bits,4);out->available&=isfinite(value)&&value>=0&&value<=1;}
   else if(field==CF_AUTOMATION)out->available&=out->bits<=2;
   else if(field==CF_RECORD_MODE)out->available&=out->bits<=4;
@@ -77,13 +120,13 @@ static void copy_general(const MirrorState *s,CopiedMirror *out){
  const GeneralState *g=&s->general;
  unsigned sends=atomic_load_explicit(&g->sends_revision,memory_order_acquire),mixer=atomic_load(&g->sends_mixer);
  out->sends_source_revision=sends;
- if(out->ready&&sends&&!(sends&1)&&atomic_load(&g->sends_epoch)==out->epoch&&mixer&&mixer<=CHANNEL_OWNERS&&mixer==atomic_load(&s->channel.mixer_owner)&&atomic_load(&s->channel.owners[mixer-1].live)){
-  for(unsigned i=0;i<4;i++){unsigned p=atomic_load(&g->sends_programs[i]),owner=atomic_load(&g->sends_owners[i]);if(owner&&owner<=CHANNEL_OWNERS&&atomic_load(&s->channel.owners[owner-1].live)&&atomic_load(&s->channel.owners[owner-1].address)==p&&atomic_load(&s->channel.owners[owner-1].kind)==CO_PROGRAM){out->send_programs[i]=p;out->send_owners[i]=owner;}}
-  atomic_thread_fence(memory_order_acquire);if(sends!=atomic_load(&g->sends_revision)||!atomic_load(&s->channel.owners[mixer-1].live)){memset(out->send_programs,0,sizeof(out->send_programs));memset(out->send_owners,0,sizeof(out->send_owners));}
+ if(out->ready&&sends&&!(sends&1)&&atomic_load(&g->sends_epoch)==out->epoch&&channel_owner_slot(mixer)&&mixer==atomic_load(&s->channel.mixer_owner)&&atomic_load(&s->channel.owners[channel_owner_slot(mixer)-1].live)&&atomic_load(&s->channel.owners[channel_owner_slot(mixer)-1].incarnation)==mixer){
+  for(unsigned i=0;i<4;i++){unsigned p=atomic_load(&g->sends_programs[i]),owner=atomic_load(&g->sends_owners[i]);unsigned os=channel_owner_slot(owner);if(os&&atomic_load(&s->channel.owners[os-1].live)&&atomic_load(&s->channel.owners[os-1].incarnation)==owner&&atomic_load(&s->channel.owners[os-1].address)==p&&atomic_load(&s->channel.owners[os-1].kind)==CO_PROGRAM){out->send_programs[i]=p;out->send_owners[i]=owner;}}
+  atomic_thread_fence(memory_order_acquire);if(sends!=atomic_load(&g->sends_revision)||!atomic_load(&s->channel.owners[channel_owner_slot(mixer)-1].live)){memset(out->send_programs,0,sizeof(out->send_programs));memset(out->send_owners,0,sizeof(out->send_owners));}
  }
  unsigned editor=atomic_load(&g->editor_owner),zoom=atomic_load(&g->zoom_owner);
- if(editor&&editor<=CHANNEL_OWNERS&&atomic_load(&s->channel.owners[editor-1].live))out->editor_owner=editor;
- if(zoom&&zoom<=CHANNEL_OWNERS&&atomic_load(&s->channel.owners[zoom-1].live))out->zoom_owner=zoom;
+ if(channel_owner_slot(editor)&&atomic_load(&s->channel.owners[channel_owner_slot(editor)-1].live)&&atomic_load(&s->channel.owners[channel_owner_slot(editor)-1].incarnation)==editor)out->editor_owner=editor;
+ if(channel_owner_slot(zoom)&&atomic_load(&s->channel.owners[channel_owner_slot(zoom)-1].live)&&atomic_load(&s->channel.owners[channel_owner_slot(zoom)-1].incarnation)==zoom)out->zoom_owner=zoom;
  unsigned gen=atomic_load_explicit(&g->automation_generation,memory_order_acquire),chosen=0,ambiguous=0;
  out->automation_generation=gen;
  if(!out->automation.available||atomic_load(&g->automation_error))return;
@@ -141,6 +184,10 @@ static inline int copy_pad_receipt(const CopiedMirror *s,unsigned id,uint32_t pa
   out->revision=rev;out->available=out->seed!=0;return out->available;
  }return 0;
 }
+/* The exact set of track fields the copy below fills through copy_channel.
+ * The per-track clear uses its complement, so the two cannot drift apart: a
+ * field added to one side is automatically removed from the other. */
+static inline int track_field_copied(unsigned field){return field>=CF_PAN&&field!=CF_SELECTION&&(field<CF_MASTER||field==CF_MIDI_VOLUME);}
 static int copy_mirror_view(const MirrorState *s,CopiedMirror *out,int pads){
  for(unsigned attempt=0;attempt<4;attempt++){
   /* Only count/pad_count rows belong to a snapshot. Clear metadata here and
@@ -156,11 +203,22 @@ static int copy_mirror_view(const MirrorState *s,CopiedMirror *out,int pads){
   out->count=atomic_load_explicit(&s->count,memory_order_relaxed);if(out->count>MIRROR_TRACKS)return 0;
   for(unsigned i=0;i<out->count;i++){
    CopiedTrack *t=out->tracks+i;const MirrorBinding *b=s->tracks+i;
-   memset(t,0,sizeof(*t));
+   /* Clear only what this row's fill does not write on every path. The ten
+    * identity words below, each field track_field_copied names, and the meter
+    * are all written unconditionally on the path that returns 1, and both
+    * copy_channel and copy_meter memset their own output first, so clearing
+    * them here writes the same 1896 bytes a track twice. What is left needs
+    * clearing: the five cell-derived words, which a row with no incarnation
+    * skips entirely and four failed seqlock retries leave half written; the
+    * three pad words, which only out->pads ever carries; and the eight fields
+    * no copy_channel call covers. About 68 KB a copy at 36 tracks. */
+   t->revision=t->bits=t->updates=t->seed=t->available=0;
+   t->pad_owner=t->pad_index=t->pad_generation=0;
+   for(unsigned field=0;field<CF_COUNT;field++)if(!track_field_copied(field))memset(t->fields+field,0,sizeof(t->fields[field]));
    t->serial=atomic_load_explicit(&b->serial,memory_order_relaxed);t->track=atomic_load_explicit(&b->track,memory_order_relaxed);t->program=atomic_load_explicit(&b->program,memory_order_relaxed);t->kind=atomic_load_explicit(&b->kind,memory_order_relaxed);t->incarnation=atomic_load_explicit(&b->incarnation,memory_order_relaxed);t->binding=atomic_load_explicit(&b->binding,memory_order_relaxed);t->vptr=atomic_load_explicit(&b->vptr,memory_order_relaxed);
    t->track_owner=atomic_load_explicit(&b->track_owner,memory_order_relaxed);t->program_owner=atomic_load_explicit(&b->program_owner,memory_order_relaxed);
    t->meter_id=atomic_load_explicit(&b->meter,memory_order_relaxed);
-   for(unsigned field=CF_PAN;field<CF_COUNT;field++)if(field!=CF_SELECTION&&(field<CF_MASTER||field==CF_MIDI_VOLUME))copy_channel(&s->channel,channel_kind(field)==CO_TRACK?t->track_owner:t->program_owner,field,t->fields+field);
+   for(unsigned field=CF_PAN;field<CF_COUNT;field++)if(track_field_copied(field))copy_channel(&s->channel,channel_kind(field)==CO_TRACK?t->track_owner:t->program_owner,field,t->fields+field);
    if(out->selection.available&&out->selection.bits==t->track)out->selected_serial=t->serial;
    if(!mixable(t->vptr)){t->fields[CF_PAN].available=0;for(unsigned f=CF_SEND1;f<=CF_SEND4;f++)t->fields[f].available=0;}
    if(midi_volume(t->vptr)){
@@ -239,6 +297,27 @@ static void json_field(const CopiedField *f,unsigned field){
  if(field==CF_NAME)printf(",\"truncated\":%s",f->length==CHANNEL_TEXT?"true":"false");
  printf("}");
 }
+/* Top-level channel health. Every number is derived read-side from the existing
+ * words, so capacity pressure stops being invisible without any new shared
+ * counter or layout change. "reclaimable" is the observer's own reuse
+ * predicate: cells whose owner lifetime is gone. */
+static void channel_json(const ChannelState *s){
+ unsigned owners=atomic_load_explicit(&s->owners_used,memory_order_acquire),fields=atomic_load_explicit(&s->fields_used,memory_order_acquire);
+ unsigned owners_live=0,fields_live=0,reclaimable=0,directory=0;
+ if(owners>CHANNEL_OWNERS)owners=CHANNEL_OWNERS;
+ if(fields>CHANNEL_FIELDS)fields=CHANNEL_FIELDS;
+ for(unsigned i=0;i<owners;i++)if(atomic_load(&s->owners[i].live))owners_live++;
+ for(unsigned i=0;i<fields;i++){
+  const ChannelCell *c=s->fields+i;unsigned id=atomic_load(&c->owner_incarnation);
+  if(atomic_load(&c->live))fields_live++;
+  unsigned os=channel_owner_slot(id);
+  if(!os||!atomic_load(&s->owners[os-1].live)||atomic_load(&s->owners[os-1].incarnation)!=id)reclaimable++;
+ }
+ for(unsigned i=0;i<CHANNEL_HASH;i++)if(atomic_load(s->field_directory+i))directory++;
+ printf("{\"owners_used\":%u,\"owners_capacity\":%u,\"owners_live\":%u,\"fields_used\":%u,\"fields_capacity\":%u,\"fields_live\":%u,\"fields_reclaimable\":%u,\"directory_used\":%u,\"directory_capacity\":%u,\"errors\":[",owners,CHANNEL_OWNERS,owners_live,fields,CHANNEL_FIELDS,fields_live,reclaimable,directory,CHANNEL_HASH);
+ for(unsigned f=0;f<CHANNEL_FIELD_KINDS;f++)printf("%s%u",f?",":"",atomic_load(s->errors+f));
+ printf("]}");
+}
 static void json_meter(const CopiedMeter *m){
  float left,right;memcpy(&left,&m->left,4);memcpy(&right,&m->right,4);
  printf("{\"available\":%s,\"incarnation\":%u,\"source_tick\":%u,\"thread_token\":%u,\"revision\":%u,\"enabled\":%u,\"source_site\":%u,\"left\":",m->available?"true":"false",m->incarnation,m->tick,m->token,m->revision,m->enabled,m->site);
@@ -252,7 +331,7 @@ int main(int argc,char **argv){
  struct stat st;if(fstat(fd,&st)||!S_ISREG(st.st_mode)||st.st_size!=(off_t)sizeof(MirrorState)){fprintf(stderr,"wrong mirror file\n");close(fd);return 2;}
  const MirrorState *s=mmap(NULL,sizeof(*s),PROT_READ,MAP_SHARED,fd,0);close(fd);if(s==MAP_FAILED)return 2;
  if(s->magic!=MIRROR_MAGIC||s->version!=MIRROR_VERSION||s->bytes!=sizeof(*s)||s->capacity!=MIRROR_CELLS){fprintf(stderr,"unsupported mirror format\n");return 2;}
- CopiedMirror out;int stable=copy_mirror(s,&out);uint32_t now=elapsed_origin(s);
+ MIRROR_COPY(out);int stable=copy_mirror(s,&out);uint32_t now=elapsed_origin(s);
  int fresh=stable&&out.alive&&!out.error&&now!=UINT32_MAX&&now>=out.heartbeat&&now-out.heartbeat<=1000;
  unsigned bank[MIRROR_BANK],n=0;int available=fresh&&out.ready;
  if(stable)for(unsigned i=0;i<out.count&&n<MIRROR_BANK;i++)if(playable(out.tracks[i].vptr)){bank[n++]=i;available&=out.tracks[i].available;}
@@ -269,6 +348,6 @@ int main(int argc,char **argv){
  }
  printf("],\"pad_error\":%u,\"pad_count\":%u,\"pads\":[",out.pad_error,out.pad_count);
  for(unsigned i=0;i<out.pad_count;i++){const CopiedTrack *p=out.pads+i;printf("%s{\"label\":\"%c%02u\",\"parent_track_serial\":%u,\"instrument_incarnation\":%u,\"membership_generation\":%u,\"sample_name_available\":false,\"color_available\":false,\"selection_available\":false,\"meter_available\":false,\"fields\":{",i?",":"",'A'+i/16,i%16+1,out.selected_serial,p->pad_owner,p->pad_generation);static const unsigned fields[]={CF_VOLUME,CF_PAN,CF_MUTE,CF_SOLO,CF_SOLO_AUDIO};static const char *labels[]={"volume","pan","mute","solo","solo_audio"};for(unsigned j=0;j<5;j++){printf("%s\"%s\":",j?",":"",labels[j]);json_field(p->fields+fields[j],fields[j]);}printf("}}");}
- printf("],\"effects\":");effects_json(&out);printf(",\"qlinks\":");qlink_json(&out);printf(",\"io\":");io_json(&out);printf(",\"meter_error\":%u,\"meter_cells\":%u,\"meter_capacity\":%u,\"meter_tokens\":%u,\"meter_closed\":%u,\"master_meter\":",out.meter_error,out.meter_cells,METER_CELLS,out.meter_tokens,out.meter_closed);json_meter(&out.master_meter);printf(",\"selection\":");json_field(&out.selection,CF_SELECTION);printf(",\"master\":");json_field(&out.master,CF_MASTER);printf(",\"playing\":");json_field(&out.playing,CF_PLAYING);printf(",\"automation\":");json_field(&out.automation,CF_AUTOMATION);printf(",\"automation_members\":{\"available\":%s,\"mixed\":%u,\"count\":%u,\"generation\":%u},\"save_owner\":%u,\"zoom_owner\":%u",out.automation_detail_available?"true":"false",out.automation_mixed,out.automation_count,out.automation_generation,out.editor_owner,out.zoom_owner);printf(",\"loop\":");json_field(&out.loop,CF_LOOP);printf(",\"click\":");json_field(&out.click,CF_CLICK);printf(",\"record_mode\":");json_field(&out.record_mode,CF_RECORD_MODE);printf(",\"position\":{\"available\":%s,\"error\":%u,\"source_tick\":%u,\"thread_token\":%u,\"native_bar\":%u,\"native_beat\":%u,\"native_clock\":%u,\"index_conversion\":false}}\n",out.position_available?"true":"false",out.position_error,out.position_tick,out.position_token,out.bar,out.beat,out.clock);munmap((void*)s,sizeof(*s));return available?0:1;
+ printf("],\"effects\":");effects_json(&out);printf(",\"qlinks\":");qlink_json(&out);printf(",\"io\":");io_json(&out);printf(",\"meter_error\":%u,\"meter_cells\":%u,\"meter_capacity\":%u,\"meter_tokens\":%u,\"meter_closed\":%u,\"master_meter\":",out.meter_error,out.meter_cells,METER_CELLS,out.meter_tokens,out.meter_closed);json_meter(&out.master_meter);printf(",\"selection\":");json_field(&out.selection,CF_SELECTION);printf(",\"master\":");json_field(&out.master,CF_MASTER);printf(",\"playing\":");json_field(&out.playing,CF_PLAYING);printf(",\"automation\":");json_field(&out.automation,CF_AUTOMATION);printf(",\"automation_members\":{\"available\":%s,\"mixed\":%u,\"count\":%u,\"generation\":%u},\"save_owner\":%u,\"zoom_owner\":%u",out.automation_detail_available?"true":"false",out.automation_mixed,out.automation_count,out.automation_generation,out.editor_owner,out.zoom_owner);printf(",\"loop\":");json_field(&out.loop,CF_LOOP);printf(",\"click\":");json_field(&out.click,CF_CLICK);printf(",\"record_mode\":");json_field(&out.record_mode,CF_RECORD_MODE);printf(",\"channel\":");channel_json(&s->channel);printf(",\"position\":{\"available\":%s,\"error\":%u,\"source_tick\":%u,\"thread_token\":%u,\"native_bar\":%u,\"native_beat\":%u,\"native_clock\":%u,\"index_conversion\":false}}\n",out.position_available?"true":"false",out.position_error,out.position_tick,out.position_token,out.bar,out.beat,out.clock);munmap((void*)s,sizeof(*s));return available?0:1;
 }
 #endif

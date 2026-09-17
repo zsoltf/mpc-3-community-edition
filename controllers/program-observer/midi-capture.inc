@@ -6,7 +6,7 @@ static __thread struct {uint32_t id,payload,sp,branch,set,commit;} midi_call __a
 static void midi_initialize(void){midi_submission=0;memset(&midi_call,0,sizeof(midi_call));for(unsigned i=0;i<COMMAND_SLOTS;i++){atomic_store(midi_payload+i,0);atomic_store(midi_branch+i,0);}}
 static int midi_current(unsigned at){
  const CommandRequest *r=&accepted[at].request;ChannelCell *c=channel_cell(accepted[at].track+0x28c);
- return recording_current(at)&&r->reserved==CF_MIDI_VOLUME&&typed(accepted[at].track,0x6935554)&&typed(accepted[at].program,0x6932338)&&word(accepted[at].track+0x648)==accepted[at].program&&channel_owner_id(accepted[at].track)==r->track_owner&&c&&atomic_load(&c->live)&&atomic_load(&c->field)==CF_MIDI_VOLUME&&atomic_load(&c->incarnation)==r->field_incarnation&&atomic_load(&c->owner_incarnation)==r->track_owner&&!atomic_load(&mirror_state->channel.errors[CF_MIDI_VOLUME]);
+ return recording_current(at)&&r->reserved==CF_MIDI_VOLUME&&typed(accepted[at].track,0x6935554)&&typed(accepted[at].program,0x6932338)&&word(accepted[at].track+0x648)==accepted[at].program&&channel_owner_id(accepted[at].track)==r->track_owner&&c&&atomic_load(&c->live)&&atomic_load(&c->field)==CF_MIDI_VOLUME&&atomic_load(&c->incarnation)==r->field_incarnation&&atomic_load(&c->owner_incarnation)==r->track_owner&&!channel_fault(atomic_load(&mirror_state->channel.errors[CF_MIDI_VOLUME]));
 }
 /* Native240274c builds controller events with tag1 (ORR1 at2402778),
  * distinct from the Program parameter event family accepted by recording. */
@@ -56,7 +56,17 @@ static void midi_point(Context *c,unsigned site){
   midi_call.id=id;midi_call.payload=n;midi_call.sp=source_sp(c);midi_call.branch=branch;midi_call.set=midi_call.commit=0;
   midi_emit(c,CE_MIDI_ENTER,at,accepted[at].native_bits,branch);
  }else if(site==MI_SET){
-  if(midi_call.set||c->r[0]!=accepted[at].property||c->lr!=observer_image_bias+0x264d478||(uint32_t)c->d[0]!=accepted[at].native_bits){trace_fail(C_TRACE_AMBIGUOUS);return;}
+  /* Ignored as foreign traffic, on the same grounds as the effects lane: with
+   * automation Write armed the application writes this Track level through its
+   * own record path inside this window. Another receiver, another call site,
+   * another value, or a repeat after this command's own call was receipted is
+   * proof the call is not this command's. Ignoring emits no receipt; if this
+   * command's own call never arrives it completes as a no-set command. */
+  if(c->r[0]!=accepted[at].property||c->lr!=observer_image_bias+0x264d478||(uint32_t)c->d[0]!=accepted[at].native_bits||midi_call.set)return;
+  /* No NULL test here is safe only while channel_birth and this trace both run
+   * on the command-owner thread, so no reclaim can interleave inside one gesture
+   * and a live key is never transiently unresolvable. Any future directory
+   * compaction breaks that, so guarding this is a prerequisite of that work. */
   ChannelCell *v=channel_cell(c->r[0]);unsigned rev=atomic_load(&v->revision),bits=atomic_load(&v->bits);if(!rev||(rev&1)){trace_fail(C_TRACE_AMBIGUOUS);return;}
   midi_call.set=1;midi_emit(c,CE_MIDI_SET,at,bits,rev);
  }else{
@@ -67,7 +77,11 @@ static void midi_point(Context *c,unsigned site){
 }
 static int midi_commit(Context *c,unsigned at){
  if(midi_call.id!=accepted[at].request.seq)return 0;
- if(!midi_current(at)||!midi_call.set||midi_call.commit||c->r[5]!=accepted[at].property||(uint32_t)c->d[8]!=accepted[at].native_bits){trace_fail(C_TRACE_AMBIGUOUS);return 1;}
+ /* Another value written to this property, or a repeat after this command's own
+  * commit was receipted, is another writer's: consumed without a receipt. An
+  * unreceipted set or a lost field identity remains a fault. */
+ if(midi_call.commit||(uint32_t)c->d[8]!=accepted[at].native_bits)return 1;
+ if(!midi_current(at)||!midi_call.set||c->r[5]!=accepted[at].property){trace_fail(C_TRACE_AMBIGUOUS);return 1;}
  ChannelCell *v=channel_cell(c->r[5]);unsigned rev=atomic_load(&v->revision);if(!rev||(rev&1)){trace_fail(C_TRACE_AMBIGUOUS);return 1;}
  midi_call.commit=1;midi_emit(c,CE_MIDI_COMMIT,at,(uint32_t)c->d[8],rev);return 1;
 }

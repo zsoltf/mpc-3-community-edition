@@ -1,6 +1,7 @@
 /* Selected insert reads run synchronously on the existing UI command owner.
  * Cached native numbers are comparison keys only; every call uses a fresh slot. */
 #include "native-name.h"
+#include <time.h> /* the bounded in-drain settle wait below */
 static EffectsCopy effects_current;
 static EffectChooser effects_chooser;
 static void effects_chooser_observe(Context*);
@@ -317,13 +318,131 @@ static void effects_execute(Context *c){
  unsigned id=recording_call.id?recording_call.id:invocation.request,at=command_find(command_state,id);
  if(at==COMMAND_SLOTS||accepted[at].request.reserved!=EFFECT_PARAMETER)return;
  const CommandRequest *r=&accepted[at].request;
- if(source_requests[at]!=id||(recording_call.id&&invocation.request)||(recording_call.id?recording_call.phase!=2:invocation.phase!=2)||c->lr!=observer_image_bias+(recording_call.id?0x250b5b4:0x25176d4)||c->r[1]!=r->effect_index||(uint32_t)c->d[0]!=r->bits||!typed(c->r[0],0x692e180)||atomic_load(effect_executed+at)){trace_fail(C_TRACE_AMBIGUOUS);return;}
+ /* This runs for EVERY native parameter setter call made while a command is in
+  * flight on this thread, so it also sees writers that are not this command.
+  * With automation Write armed, the application's own record path writes the
+  * parameter through the same setter inside this window; treating that as a
+  * failure latched a session-wide sticky C_TRACE_AMBIGUOUS and killed the whole
+  * surface. Relevance and correctness are therefore separated: only a call this
+  * lane cannot tell apart from its own still fails the trace. */
+ if(source_requests[at]!=id||(recording_call.id&&invocation.request)){trace_fail(C_TRACE_AMBIGUOUS);return;}
+ /* Ignored as foreign traffic. Each of these is proof that the call is NOT this
+  * command's own setter call, not merely that it is unexpected:
+  *  lr - this command's call can only enter from the one pinned call site of
+  *   its live context, the ordinary queue body or the record callback;
+  *  r[1] - this command names exactly one parameter index;
+  *  d[0] - the dispatched value is fixed at admission and re-proved at the
+  *   matching body, so another value is another write;
+  *  r[0] type - this command's receiver is an effect parameter holder;
+  *  effect_executed - this command's own call is receipted exactly once, so a
+  *   later call is another writer's, or a repeat that cannot change the receipt
+  *   already published for the first.
+  * Ignoring cannot fabricate a receipt, only leave this command's own call free
+  * to arrive. If it never does, effect_executed stays 0, effects_complete skips
+  * the slot and this one request stays pending for its own client timeout. */
+ if(c->lr!=observer_image_bias+(recording_call.id?0x250b5b4:0x25176d4)||c->r[1]!=r->effect_index||(uint32_t)c->d[0]!=r->bits||!typed(c->r[0],0x692e180)||atomic_load(effect_executed+at))return;
  /* Receiver is alive at its own setter entry. No later call uses this key. */
  uint32_t e=c->r[0],ap=word(e+0x68),tuple=word(e+0x70);
- if(!pointer(tuple)||word(tuple)!=accepted[at].program||word(tuple+4)!=0x101||word(tuple+8)!=r->effect_slot||!ap){trace_fail(C_TRACE_AMBIGUOUS);return;}
+ /* A receiver whose identity tuple cannot be read is indistinguishable from
+  * this command's own receiver and still fails. A readable tuple naming another
+  * Program, kind or insert slot is another insert's parameter: foreign. */
+ if(!pointer(tuple)){trace_fail(C_TRACE_AMBIGUOUS);return;}
+ if(word(tuple)!=accepted[at].program||word(tuple+4)!=0x101||word(tuple+8)!=r->effect_slot)return;
+ /* Every relevance test is now spent, so what remains is about this command's
+  * own call. The window is proven only by the matching body: a call that got
+  * this far and arrives outside it cannot be told apart from this command's
+  * own, and this fault still precedes every receipt. A missing AP is likewise
+  * this command's receiver in a state that cannot carry the receipt. */
+ if((recording_call.id?recording_call.phase!=2:invocation.phase!=2)||!ap){trace_fail(C_TRACE_AMBIGUOUS);return;}
  atomic_store(effect_applied_key+at,e);atomic_store(effect_applied_ap+at,ap);
  event(c,CE_EFFECT_EXECUTE,id,e,ap,accepted[at].program,0x101,accepted[at].controller,r->bits,r->effect_index,r->effect_generation);
  atomic_store_explicit(effect_executed+at,id,memory_order_release);
+}
+/* An effect command's settled value is written by the audio thread a few
+ * milliseconds after the dispatch returns, while effects_complete runs at the
+ * TOP of a drain, before the slot scan. So the drain that dispatches always
+ * misses its own value and the sample waits a whole 50 ms timer tick for a
+ * value that has existed for about 45 ms of it. effects_settle waits here,
+ * after the scan, for the audio-side completion of what THIS drain dispatched,
+ * and only then reads back again.
+ *
+ * Bounded by construction on every path: a fixed count of fixed sleeps, so an
+ * audio thread that is slow, stalled or not running at all costs the bound and
+ * nothing more. nanosleep can only return early.
+ *
+ * The bound is 16 ms. The device samples of return-to-done were 0, 0 and 10 ms
+ * (the last Write-armed), and the audio period is 2.9 ms. 12 ms would be 1.2x
+ * the largest of three samples, which is not headroom; 16 ms is 1.6x it and
+ * about five and a half periods, enough for the enqueue, a body, the optional
+ * second Write-armed job and scheduling jitter. It is also under a third of
+ * the 50 ms drain period, and JUCE resets the timer countdown before invoking
+ * the callback, so even a full timeout cannot push the next drain out. The
+ * wait exits the moment done arrives, so the bound only governs the case where
+ * the gain has already been lost; raising it costs nothing in the common case
+ * and lowering it only trades success rate for a shorter worst-case stall.
+ *
+ * On timeout the readback is NOT run, so the timeout path is exactly today's
+ * behaviour: the sample happens at the next drain. */
+#define EFFECT_SETTLE_STEPS 64u
+#define EFFECT_SETTLE_STEP_NS 250000L
+/* Component seam: counts the sleeps the wait actually performs, so a fixture
+ * can tell a wait that succeeded early from one that ran to the bound, and
+ * from one the quiet guard skipped, without measuring wall time. */
+#ifndef EFFECT_SETTLE_SLEEP
+#define EFFECT_SETTLE_SLEEP() ((void)0)
+#endif
+static void effects_complete(Context *c);
+static int effects_settle_quiet(void){
+ return !atomic_load(&mirror_state->meters.closing)&&!atomic_load(&command_state->stop_requested)&&
+  !atomic_load_explicit(&command_state->new_project_intent,memory_order_seq_cst)&&
+  !atomic_load(&command_state->trace_error)&&atomic_load_explicit(&observer_running,memory_order_seq_cst);
+}
+/* Exactly the two conditions effects_complete needs from the audio side, and
+ * nothing else: it re-checks everything itself, so this is only a gate. */
+static int effects_settled(unsigned mask){
+ for(unsigned at=0;at<COMMAND_SLOTS;at++){
+  if(!(mask&(1u<<at)))continue;
+  unsigned seq=accepted[at].request.seq;
+  if(!seq||atomic_load_explicit(&command_state->slots[at].done,memory_order_acquire)!=seq)return 0;
+  if(accepted[at].request.reserved==EFFECT_PARAMETER&&atomic_load_explicit(effect_executed+at,memory_order_acquire)!=seq)return 0;
+ }
+ return 1;
+}
+/* A recording flight whose producer has already published its second job
+ * cannot reach slot->done until that job completes, because recording_complete
+ * holds done back for exactly that (recording-capture.inc:43-47). On the
+ * device that job landed 31 ms after the dispatch - the application's recorder
+ * latency, not ours, and far outside any bound this wait should accept. So
+ * waiting on such a slot is a stall that cannot succeed: drop it from the mask
+ * instead, and if nothing winnable is left, do not sleep at all.
+ *
+ * This changes nothing about when a sample may be taken or what it requires.
+ * done, done_tick and every receipt are untouched, and a dropped slot is
+ * sampled at the next drain exactly as it is today - the consumer requires the
+ * value to be at or after done_tick, and done_tick is the LATER of the two
+ * recording completions (mirror-input-core.h:652, :909), so an earlier sample
+ * on this path would be a trace-ambiguous fault rather than an optimisation.
+ *
+ * It is a race in principle: a producer that has not published its second job
+ * yet is not visible here, and that slot still waits and times out. The device
+ * capture publishes it at +0 ms, before this wait runs, so this removes the
+ * common cost rather than every cost. Re-checked on every iteration, so a job
+ * published during the wait ends it too. */
+static unsigned effects_settle_winnable(unsigned mask){
+ for(unsigned at=0;at<COMMAND_SLOTS;at++){
+  if(!(mask&(1u<<at)))continue;
+  if(atomic_load_explicit(recording_work+at,memory_order_acquire)&&!atomic_load_explicit(recording_second_done+at,memory_order_acquire))mask&=~(1u<<at);
+ }
+ return mask;
+}
+static void effects_settle(Context *c,unsigned mask){
+ if(!mask)return;
+ for(unsigned step=0;step<=EFFECT_SETTLE_STEPS;step++){
+  if(!effects_settle_quiet())return;
+  mask=effects_settle_winnable(mask);if(!mask)return;
+  if(effects_settled(mask)){effects_complete(c);return;}
+  if(step<EFFECT_SETTLE_STEPS){EFFECT_SETTLE_SLEEP();struct timespec t={0,EFFECT_SETTLE_STEP_NS};nanosleep(&t,NULL);}
+ }
 }
 static void effects_complete(Context *c){
  if(!atomic_load_explicit(&effects_pending,memory_order_acquire)||token()!=command_owner||!active()||!command_queues||c->r[0]!=command_queues+4||word(c->r[0]+0xf0))return;

@@ -25,6 +25,10 @@ typedef struct {
  uint32_t offset,epoch,heartbeat,topology_revision,playable_count,remaps;
  unsigned view,fader_field,assignment,flip,effects_slot,effects_page,effects_generation,effects_chooser_request,qlink_page;
  unsigned volume_fields[MIRROR_BANK];
+ /* Row this strip's identity was bound from in the snapshot's track array, or
+  * -1 when it has none (pad rows resolve directly). It is a hint: every reader
+  * revalidates the row against the identity and falls back to the scan. */
+ int strip_row[MIRROR_BANK];
  int ready,chooser;
 } MirrorBank;
 static inline unsigned bank_parameter(const MirrorBank *bank,unsigned strip){
@@ -35,11 +39,11 @@ static inline unsigned bank_parameter(const MirrorBank *bank,unsigned strip){
 static inline unsigned bank_field(const MirrorBank *bank,unsigned strip){return (bank->assignment==BA_EFFECT||bank->assignment==BA_QLINK)&&bank->flip?CF_COUNT:bank->assignment==BA_SEND&&strip>=4?CF_COUNT:bank->flip&&bank->assignment==BA_SEND?bank_parameter(bank,strip):bank->fader_field==CF_VOLUME?bank->volume_fields[strip]:bank->fader_field;}
 static inline unsigned bank_encoder_field(const MirrorBank *bank,unsigned strip){return bank->assignment==BA_SEND&&strip>=4?CF_COUNT:bank->flip?bank->volume_fields[strip]:bank_parameter(bank,strip);}
 static inline const MotorIdentity *bank_encoder_identity(const MirrorBank *bank,unsigned strip){return bank->assignment==BA_SEND&&!bank->flip?&bank->selected:&bank->strips[strip];}
-static inline void bank_init(MirrorBank *bank){memset(bank,0,sizeof(*bank));bank->assignment=BA_TRACK;bank->effects_slot=EFFECT_LIST;for(unsigned i=0;i<MIRROR_BANK;i++)bank->faders[i].last_sent=bank->faders[i].physical=-1;}
+static inline void bank_init(MirrorBank *bank){memset(bank,0,sizeof(*bank));bank->assignment=BA_TRACK;bank->effects_slot=EFFECT_LIST;for(unsigned i=0;i<MIRROR_BANK;i++){bank->faders[i].last_sent=bank->faders[i].physical=-1;bank->strip_row[i]=-1;}}
 static inline void bank_disconnect(MirrorBank *bank){uint32_t offset=bank->offset,epoch=bank->epoch,view=bank->view,field=bank->fader_field;bank_init(bank);bank->offset=offset;bank->epoch=epoch;bank->view=view;bank->fader_field=field;}
 static inline void bank_drop(MirrorBank *bank,uint32_t now){
  for(unsigned i=0;i<MIRROR_BANK;i++){
-  MirrorFader *f=bank->faders+i;memset(&f->identity,0,sizeof(f->identity));f->available=f->empty=0;f->last_sent=-1;f->wait=1;f->barrier=now;f->revision=f->bits=0;
+  MirrorFader *f=bank->faders+i;memset(&f->identity,0,sizeof(f->identity));f->available=f->empty=0;f->last_sent=-1;f->wait=1;f->barrier=now;f->revision=f->bits=0;bank->strip_row[i]=-1;
  }
  bank->ready=bank->chooser=0;
 }
@@ -110,6 +114,10 @@ static inline void bank_apply(MirrorBank *bank,const CopiedMirror *snapshot,uint
   if(bank->assignment==BA_SEND)track=bank_return(snapshot,i);
   else if(bank->offset+i<n)track=rows+indices[bank->offset+i];
   if(track)identity=bank_identity(snapshot,track);
+  /* Record the track row this identity came from. A pad row keeps -1: a pad
+   * identity already resolves by index, and a pad whose own owner is absent
+   * must keep falling back to the parent scan it resolved by before. */
+  bank->strip_row[i]=track&&(bank->assignment==BA_SEND||bank->view!=BV_DRUM_PADS)?(int)(track-snapshot->tracks):-1;
   bank->strips[i]=identity;bank->volume_fields[i]=track&&midi_volume(track->vptr)?CF_MIDI_VOLUME:CF_VOLUME;unsigned field=bank_field(bank,i);int known_empty=bank->assignment==BA_SEND?i>=4:!track;
   if(bank->view==BV_DRUM_PADS&&track&&!track->pad_owner){track=NULL;identity=(MotorIdentity){0};}
   if(bank->flip&&bank->assignment==BA_SEND){

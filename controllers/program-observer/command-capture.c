@@ -49,7 +49,20 @@ static int enrollment_change(int delta,unsigned site){
  return !result;
 }
 static void command_fail(unsigned why){atomic_store_explicit(&command_state->error,why,memory_order_release);atomic_store_explicit(&observer_running,0,memory_order_seq_cst);}
-static void trace_fail(unsigned why){atomic_store_explicit(&command_state->trace_error,why,memory_order_release);}
+/* The trace latch used to store only its code, so a fault could not be
+ * localised to one of the ~90 call sites and every incident needed a fresh
+ * hypothesis. The site is now packed into the otherwise unused admission
+ * diagnostic, first fault wins, so a later fault cannot overwrite the cause.
+ * Cold path only: this runs when a fault is already being declared. */
+static void trace_fail_at(unsigned why,unsigned site){
+ uint32_t none=0;
+ atomic_compare_exchange_strong_explicit(&command_state->admission_detail,&none,
+  command_admission_detail(CA_LANE_GUARD,why,site),memory_order_release,memory_order_relaxed);
+ atomic_store_explicit(&command_state->trace_error,why,memory_order_release);
+}
+/* __COUNTER__ is unique per call site across this translation unit, and the
+ * site map is regenerated from the preprocessed source by trace-sites.sh. */
+#define trace_fail(why) trace_fail_at((why),__COUNTER__)
 /* Same qualified Program constructor owner already owns channel births. The
  * enclosing lane flight detects reentry before this function, and owns close. */
 static int command_birth_owner(unsigned site){
@@ -163,8 +176,18 @@ static void queue_point(Context *c,unsigned site){
   uint32_t a=c->r[0];if(!pointer(a)||a>UINT32_MAX-20){trace_fail(C_TRACE_AMBIGUOUS);return;}
   uint32_t counter=word(a),program=word(a+4),kind=word(a+8),controller=word(a+12),bits=word(a+16);
   unsigned match=COMMAND_SLOTS;
+  /* This seam already returns silently for a queue item of an unrelated field,
+   * so the application's own items do reach it. An item carrying a different
+   * value for the same Program, controller and kind - mute or solo moved on the
+   * touchscreen beside the surface's own - is likewise another writer's, not
+   * this request's, whose dispatched value is fixed at admission. Two of our
+   * own open requests matching the same item stays a fault: that one cannot be
+   * attributed. */
   for(unsigned i=0;i<COMMAND_SLOTS;i++)if(source_requests[i]&&accepted[i].program==program&&accepted[i].controller==controller&&kind==command_arg_kind(&accepted[i].request)){
-   if(accepted[i].request.seq!=source_requests[i]||accepted[i].native_bits!=bits||match!=COMMAND_SLOTS){trace_fail(C_TRACE_AMBIGUOUS);return;}match=i;
+   if(accepted[i].request.seq!=source_requests[i]){trace_fail(C_TRACE_AMBIGUOUS);return;}
+   if(accepted[i].native_bits!=bits)continue;
+   if(match!=COMMAND_SLOTS){trace_fail(C_TRACE_AMBIGUOUS);return;}
+   match=i;
   }
   if(match==COMMAND_SLOTS)return;
   unsigned id=source_requests[match];
@@ -176,10 +199,18 @@ static void queue_point(Context *c,unsigned site){
   if(at==COMMAND_SLOTS||source_requests[at]!=id){trace_fail(C_TRACE_AMBIGUOUS);return;}
   uint32_t p=accepted[at].program;
   if(site==M_COMMAND_BODY){
-   if(c->r[0]!=p||c->lr!=observer_image_bias+0x25178d4||invocation.phase!=1||source_sp(c)+8!=invocation.sp||c->r[1]!=command_arg_kind(&accepted[at].request)||c->r[2]!=accepted[at].controller||(uint32_t)c->d[0]!=accepted[at].native_bits){trace_fail(C_TRACE_AMBIGUOUS);return;}
+   /* Admitted for every queued body while this invocation is open, so another
+    * receiver Program, another call site, another kind, another controller or
+    * another value is proof the body is not this request's. The frame and the
+    * window stay faults and still precede the receipt; if this request's own
+    * body never arrives, M_QUEUE_DONE fails on the window instead. */
+   if(c->r[0]!=p||c->lr!=observer_image_bias+0x25178d4||c->r[1]!=command_arg_kind(&accepted[at].request)||c->r[2]!=accepted[at].controller||(uint32_t)c->d[0]!=accepted[at].native_bits)return;
+   if(invocation.phase!=1||source_sp(c)+8!=invocation.sp){trace_fail(C_TRACE_AMBIGUOUS);return;}
    invocation.phase=2;effects_native_body(at);event(c,CE_BODY,id,invocation.capture,invocation.counter,p,c->r[1],c->r[2],(uint32_t)c->d[0],0,0);
   }else{
-   if(invocation.phase!=2||source_sp(c)+8!=invocation.sp||c->r[4]!=invocation.capture||c->r[3]!=invocation.counter){trace_fail(C_TRACE_AMBIGUOUS);return;}
+   /* A completion naming another queue item is another item's completion. */
+   if(c->r[4]!=invocation.capture||c->r[3]!=invocation.counter)return;
+   if(invocation.phase!=2||source_sp(c)+8!=invocation.sp){trace_fail(C_TRACE_AMBIGUOUS);return;}
    event(c,CE_DONE,id,invocation.capture,c->r[3],p,command_arg_kind(&accepted[at].request),accepted[at].controller,accepted[at].native_bits,0,0);
    memset(&invocation,0,sizeof(invocation));atomic_store_explicit(active_request+at,0,memory_order_seq_cst);
    atomic_store_explicit(&command_state->slots[at].done,id,memory_order_release);COMMAND_PAUSE(7);
@@ -217,7 +248,7 @@ static ChannelCell *request_cell(const CommandRequest *r,const Track *t){
  unsigned field=command_source_field(r->reserved),owner=channel_kind(field)==CO_PROJECT?project:channel_kind(field)==CO_TRACK?t->track:t->program;
  ChannelCell *c=channel_cell(owner+channel_offset(field));
  unsigned owner_id=channel_kind(field)==CO_PROJECT?r->project_owner:channel_kind(field)==CO_TRACK?r->track_owner:r->program_owner;
- if(!c||atomic_load(&c->field)!=field||atomic_load(&mirror_state->channel.errors[field])||!atomic_load_explicit(&c->live,memory_order_acquire)||atomic_load(&c->owner_incarnation)!=owner_id||atomic_load(&c->incarnation)!=r->field_incarnation||channel_owner_id(owner)!=owner_id)return NULL;
+ if(!c||atomic_load(&c->field)!=field||channel_fault(atomic_load(&mirror_state->channel.errors[field]))||!atomic_load_explicit(&c->live,memory_order_acquire)||atomic_load(&c->owner_incarnation)!=owner_id||atomic_load(&c->incarnation)!=r->field_incarnation||channel_owner_id(owner)!=owner_id)return NULL;
  return c;
 }
 #ifdef COMMAND_COMPONENT
@@ -461,6 +492,12 @@ static void send_destinations(Context *c){
  atomic_store_explicit(&g->sends_revision,rev+2,memory_order_release);
 }
 
+/* Component seam on the drain's ordinary slot scan: it counts the 39-word
+ * request reads that actually happen, so a fixture can pin the skip of an
+ * already processed or reclaimed slot instead of only its lack of effect. */
+#ifndef COMMAND_DRAIN_READ
+#define COMMAND_DRAIN_READ() ((void)0)
+#endif
 static void service(Context *c){
  meter_service(c);
  send_destinations(c);
@@ -469,11 +506,22 @@ static void service(Context *c){
  io_complete(c);io_service(c);
  qlink_mode_complete(c);qlink_complete(c);qlink_service(c); /* Bounded receipts never starve mode-cache feedback. */
  if(atomic_load(&mirror_state->meters.closing)||atomic_load(&command_state->stop_requested)||atomic_load_explicit(&command_state->new_project_intent,memory_order_seq_cst))return;
+ /* Whatever this drain dispatches into effects_pending is what the wait at
+  * the end of this function has to settle; bits already set belong to an
+  * earlier drain and are the next drain's business, exactly as today. */
+ unsigned effects_before=atomic_load_explicit(&effects_pending,memory_order_acquire);
  unsigned start=service_cursor;service_cursor=(service_cursor+1)%COMMAND_SLOTS;
  for(unsigned n=0;n<COMMAND_SLOTS;n++){
   if(!atomic_load_explicit(&observer_running,memory_order_seq_cst)||atomic_load(&command_state->trace_error))return;
-  unsigned at=(start+n)%COMMAND_SLOTS;CommandRequest r;unsigned seq=atomic_load(&command_state->slots[at].published);
-  if(seq&&command_request_read(command_state->slots+at,seq,&r)&&!command_jog(r.reserved)&&!command_global(r.reserved))service_one(c,at);
+  unsigned at=(start+n)%COMMAND_SLOTS;CommandRequest r;CommandSlot *slot=command_state->slots+at;unsigned seq=atomic_load(&slot->published);
+  /* Same rejection service_one makes on its own first three loads. Testing it
+   * here keeps the 39-word request read off the UI thread for every slot that
+   * is already processed or reclaimed, which after the first cycle is nearly
+   * all of them. A slot published between these loads is dispatched by the
+   * next drain, exactly as it already was when seq was sampled here. */
+  if(!seq||atomic_load_explicit(&slot->processed,memory_order_acquire)==seq||atomic_load_explicit(&slot->reclaimed,memory_order_acquire)==seq)continue;
+  COMMAND_DRAIN_READ();
+  if(command_request_read(slot,seq,&r)&&!command_jog(r.reserved)&&!command_global(r.reserved))service_one(c,at);
  }
  /* Native GUI semantics: dispatch relative packets in publication order,
   * retaining one native jog until its actual callback DONE. */
@@ -482,9 +530,11 @@ static void service(Context *c){
   for(unsigned at=0;at<COMMAND_SLOTS;at++){CommandSlot *slot=command_state->slots+at;unsigned seq=atomic_load(&slot->published);CommandRequest r;
    if(seq&&seq<first&&atomic_load(&slot->processed)!=seq&&command_request_read(slot,seq,&r)&&(command_jog(r.reserved)||command_global(r.reserved))){first=seq;chosen=at;}
   }
-  if(chosen==COMMAND_SLOTS||!atomic_load(&observer_running)||atomic_load(&command_state->trace_error))return;
+  if(chosen==COMMAND_SLOTS)break; /* the ordinary exit: no relative work left */
+  if(!atomic_load(&observer_running)||atomic_load(&command_state->trace_error))return;
   service_one(c,chosen);if(atomic_load(&command_state->slots[chosen].processed)!=first)return;
  }
+ effects_settle(c,atomic_load_explicit(&effects_pending,memory_order_acquire)&~effects_before);
 }
 /* Pure observer-key classification: no native reads, allocation, mutation or
  * failure side effects. Uncertainty retains the original admitted path. */
@@ -516,7 +566,11 @@ static int known_channel_key(uint32_t property){
    return 1;
   }
  }
- return -1;
+ /* channel_birth only ever stores a key at one of these same MIRROR_PROBES
+  * positions, so a full walk with no match proves the key is absent. Answering
+  * "indeterminate" here would silently disable this fast path as soon as
+  * reclamation leaves the directory without an empty word. */
+ return 0;
 }
 static int unrelated_source_key(Context *c,unsigned site){
  uint32_t io_property=0;

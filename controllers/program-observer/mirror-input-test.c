@@ -12,7 +12,12 @@ static int captured_output(snd_seq_t*,snd_seq_event_t*);
 #undef snd_seq_event_output_direct
 static snd_seq_event_t last_output;static unsigned output_count;static CopiedMirror *stop_on_output;
 static unsigned observed_led[128],observed_pitch_count[9];static int observed_pitch[9];static unsigned char observed_lcd[112];
+/* Outbound census: channel-pressure meter levels per strip and the ten
+ * playhead controllers, so a suppressed resend is observable as a count. */
+static unsigned observed_press_count[8],observed_position_count;static int observed_press_level[8];
 static int captured_output(snd_seq_t *seq,snd_seq_event_t *event){(void)seq;last_output=*event;output_count++;
+ if(event->type==SND_SEQ_EVENT_CHANPRESS){unsigned v=(unsigned)event->data.control.value;observed_press_count[(v>>4)&7]++;observed_press_level[(v>>4)&7]=(int)(v&0xf);}
+ if(event->type==SND_SEQ_EVENT_CONTROLLER&&event->data.control.param>=0x40&&event->data.control.param<=0x49)observed_position_count++;
  if(stop_on_output&&event->type==SND_SEQ_EVENT_NOTEON&&event->data.note.note==93)stop_on_output->playing.bits=0;
  if(event->type==SND_SEQ_EVENT_PITCHBEND&&event->data.control.channel<9){observed_pitch_count[event->data.control.channel]++;observed_pitch[event->data.control.channel]=event->data.control.value+8192;}
  if(event->type==SND_SEQ_EVENT_NOTEON&&event->data.note.note<128)observed_led[event->data.note.note]=event->data.note.velocity;
@@ -52,7 +57,7 @@ static void policy_checks(void){
  need(servo_disabled&&servo_arguments(3,plain)==3&&servo_disabled,"X-Touch starts without raw echo by default");
  need(servo_arguments(4,off)==3&&servo_disabled,"explicit servo-off without duration accepted");
  need(servo_arguments(5,on)==4&&!servo_disabled,"explicit servo-on with duration selects reference comparison");
- CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"synthetic command memory");MirrorInput in;MirrorBank b;CopiedMirror s;
+ CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"synthetic command memory");MirrorInput in;MirrorBank b;MIRROR_COPY(s);
  reset_fixture(c,&in,&b,&s,8);s.ready=0;s.epoch=0;s.count=0;s.heartbeat=110;bank_apply(&b,&s,110);bank_touch(&b,1,1,111);
  s.heartbeat=120;bank_apply(&b,&s,120);need(b.chooser&&!b.ready&&bank_due(&b,0,120)==0&&bank_due(&b,1,120)<0,"healthy epoch-zero chooser parks unheld and protects observed held without fake root");
  Surface chooser_surface={.source=3,.full={32,0}};memset(observed_lcd,'X',sizeof(observed_lcd));memset(observed_led,127,sizeof(observed_led));
@@ -197,7 +202,7 @@ static void display_pass(Surface *surface,const MirrorBank *bank,CopiedMirror *s
  for(unsigned i=0;i<8;i++)need(channel_output(surface,bank,s,now),"paired display production output");
 }
 static void assignment_checks(void){
- CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"assignment fixture");MirrorInput in;MirrorBank b;CopiedMirror s;Surface surface={.source=3,.full={32,0}};CommandRequest r;
+ CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"assignment fixture");MirrorInput in;MirrorBank b;MIRROR_COPY(s);Surface surface={.source=3,.full={32,0}};CommandRequest r;
  reset_fixture(c,&in,&b,&s,12);s.selection.bits=s.tracks[2].track;s.selected_serial=3;memcpy(s.tracks[2].fields[CF_NAME].text,"Drum 003",8);s.tracks[2].fields[CF_NAME].length=8;bank_apply(&b,&s,101);
  surface_assignment(&surface,&in,&b,&s,40,102);bank_apply(&b,&s,103);
  for(unsigned i=0;i<8;i++)need(channel_output(&surface,&b,&s,s.heartbeat),"Track display output");
@@ -336,7 +341,7 @@ static void raw_input(snd_midi_event_t *codec,const unsigned char bytes[3],snd_s
  }else if(kind==12)input_stop_button(in,s,channel,value,now);else if(kind==7)input_master_touch(in,s,value);else if(kind==10)input_master_pitch(in,s,value,now);else if(kind==8||kind==9)surface_jog(in,s,kind,channel,value,now,raw_data_wheel);else need(0,"unexpected integration MIDI kind");
 }
 static void toggle_midi_checks(void){
- CommandState *commands=calloc(1,sizeof(*commands));need(commands!=NULL,"toggle command fixture");MirrorInput in;MirrorBank bank;CopiedMirror snapshot;
+ CommandState *commands=calloc(1,sizeof(*commands));need(commands!=NULL,"toggle command fixture");MirrorInput in;MirrorBank bank;MIRROR_COPY(snapshot);
  reset_fixture(commands,&in,&bank,&snapshot,8);snapshot.record_mode=(CopiedField){.available=1,.owner_incarnation=100,.incarnation=101};snapshot.click=(CopiedField){.available=1,.owner_incarnation=102,.incarnation=103};
  Surface surface={.source=3,.full={32,0}};snd_midi_event_t *codec=NULL;need(!snd_midi_event_new(16,&codec),"toggle raw codec");
  const unsigned notes[]={95,89,86},ops[]={GLOBAL_RECORD_TOGGLE,GLOBAL_CLICK_TOGGLE,GLOBAL_LOOP_TOGGLE};
@@ -351,7 +356,7 @@ static void toggle_midi_checks(void){
  snd_midi_event_free(codec);free(commands);puts("PASS raw MIDI95/89/86 -> production press dedup -> ordered native toggle intents -> CMD12 request; source snapshot and ALSA hardware substituted");
 }
 static void effects_policy_checks(void){
- CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"Effects policy state");MirrorInput in;MirrorBank b;CopiedMirror s;reset_fixture(c,&in,&b,&s,12);s.selected_serial=1;s.selection.bits=s.tracks[0].track;bank_apply(&b,&s,100);Surface surf={.source=3,.full={32,0}};
+ CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"Effects policy state");MirrorInput in;MirrorBank b;MIRROR_COPY(s);reset_fixture(c,&in,&b,&s,12);s.selected_serial=1;s.selection.bits=s.tracks[0].track;bank_apply(&b,&s,100);Surface surf={.source=3,.full={32,0}};
  surface_assignment(&surf,&in,&b,&s,43,100);bank_apply(&b,&s,100);input_effects_interest(&in,&b,&s,100,1);need(b.assignment==BA_EFFECT&&!b.flip&&atomic_load(&c->effects_interest.enabled)&&atomic_load(&c->effects_interest.slot)==EFFECT_LIST,"Plug-In enters bounded selected-track insert list interest");
  s.effects_available=1;s.effects=(EffectsCopy){.epoch=1,.serial=1,.track_owner=2,.program_owner=3,.generation=7,.slot=EFFECT_LIST,.status=EF_READY,.tick=100};for(unsigned i=0;i<4;i++){s.effects.slots[i]=(EffectSlot){.key=i?0:0x2000,.ap=i?0:0x3000,.generation=7,.count=i?0:17,.presentation_count=i?0:17,.status=i?EF_EMPTY:EF_READY,.enable_valid=!i,.enable_bits=0x3f800000,.enable_revision=2,.enable_tick=100};strcpy(s.effects.slots[i].name,"Delay");}bank_apply(&b,&s,100);
  need(channel_output(&surf,&b,&s,100)&&observed_led[43]&&!observed_led[40]&&!observed_led[42]&&!memcmp(observed_lcd,"1 On   ",7)&&!memcmp(observed_lcd+56,"Delay  ",7),"actual On host state/LCD and exclusive Plug-In assignment from copied inserts");
@@ -367,7 +372,7 @@ static void effects_policy_checks(void){
  puts("PASS actual Effects list/page/input/LCD mode path with copied snapshots and ALSA output substituted; physical MCU and native metadata bodies unobserved");
 }
 static void jog_policy_checks(void){
- CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"jog policy state");MirrorInput in;MirrorBank b;CopiedMirror s;reset_fixture(c,&in,&b,&s,2);
+ CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"jog policy state");MirrorInput in;MirrorBank b;MIRROR_COPY(s);reset_fixture(c,&in,&b,&s,2);
  snd_midi_event_t *codec;need(!snd_midi_event_new(32,&codec),"jog ALSA codec");snd_seq_addr_t address={32,0};
  unsigned char back[3]={0xb0,60,65},forward[3]={0xb0,60,1},shift[3]={0x90,70,127},fine[3]={0xb0,60,7};
  raw_input(codec,back,address,&in,&b,&s,101);raw_input(codec,forward,address,&in,&b,&s,101);raw_input(codec,shift,address,&in,&b,&s,101);raw_input(codec,fine,address,&in,&b,&s,101);
@@ -466,7 +471,7 @@ static void duplicate_evidence(CommandState *c,unsigned request,uint32_t source,
  * settlement is the observer's own three-event record of what it submitted. */
 static void sequence_duplicate_bridge_checks(void){
  CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"duplicate bridge state");
- MirrorInput in;MirrorBank b;CopiedMirror s;snd_seq_addr_t address={32,0};
+ MirrorInput in;MirrorBank b;MIRROR_COPY(s);snd_seq_addr_t address={32,0};
  snd_midi_event_t *codec;need(!snd_midi_event_new(32,&codec),"duplicate raw codec");
  const unsigned char down[3]={0x90,85,127},up[3]={0x80,85,0};
  snd_seq_event_t ev;unsigned kind,channel;int value;
@@ -514,7 +519,7 @@ static void sequence_duplicate_bridge_checks(void){
  puts("PASS X-Touch Replace is Duplicate Sequence: note 85 classification, one queued operation per press edge with no wheel work, the same meaning in both wheel modes and under Shift, reload clearing, publication as one global request naming only the enrolled Editor and Project, settlement on the observer's begin/slot-record/end receipt, and refusal of a receipt that omits the slot record, names one slot twice or carries a non-boolean result (native calls and ALSA hardware substituted)");
 }
 static void data_wheel_checks(void){
- CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"data-wheel policy state");MirrorInput in;MirrorBank b;CopiedMirror s;reset_fixture(c,&in,&b,&s,2);
+ CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"data-wheel policy state");MirrorInput in;MirrorBank b;MIRROR_COPY(s);reset_fixture(c,&in,&b,&s,2);
  snd_midi_event_t *codec;need(!snd_midi_event_new(32,&codec),"data-wheel ALSA codec");snd_seq_addr_t address={32,0};
  Surface surface={.source=3,.full=address};
  unsigned char scrub_down[3]={0x90,101,127},scrub_up[3]={0x80,101,0};
@@ -691,7 +696,7 @@ static void data_wheel_checks(void){
  puts("PASS X-Touch Scrub selects data-wheel mode: note 101 classification, footswitch 1/2 as Play relay and Record toggle, press dedup, Scrub/Zoom LED sense, unchanged scrub and Shift routing, signed accumulation and cancellation, one bounded request per pump with single flight and a banked remainder, dispatch/step/return settlement, oversized-step refusal, cursor cluster in both modes with the centre button publishing the data wheel's push as one JOG_PRESS request per press against the same single flight, reload clearing and reconnect reset (native calls and ALSA hardware substituted)");
 }
 static void stop_type_checks(void){
- CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"Stop/Type state");MirrorInput in;MirrorBank b;CopiedMirror s;reset_fixture(c,&in,&b,&s,2);
+ CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"Stop/Type state");MirrorInput in;MirrorBank b;MIRROR_COPY(s);reset_fixture(c,&in,&b,&s,2);
  snd_midi_event_t *codec;need(!snd_midi_event_new(32,&codec),"Stop raw codec");snd_seq_addr_t addr={32,0};
  const unsigned char down[]={0x90,93,127},up[]={0x80,93,0},play[]={0x90,94,127},play_up[]={0x80,94,0};
  s.position_available=1;s.bar=7;s.position_tick=100;s.playing.bits=1;s.editor_owner=77;
@@ -723,7 +728,7 @@ static void stop_type_checks(void){
  snd_midi_event_free(codec);free(c);puts("PASS direct Play/Stop/Undo/Redo actual MIDI classification and stopped-home/Type consumer policy; native bodies and USB are not simulated acceptance");
 }
 static void stop_relay_checks(void){
- CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"relay fixture state");MirrorInput in;MirrorBank b;CopiedMirror s;reset_fixture(c,&in,&b,&s,2);s.position_available=1;s.bar=7;s.position_tick=100;
+ CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"relay fixture state");MirrorInput in;MirrorBank b;MIRROR_COPY(s);reset_fixture(c,&in,&b,&s,2);s.position_available=1;s.bar=7;s.position_tick=100;
  /* Reproduce both old schedules with the actual old classifier boundary. */
  s.playing.bits=1;input_stop_button(&in,&s,93,1,101);need(!in.stop_home,"old bridge-first schedule stops in place");input_jog_discard(&in);s.playing.bits=0;input_stop_button(&in,&s,93,1,101);need(in.stop_home,"old adapter-first source update makes same press home");input_jog_discard(&in);
  Surface surface={.source=7,.stop_mpc={130,2}};s.playing.bits=1;stop_on_output=&s;unsigned before=output_count;
@@ -736,7 +741,7 @@ static void stop_relay_checks(void){
  input_jog_discard(&in);stop_on_output=NULL;free(c);puts("PASS original race schedules and ordered relay with state update during actual output; native state update/ALSA substituted");
 }
 static void master_policy_checks(void){
- CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"master input fixture");MirrorInput in;MirrorBank bank;CopiedMirror s;reset_fixture(c,&in,&bank,&s,2);
+ CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"master input fixture");MirrorInput in;MirrorBank bank;MIRROR_COPY(s);reset_fixture(c,&in,&bank,&s,2);
  s.master=(CopiedField){.property=0x800a8,.owner_incarnation=100,.incarnation=101,.bits=0x3f000000,.revision=2,.available=1,.seed=1};
  snd_midi_event_t *codec;need(!snd_midi_event_new(16,&codec),"master raw MIDI codec");snd_seq_addr_t full={32,0};unsigned char down[]={0x90,112,127},pitch[]={0xe8,0,96},travel[]={0xe8,0,80},up[]={0x90,112,0};unsigned outputs=output_count;
  raw_input(codec,down,full,&in,&bank,&s,101);raw_input(codec,pitch,full,&in,&bank,&s,102);input_pump(&in,&bank,&s,102);
@@ -752,7 +757,7 @@ static void master_policy_checks(void){
  snd_midi_event_free(codec);free(c);puts("PASS raw master E8/touch112 stale baseline, later held travel and touchless input to typed request, no echo, pending motor suppression, bank independence and reload/disconnect cancellation (source snapshot/ALSA output substituted)");
 }
 static void drum_surface_checks(void){
- CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"pad surface command state");MirrorInput in;MirrorBank b;CopiedMirror s;reset_fixture(c,&in,&b,&s,1);s.selection.bits=s.tracks[0].track;s.selected_serial=s.tracks[0].serial;s.pad_count=128;
+ CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"pad surface command state");MirrorInput in;MirrorBank b;MIRROR_COPY(s);reset_fixture(c,&in,&b,&s,1);s.selection.bits=s.tracks[0].track;s.selected_serial=s.tracks[0].serial;s.pad_count=128;
  for(unsigned i=0;i<128;i++){CopiedTrack *p=s.pads+i;*p=s.tracks[0];p->pad_owner=100+i;p->pad_index=i;p->pad_generation=1;memset(p->fields,0,sizeof(p->fields));for(unsigned f=0;f<PF_COUNT;f++){unsigned field=f==PF_VOLUME?CF_VOLUME:f==PF_PAN?CF_PAN:f==PF_MUTE?CF_MUTE:f==PF_SOLO?CF_SOLO:CF_SOLO_AUDIO;p->fields[field]=(CopiedField){.available=1,.incarnation=p->pad_owner*PF_COUNT+f,.bits=f<PF_MUTE?0x3f000000:0,.revision=2,.seed=1};}}
  Surface surface={0};in.jog_shift=0;surface_assignment(&surface,&in,&b,&s,66,100);bank_apply(&b,&s,101);need(b.view==BV_DRUM_PADS&&b.strips[0].pad_owner==100,"Aux enters distinct selected Drum pad view");
  in.jog_shift=0;surface_assignment(&surface,&in,&b,&s,42,101);bank_apply(&b,&s,102);need(b.view==BV_DRUM_PADS&&b.assignment==BA_PAN,"Pan stays in pad view");surface_assignment(&surface,&in,&b,&s,50,102);bank_apply(&b,&s,103);need(bank_field(&b,0)==CF_PAN&&bank_encoder_field(&b,0)==CF_VOLUME&&b.faders[0].identity.pad_owner==100,"pad Flip preserves Instrument identity and exchanges real parameters");
@@ -782,7 +787,7 @@ static void drum_surface_checks(void){
 }
 /* Channel navigation remains Track-owned even when its pad projection is empty. */
 static void drum_channel_checks(void){
- CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"drum navigation state");MirrorInput in;MirrorBank b;CopiedMirror s;Surface surface={0};CommandRequest r;
+ CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"drum navigation state");MirrorInput in;MirrorBank b;MIRROR_COPY(s);Surface surface={0};CommandRequest r;
  reset_fixture(c,&in,&b,&s,3);s.tracks[1].vptr=0x693147c;s.selection.bits=s.tracks[0].track;s.selected_serial=1;
  s.pad_count=1;s.pads[0]=s.tracks[0];s.pads[0].pad_owner=100;s.pads[0].pad_generation=1;
  surface_assignment(&surface,&in,&b,&s,66,101);bank_apply(&b,&s,102);
@@ -808,7 +813,7 @@ static void fixture_motor_pass(Surface *surface,MirrorBank *bank,CopiedMirror *s
  for(unsigned i=0;i<MIRROR_BANK;i++)if(strip_motor_ready(bank,i,now))need(strip_motor_output(surface,bank,i,now)>=0,"production strip output pass");
 }
 static void binding_sync_checks(void){
- CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"binding sync command fixture");MirrorBank bank;CopiedMirror snapshot;Surface surface={.source=3,.full={32,0}};
+ CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"binding sync command fixture");MirrorBank bank;MIRROR_COPY(snapshot);Surface surface={.source=3,.full={32,0}};
  reset_fixture(c,&input,&bank,&snapshot,0);snapshot.ready=0;snapshot.epoch=0;bank_apply(&bank,&snapshot,100);
  memset(observed_pitch_count,0,sizeof(observed_pitch_count));snapshot.heartbeat=110;fixture_motor_pass(&surface,&bank,&snapshot,110);snapshot.heartbeat=111;fixture_motor_pass(&surface,&bank,&snapshot,111);
  for(unsigned i=0;i<9;i++)need(observed_pitch_count[i]==1&&observed_pitch[i]==0&&following.motors[i].last_sent==0,"chooser establishes actual emitted zero");
@@ -851,7 +856,7 @@ static void binding_sync_checks(void){
  puts("PASS production chooser-to-project/bank final-target sync for eight strips and master; known zero retained, no staircase, touch/pending/quiet/Off precedence; source/process/USB/ALSA substituted");
 }
 static void binding_reversal_checks(void){
- CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"binding reversal command fixture");MirrorBank bank;CopiedMirror snapshot;Surface surface={.source=3,.full={32,0}};
+ CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"binding reversal command fixture");MirrorBank bank;MIRROR_COPY(snapshot);Surface surface={.source=3,.full={32,0}};
  reset_fixture(c,&input,&bank,&snapshot,16);for(unsigned i=0;i<16;i++)snapshot.tracks[i].bits=i<8?0:0x3f800000;
  memset(observed_pitch_count,0,sizeof(observed_pitch_count));snapshot.heartbeat=110;fixture_motor_pass(&surface,&bank,&snapshot,110);
  for(unsigned turn=1;turn<=6;turn++){
@@ -867,7 +872,7 @@ static void binding_reversal_checks(void){
  puts("PASS production bank reversal protection: repeated opposite fresh bindings retain and extend physical hold, then synchronize latest target; source/process/USB/ALSA substituted");
 }
 static void input_page_checks(void){
- CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"Input I/O fixture");MirrorInput in;MirrorBank bank;CopiedMirror snapshot;Surface surface={.source=3,.full={32,0}};
+ CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"Input I/O fixture");MirrorInput in;MirrorBank bank;MIRROR_COPY(snapshot);Surface surface={.source=3,.full={32,0}};
  reset_fixture(c,&in,&bank,&snapshot,8);surface_assignment(&surface,&in,&bank,&snapshot,41,101);bank_apply(&bank,&snapshot,102);
  in.desires[0][CF_VOLUME].pending=1;surface_assignment(&surface,&in,&bank,&snapshot,63,103);
  need(bank.assignment==BA_IO&&bank.view==BV_TRACK&&!bank.flip&&!in.desires[0][CF_VOLUME].pending&&!atomic_load(&c->published),"Input enters dedicated I/O page and cancels prior unsent Send intent");
@@ -889,7 +894,7 @@ static void input_page_checks(void){
  puts("PASS Input I/O entry, unavailable fields and no guessed push/Flip routing, with normal track faders and Aux Drum toggle (copied source/ALSA substituted)");
 }
 static void qlink_mode_routing_checks(void){
- CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"mode routing command fixture");MirrorBank bank;CopiedMirror snapshot;Surface surface={.source=3,.full={32,0}};
+ CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"mode routing command fixture");MirrorBank bank;MIRROR_COPY(snapshot);Surface surface={.source=3,.full={32,0}};
  reset_fixture(c,&input,&bank,&snapshot,16);surface_assignment(&surface,&input,&bank,&snapshot,44,101);
  snapshot.qlinks_available=1;snapshot.qlinks=(QLinkCopy){.root=0x71000,.mode_valid=1,.mode_controller=0x72000,.mode_generation=3,.mode_id=8,.mode_count=14,.mode_revision=2,.mode_tick=110};snapshot.heartbeat=110;bank_apply(&bank,&snapshot,110);
  need(bank.assignment==BA_QLINK&&!bank.flip&&!bank.qlink_page,"actual EQ enters first Q-Link bank");
@@ -912,7 +917,7 @@ static void qlink_mode_routing_checks(void){
 }
 static void following_reenable_checks(void){
  char directory[]="/tmp/mpclearn-resync.XXXXXX",path[256];need(mkdtemp(directory)!=NULL,"re-enable preference directory");snprintf(path,sizeof(path),"%s/surface-preferences",directory);
- CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"re-enable command fixture");MirrorBank bank;CopiedMirror snapshot;Surface surface={.source=3,.full={32,0}};
+ CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"re-enable command fixture");MirrorBank bank;MIRROR_COPY(snapshot);Surface surface={.source=3,.full={32,0}};
  reset_fixture(c,&input,&bank,&snapshot,8);snapshot.master=(CopiedField){.available=1,.bits=0x3f000000,.owner_incarnation=700,.incarnation=701,.revision=2};
  memset(observed_pitch_count,0,sizeof(observed_pitch_count));snapshot.heartbeat=110;fixture_motor_pass(&surface,&bank,&snapshot,110);
  for(unsigned i=0;i<9;i++)need(observed_pitch_count[i]==1&&observed_pitch[i]==8192,"all channels establish initial authoritative output through production gates");
@@ -956,7 +961,7 @@ static void milestone_checks(void){
  following.enabled=0;unsigned before=output_count;for(unsigned i=0;i<9;i++)need(motor_output(&surface,i,key,0,5000,1),"off handles all nine targets");need(output_count==before,"off suppresses every motor including master parking");
  char directory[]="/tmp/mpclearn-surface.XXXXXX",path[256];need(mkdtemp(directory)!=NULL,"private preference fixture directory");snprintf(path,sizeof(path),"%s/surface-preferences",directory);unsigned enabled;
  need(surface_preferences_read(path,&enabled)&&enabled,"missing preference defaults on");need(surface_preferences_write(path,0)&&surface_preferences_read(path,&enabled)&&!enabled,"real atomic preference stores off");
- CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"milestone command fixture");MirrorInput in;MirrorBank bank;CopiedMirror snapshot;reset_fixture(c,&in,&bank,&snapshot,2);
+ CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"milestone command fixture");MirrorInput in;MirrorBank bank;MIRROR_COPY(snapshot);reset_fixture(c,&in,&bank,&snapshot,2);
  following.enabled=0;preferences_path=path;in.jog_shift=1;unsigned assignment=bank.assignment,flip=bank.flip;
  surface_assignment(&surface,&in,&bank,&snapshot,50,5100);need(following.enabled&&surface_preferences_read(path,&enabled)&&enabled&&bank.assignment==assignment&&bank.flip==flip&&!atomic_load(&c->published),"Shift Flip persists motor intent without musical assignment or command changes");
  int fd=open(path,O_WRONLY|O_TRUNC);need(fd>=0&&write(fd,"broken",6)==6&&!close(fd),"malformed preference fixture");surface_assignment(&surface,&in,&bank,&snapshot,50,5200);need(following.enabled&&preference_notice_error&&!surface_preferences_read(path,&enabled),"malformed preference refuses toggle and never enables silently");
@@ -992,10 +997,97 @@ static void native_text_wire_checks(void){
  }
  puts("PASS native-observed Q-Link/Effects text formatter and LCD bytes: decimals/signs, tiny values, infinity, enums, output destinations/properties and empty Q16 (native strings supplied; no physical device)");
 }
+static uint32_t float_bits(float v){uint32_t b;memcpy(&b,&v,4);return b;}
+/* Outbound cost policy. Three separate claims, each pinned in both
+ * directions: a meter level that is already zero is not re-sent while every
+ * nonzero level still is; a bank strip resolves its track through the row
+ * bank_apply recorded, and revalidates it; and the playhead is formatted and
+ * compared only when one of the four words channel_position reads changed. */
+static void outbound_update_checks(void){
+ CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"synthetic command memory");MirrorInput in;MirrorBank b;MIRROR_COPY(s);
+ reset_fixture(c,&in,&b,&s,8);
+ Surface surf={.source=3,.full={32,0}};
+ for(unsigned i=0;i<8;i++)s.tracks[i].meter=(CopiedMeter){.incarnation=i+1,.available=1,.tick=100,.revision=2,.enabled=1};
+ bank_apply(&b,&s,100);
+ memset(observed_press_count,0,sizeof(observed_press_count));
+ need(meter_output(&surf,&b,&s),"first meter output arms every enabled strip");
+ for(unsigned i=0;i<8;i++)need(observed_press_count[i]==2&&!observed_press_level[i],"enabling a strip clears its overload and publishes its first level");
+ s.heartbeat=200;memset(observed_press_count,0,sizeof(observed_press_count));
+ need(meter_output(&surf,&b,&s),"silent cadence still runs");
+ for(unsigned i=0;i<8;i++)need(!observed_press_count[i],"a level that is already zero is not re-sent: silence costs no USB traffic");
+ s.tracks[0].meter.left=float_bits(0.5f);s.heartbeat=300;memset(observed_press_count,0,sizeof(observed_press_count));
+ need(meter_output(&surf,&b,&s),"first audible cadence");
+ need(observed_press_count[0]==1&&observed_press_level[0]==8,"a level that rose off zero is published");
+ for(unsigned i=1;i<8;i++)need(!observed_press_count[i],"the other silent strips stay suppressed while one plays");
+ s.heartbeat=400;memset(observed_press_count,0,sizeof(observed_press_count));
+ need(meter_output(&surf,&b,&s),"sustained cadence");
+ need(observed_press_count[0]==1&&observed_press_level[0]==8,"an unchanged NONZERO level is still refreshed every cadence, because the hardware decays it on its own");
+ s.heartbeat=430;memset(observed_press_count,0,sizeof(observed_press_count));
+ need(meter_output(&surf,&b,&s)&&!observed_press_count[0],"a tick inside the 50ms cadence sends nothing");
+ s.tracks[0].meter.left=0;s.heartbeat=500;memset(observed_press_count,0,sizeof(observed_press_count));
+ need(meter_output(&surf,&b,&s),"fall to silence");
+ need(observed_press_count[0]==1&&!observed_press_level[0],"the fall to zero is published once so the bar drops");
+ s.heartbeat=600;memset(observed_press_count,0,sizeof(observed_press_count));
+ need(meter_output(&surf,&b,&s)&&!observed_press_count[0],"and the bar is then left down rather than re-zeroed every cadence");
+ s.tracks[0].meter.incarnation=99;s.heartbeat=700;memset(observed_press_count,0,sizeof(observed_press_count));
+ need(meter_output(&surf,&b,&s),"meter identity change");
+ need(observed_press_count[0]==2&&!observed_press_level[0],"a new meter identity leaves the hardware level unknown and republishes it");
+ s.tracks[0].meter.available=0;s.heartbeat=800;memset(observed_press_count,0,sizeof(observed_press_count));
+ need(meter_output(&surf,&b,&s),"meter source lost");
+ need(observed_press_count[0]==2&&!observed_press_level[0],"a lost meter source disables the strip and clears its bar");
+
+ reset_fixture(c,&in,&b,&s,12);
+ for(unsigned i=0;i<8;i++){
+  need(b.strip_row[i]==(int)i,"an ordinary track bank records the snapshot row each strip was bound from");
+  need(bank_strip_track(&s,&b,i)==input_track(&s,b.strips+i),"the recorded row resolves the same track the scan resolves");
+ }
+ b.offset=8;bank_apply(&b,&s,110);
+ for(unsigned i=0;i<4;i++)need(b.strip_row[i]==(int)(8+i)&&bank_strip_track(&s,&b,i)==input_track(&s,b.strips+i),"a paged bank records its own rows");
+ for(unsigned i=4;i<8;i++)need(b.strip_row[i]<0&&!bank_strip_track(&s,&b,i)&&!input_track(&s,b.strips+i),"a strip past the inventory has no row and resolves to nothing");
+ reset_fixture(c,&in,&b,&s,12);
+ CopiedTrack moved=s.tracks[0];s.tracks[0]=s.tracks[5];s.tracks[5]=moved;
+ for(unsigned i=0;i<8;i++)need(bank_strip_track(&s,&b,i)==input_track(&s,b.strips+i),"rows that moved under an unapplied bank still resolve by identity");
+ need(bank_strip_track(&s,&b,0)==s.tracks+5&&bank_strip_track(&s,&b,5)==s.tracks+0,"a stale row is rejected and the swapped identities resolve to their new rows");
+ reset_fixture(c,&in,&b,&s,12);
+ s.tracks[10].vptr=s.tracks[11].vptr=0x6931f70;
+ for(unsigned i=0;i<2;i++){s.send_programs[i]=s.tracks[10+i].program;s.send_owners[i]=s.tracks[10+i].program_owner;}
+ b.assignment=BA_SEND;bank_apply(&b,&s,120);
+ for(unsigned i=0;i<2;i++)need(b.strip_row[i]==(int)(10+i)&&bank_strip_track(&s,&b,i)==input_track(&s,b.strips+i),"a Send bank records the return rows it resolved");
+ for(unsigned i=2;i<8;i++)need(b.strip_row[i]<0&&!bank_strip_track(&s,&b,i),"an absent send destination never borrows an ordinary strip row");
+ reset_fixture(c,&in,&b,&s,12);
+ s.pad_count=8;
+ for(unsigned i=0;i<8;i++){s.pads[i]=s.tracks[0];s.pads[i].pad_owner=100+i;s.pads[i].pad_index=i;s.pads[i].pad_generation=1;}
+ bank_view(&b,BV_DRUM_PADS,130);bank_apply(&b,&s,130);
+ for(unsigned i=0;i<8;i++){
+  need(b.strip_row[i]<0,"a pad bank records no track row, because a pad identity already resolves by index");
+  need(bank_strip_track(&s,&b,i)==input_track(&s,b.strips+i)&&bank_strip_track(&s,&b,i)==s.pads+i,"pad strips resolve through the same helper");
+ }
+
+ reset_fixture(c,&in,&b,&s,8);
+ Surface play={.source=3,.full={32,0}};
+ s.position_available=1;s.bar=0;s.beat=0;s.clock=0;
+ observed_position_count=0;need(channel_output(&play,&b,&s,100),"first channel output");
+ need(observed_position_count==10,"the first playhead publication sends all ten display controllers");
+ observed_position_count=0;need(channel_output(&play,&b,&s,100),"repeated channel output");
+ need(!observed_position_count,"an unchanged playhead sends nothing");
+ need(play.position_valid&&play.position_source==1&&!play.position_bar&&!play.position_beat&&!play.position_clock,"the gate records exactly the four source words channel_position reads");
+ s.clock=10;observed_position_count=0;need(channel_output(&play,&b,&s,101),"clock advance");
+ need(observed_position_count&&play.position_clock==10,"a changed pulse still reaches the display");
+ s.beat=1;observed_position_count=0;need(channel_output(&play,&b,&s,102),"beat advance");
+ need(observed_position_count&&play.position_beat==1,"a changed beat still reaches the display");
+ s.bar=1;observed_position_count=0;need(channel_output(&play,&b,&s,103),"bar advance");
+ need(observed_position_count&&play.position_bar==1,"a changed bar still reaches the display");
+ s.position_available=0;observed_position_count=0;need(channel_output(&play,&b,&s,104),"position lost");
+ need(observed_position_count&&!play.position_source&&!observed_led[114],"a lost position blanks the display and its beats LED");
+ observed_position_count=0;need(channel_output(&play,&b,&s,105),"position still lost");
+ need(!observed_position_count,"an unchanged unavailable playhead is not reformatted or resent");
+ free(c);
+ puts("PASS outbound update policy: repeated zero meter levels suppressed while sustained nonzero levels keep refreshing, enable/identity/source changes re-arm the bar, bank strips resolve through a revalidated recorded row in track/paged/Send/pad banks, and the playhead is formatted only when its bar, beat, pulse or availability changed (ALSA hardware and source values substituted)");
+}
 int main(int argc,char **argv){
- if(argc==2&&!strcmp(argv[1],"--policy")){alarm(20);native_text_wire_checks();binding_sync_checks();binding_reversal_checks();qlink_mode_routing_checks();input_page_checks();following_reenable_checks();milestone_checks();drum_channel_checks();drum_surface_checks();policy_checks();toggle_midi_checks();assignment_checks();effects_policy_checks();jog_policy_checks();data_wheel_checks();sequence_duplicate_bridge_checks();stop_type_checks();stop_relay_checks();master_policy_checks();return 0;}
+ if(argc==2&&!strcmp(argv[1],"--policy")){alarm(20);outbound_update_checks();native_text_wire_checks();binding_sync_checks();binding_reversal_checks();qlink_mode_routing_checks();input_page_checks();following_reenable_checks();milestone_checks();drum_channel_checks();drum_surface_checks();policy_checks();toggle_midi_checks();assignment_checks();effects_policy_checks();jog_policy_checks();data_wheel_checks();sequence_duplicate_bridge_checks();stop_type_checks();stop_relay_checks();master_policy_checks();return 0;}
  if(argc!=3)return 2;
- alarm(20);native_text_wire_checks();binding_sync_checks();binding_reversal_checks();qlink_mode_routing_checks();input_page_checks();following_reenable_checks();milestone_checks();drum_channel_checks();drum_surface_checks();policy_checks();toggle_midi_checks();assignment_checks();effects_policy_checks();jog_policy_checks();data_wheel_checks();sequence_duplicate_bridge_checks();stop_type_checks();stop_relay_checks();master_policy_checks();
+ alarm(20);outbound_update_checks();native_text_wire_checks();binding_sync_checks();binding_reversal_checks();qlink_mode_routing_checks();input_page_checks();following_reenable_checks();milestone_checks();drum_channel_checks();drum_surface_checks();policy_checks();toggle_midi_checks();assignment_checks();effects_policy_checks();jog_policy_checks();data_wheel_checks();sequence_duplicate_bridge_checks();stop_type_checks();stop_relay_checks();master_policy_checks();
  char *defaults[]={"mirror-input","/volume","/command"};need(servo_arguments(3,defaults)==3&&servo_disabled,"separate-process composition uses default no-echo policy");
  int fd=open(argv[1],O_RDONLY|O_CLOEXEC);struct stat st;need(fd>=0&&!fstat(fd,&st)&&st.st_size==sizeof(MirrorState),"actual producer mirror file");
  const MirrorState *state=mmap(NULL,sizeof(*state),PROT_READ,MAP_SHARED,fd,0);need(state!=MAP_FAILED,"actual read-only mirror mapping");
@@ -1003,7 +1095,7 @@ int main(int argc,char **argv){
  if(!opened){fprintf(stderr,"OPEN failed errno=%d fd=%d mapped=%d start=%llu mirror_pid=%u uid=%u file_uid=%u bytes=%lld\n",errno,input_fd,input_mapping!=MAP_FAILED,(unsigned long long)start,state->pid,geteuid(),input_file.st_uid,(long long)input_file.st_size);if(input_mapping!=MAP_FAILED)fprintf(stderr,"CMD magic=%x version=%u bytes=%u cap=%u seconds=%u owner=%u pid=%u start=%u:%u origin=%u:%u expected_origin=%u:%u error=%u input_error=%u\n",input_mapping->magic,input_mapping->version,input_mapping->bytes,input_mapping->capacity,input_mapping->seconds,input_mapping->owner_token,input_mapping->pid,input_mapping->start_hi,input_mapping->start_lo,input_mapping->origin_sec,input_mapping->origin_nsec,state->origin_sec,state->origin_nsec,atomic_load(&input_mapping->error),input.error);}
  need(opened,"production CMD12 identity/map/cooperating writer lock");
  int competing=open(argv[2],O_RDWR|O_CLOEXEC);need(competing>=0&&flock(competing,LOCK_EX|LOCK_NB)<0,"second cooperating writer excluded");close(competing);
- MirrorBank bank;bank_init(&bank);CopiedMirror s;uint32_t now;need(fresh_copy(state,&s,&now)==1&&s.ready,"fresh actual producer snapshot");bank_apply(&bank,&s,now);
+ MirrorBank bank;bank_init(&bank);MIRROR_COPY(s);uint32_t now;need(fresh_copy(state,&s,&now)==1&&s.ready,"fresh actual producer snapshot");bank_apply(&bank,&s,now);
  snd_midi_event_t *codec;need(!snd_midi_event_new(16,&codec),"ALSA MIDI codec");snd_seq_addr_t address={32,0};
  for(unsigned strip=0;strip<8;strip++){
   unsigned char bytes[3]={(unsigned char)(0xe0+strip),127,127};snd_seq_event_t e;need(snd_midi_event_encode(codec,bytes,3,&e)==3,"eight raw pitch-bend channels");e.source=address;unsigned kind,channel;int value;

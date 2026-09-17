@@ -12,6 +12,20 @@ enum {CF_VOLUME,CF_PAN,CF_MUTE,CF_SOLO,CF_ARM,CF_NAME,CF_COLOR,CF_SELECTION,CF_E
 enum {CI_MIDI_MONITOR=CF_COUNT,CI_MIDI_MONITOR_AUDIO,CI_MIDI_IN_PORT,CI_MIDI_IN_CHANNEL,CI_MIDI_OUT_PORT,CI_MIDI_OUT_CHANNEL,CI_SEND_TO,CI_SEND_TO_AUDIO,CI_AUDIO_OUT,CI_AUDIO_OUT_AUDIO,CI_AUDIO_MONITOR,CI_AUDIO_IN,CI_AUDIO_IN_AUDIO,CHANNEL_FIELD_KINDS};
 enum {CO_PROGRAM=1,CO_TRACK,CO_PROJECT,CO_MIXER,CO_TIMELINE,CO_AUTOMATION,CO_LOOP,CO_RECORDING,CO_CLICK,CO_EDITOR,CO_ZOOM};
 enum {CH_OK,CH_CAPACITY,CH_OWNER,CH_LIFETIME,CH_TEXT,CH_WRAP};
+/* CH_CAPACITY records that some birth could not be satisfied. It describes the
+ * cells that are absent, never the cells that did register with their own
+ * identity, so it does not invalidate a resolving cell. It is therefore never
+ * cleared: an exhaustion stays readable in channel.errors for the rest of the
+ * session instead of being wiped by the next successful birth of that tag.
+ * CH_OWNER/CH_LIFETIME/CH_TEXT/CH_WRAP are correctness faults and still are. */
+static inline int channel_fault(unsigned why){return why&&why!=CH_CAPACITY;}
+/* An owner incarnation is the lifetime token and carries its own slot in the
+ * low bits, so an owner slot can be reused without handing a new lifetime the
+ * old lifetime's token, while every consumer still resolves the slot from the
+ * token alone. CHANNEL_OWNERS is 2048, so 12 bits hold every slot id. */
+#define CHANNEL_OWNER_SLOT_BITS 12u
+#define CHANNEL_OWNER_GENERATION_MAX ((1u<<(32-CHANNEL_OWNER_SLOT_BITS))-1u)
+static inline unsigned channel_owner_slot(unsigned token){unsigned n=token&((1u<<CHANNEL_OWNER_SLOT_BITS)-1u);return n&&n<=CHANNEL_OWNERS?n:0;}
 enum {CH_PROGRAM_BIRTH=47,CH_PROGRAM_COPY,CH_PROGRAM_DEATH,CH_TRACK_BIRTH,
  CH_PAN_BIRTH,CH_PAN_COPY,CH_NAME_BIRTH,CH_COLOR_BIRTH,CH_ARM_BIRTH,
  CH_SELECTION_BIRTH,CH_SELECTION_COMMIT,CH_PROJECT_BIRTH,

@@ -41,13 +41,13 @@ mkdir -p inputs
 git clone https://github.com/TheKikGen/MPC-LiveXplore.git ../MPC-LiveXplore
 sh firmware/prepare-upstream.sh ../MPC-LiveXplore
 docker build -t mpclearn-build:local .
-# Download mpc3-ce-mcu-81f3086.tar.gz from this repository's release.
+# Download mpc3-ce-mcu-1ffe005.tar.gz from this repository's release.
 # Verify it against the release SHA256SUMS before extracting.
-mkdir -p artifacts/mcu-81f3086-v0_2_0
-tar -xzf mpc3-ce-mcu-81f3086.tar.gz --strip-components=1 -C artifacts/mcu-81f3086-v0_2_0
+mkdir -p artifacts/mcu-1ffe005-v0_2_2
+tar -xzf mpc3-ce-mcu-1ffe005.tar.gz --strip-components=1 -C artifacts/mcu-1ffe005-v0_2_2
 docker run --rm --network none \
   -v "$PWD:/work" -v "$PWD/inputs:/inputs:ro" \
-  -v "$PWD/artifacts/mcu-81f3086-v0_2_0:/payload:ro" \
+  -v "$PWD/artifacts/mcu-1ffe005-v0_2_2:/payload:ro" \
   mpclearn-build:local sh firmware/build.sh
 ```
 
@@ -55,7 +55,7 @@ docker run --rm --network none \
 It intentionally refuses an arbitrary unqualified runtime. Rebuild that runtime
 with the existing controller build guide and `mirror-input-build.sh`, using the
 exact MPC executable extracted from your own official image and stage
-`/data/mpclearn-model.v0_2_0`, lifetime `manual`.
+`/data/mpclearn-model.v0_2_2`, lifetime `manual`.
 
 The image builder reuses TheKikGen's pinned image tool at
 `9be3e63bf03d3467cf06478b48671894dcc634f4`, then independently decodes the output.
@@ -91,7 +91,7 @@ makes this one-time: later boots do not copy or hash the payload, and removing
 the boot selector to disable MCU remains effective.
 
 An identical existing package is retained, including its session files.
-Known prior images upgrade into the separate v0.2.0 stage, preserving the
+Known prior images upgrade into the separate v0.2.2 stage, preserving the
 old stages, and replace their boot helpers with this release's versions.
 A disabled installation stays disabled. Unknown revisions and custom stage
 selections require explicit migration. Conflicting package/helper bytes cause installation to stop; stock firmware
@@ -108,7 +108,7 @@ prevent raw MCU messages from playing instrument notes or bending pitch. Leave
 other MIDI ports configured as usual. The image preserves user settings.
 Global MIDI Learn and the optional Mini/Launch Control mappings remain a
 separate feature; the MCU image does not install a learned profile.
-See [release notes](../docs/releases/v0.2.0.md) for qualification.
+See [release notes](../docs/releases/v0.2.2.md) for qualification.
 
 ## Hardware qualification
 
@@ -128,7 +128,8 @@ filesystem, and the owner then flashed the r4 image over r3 on the Live II:
 it booted, selected the r4 stage, replaced the boot helpers, connected the
 controller and played the heavy project cleanly.
 
-The v0.2.0 runtime adds USB mouse support and the X-Touch jog/cursor/footswitch
+The v0.2.2 runtime fixes the automation-Write controller freeze and the dashed
+track names, on top of the v0.2.0 USB mouse support and X-Touch jog/cursor/footswitch
 control set on top of that heavy-project runtime. The owner ran it on the Live
 II (build owner-confirmed 2026-09-16): a cursor with no manual step at boot and
 after hot-plug, pointer clicks and drag-select, the mouse and jog wheel driving
@@ -136,6 +137,6 @@ the focused control's data wheel at slow and fast speeds, the cursor cluster's
 data steps and Tab/Shift+Tab focus navigation, and the footswitches as Play and
 Record. The centre-button Enter and one-press Duplicate Sequence are built and
 exercised by the regressions but disabled in the shipped bridge pending an
-asynchronous redesign. The v0.2.0 image itself, its stage and its upgrade have
+asynchronous redesign. The v0.2.2 image itself, its stage and its upgrade have
 not been flashed or booted on hardware; the provisioner and image checks here
 are filesystem-level only.

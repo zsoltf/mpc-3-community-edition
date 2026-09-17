@@ -1,6 +1,42 @@
 /* Called only within the command mode's complete source-flight envelope.
  * Native values are copied at constructor/commit seams, never polled later. */
-void channel_initialize(void){atomic_store_explicit(&mirror_state->channel.owner_token,token(),memory_order_release);}
+/* Observer-local reclamation bookkeeping. ChannelState keeps its exact layout:
+ * the observer is the only allocator and both producers memset the whole mirror
+ * at start, so this shadow index describes the shared table for the whole run.
+ * channel_entry[n] is the field_directory index+1 that currently reaches cell n
+ * (0 = none); a stale bit marks a directory word that still points at a cell it
+ * no longer describes. A stale word is left occupied so no probe chain through
+ * it breaks; the next insertion whose own chain reaches it recycles it.
+ * SCOPE. This reclaims the two channel tables only. The mirror's own volume
+ * cells (MIRROR_CELLS 2048, mirror-capture.c) are still bump-allocated and
+ * exhaustion there calls mirror_stop(MV_CAPACITY), a terminal stop of the whole
+ * mirror rather than a per-field dash; METER_CELLS and PAD_OWNERS are in the
+ * same position. From the device probe (volume 120/2048, meter 74/2048 at a
+ * state consistent with ~13 project loads) the volume table is the next hard
+ * wall at roughly 200 loads. Raising or reclaiming there is follow-up work, not
+ * part of this change, but it is the ceiling once the channel tables stop
+ * being one. */
+/* Component-only deterministic seam on the publication order above. */
+#ifndef CHANNEL_OWNER_PUBLISH
+#define CHANNEL_OWNER_PUBLISH(o,a,k,i) ((void)(o),(void)(a),(void)(k),(void)(i))
+#endif
+#define CHANNEL_RECLAIM_BUDGET 256u
+#define CHANNEL_RECLAIM_TRIES 4u
+static uint16_t channel_entry[CHANNEL_FIELDS],channel_owner_entry[CHANNEL_OWNERS];
+static uint32_t channel_entry_stale[CHANNEL_HASH/32],channel_owner_entry_stale[CHANNEL_HASH/32];
+static unsigned channel_cursor,channel_reclaims,channel_refusals;
+static unsigned channel_owner_cursor,channel_owner_reclaims,channel_owner_refusals,channel_owner_generation;
+static int channel_slot_stale(unsigned at){return (channel_entry_stale[at>>5]>>(at&31))&1;}
+static void channel_slot_mark(unsigned at,int on){if(on)channel_entry_stale[at>>5]|=1u<<(at&31);else channel_entry_stale[at>>5]&=~(1u<<(at&31));}
+static int channel_owner_slot_stale(unsigned at){return (channel_owner_entry_stale[at>>5]>>(at&31))&1;}
+static void channel_owner_slot_mark(unsigned at,int on){if(on)channel_owner_entry_stale[at>>5]|=1u<<(at&31);else channel_owner_entry_stale[at>>5]&=~(1u<<(at&31));}
+void channel_initialize(void){
+ memset(channel_entry,0,sizeof(channel_entry));memset(channel_entry_stale,0,sizeof(channel_entry_stale));
+ memset(channel_owner_entry,0,sizeof(channel_owner_entry));memset(channel_owner_entry_stale,0,sizeof(channel_owner_entry_stale));
+ channel_cursor=0;channel_reclaims=0;channel_refusals=0;
+ channel_owner_cursor=0;channel_owner_reclaims=0;channel_owner_refusals=0;channel_owner_generation=0;
+ atomic_store_explicit(&mirror_state->channel.owner_token,token(),memory_order_release);
+}
 static void channel_error(unsigned field,unsigned why){if(field<CHANNEL_FIELD_KINDS)atomic_store_explicit(&mirror_state->channel.errors[field],why,memory_order_release);}
 static void channel_owner_error(unsigned kind,unsigned why){
  for(unsigned f=CI_MIDI_MONITOR;f<CHANNEL_FIELD_KINDS;f++)if(channel_kind(f)==kind)channel_error(f,why);
@@ -22,20 +58,75 @@ static int channel_on_owner(unsigned kind){
  if(token()==atomic_load_explicit(&mirror_state->channel.owner_token,memory_order_acquire))return 1;
  channel_owner_error(kind,CH_OWNER);return 0;
 }
+/* An owner slot is spendable only when its lifetime is gone. Every app-global
+ * owner (PROJECT, MIXER, TIMELINE, AUTOMATION, LOOP, RECORDING, CLICK, EDITOR,
+ * ZOOM) stays live for the whole session, so none of them can ever be a victim
+ * and none has to be listed anywhere. */
+static int channel_owner_spendable(const ChannelOwner *o){return !atomic_load_explicit(&o->live,memory_order_acquire);}
+static unsigned channel_owner_victim(const ChannelState *s){
+ for(unsigned step=0;step<CHANNEL_RECLAIM_BUDGET;step++){
+  unsigned n=channel_owner_cursor;channel_owner_cursor=n+1<CHANNEL_OWNERS?n+1:0;
+  if(channel_owner_spendable(s->owners+n))return n+1;
+ }
+ return 0;
+}
 static void channel_owner_birth(uint32_t address,unsigned kind){
  if(!pointer(address)||!channel_on_owner(kind))return;
  ChannelState *s=&mirror_state->channel;ChannelOwner *old=channel_owner(address);
- unsigned n=atomic_load_explicit(&s->owners_used,memory_order_relaxed),h=channel_hash(address),slot=CHANNEL_HASH;
- if(n==CHANNEL_OWNERS){channel_owner_error(kind,CH_CAPACITY);return;}
- for(unsigned i=0;i<MIRROR_PROBES;i++){unsigned at=(h+i)&(CHANNEL_HASH-1),id=atomic_load_explicit(s->owner_directory+at,memory_order_relaxed);if(!id||(old&&id==atomic_load(&old->incarnation))){slot=at;break;}}
- if(slot==CHANNEL_HASH){channel_owner_error(kind,CH_CAPACITY);return;}
+ unsigned n=atomic_load_explicit(&s->owners_used,memory_order_relaxed),h=channel_hash(address),slot=CHANNEL_HASH,reuse=0;
+ unsigned full=n==CHANNEL_OWNERS,keep=old?(unsigned)(old-s->owners)+1:0;
+ if(full&&channel_owner_generation>=CHANNEL_OWNER_GENERATION_MAX){channel_owner_refusals++;channel_owner_error(kind,CH_CAPACITY);return;}
+ /* One probe of this address's own chain settles both questions, exactly as the
+  * field allocator does: a word that already names a retired owner yields the
+  * slot and its own directory word together, so no occupancy is added. A rebirth
+  * at the same address takes back its own slot and its own word. */
+ for(unsigned i=0;i<MIRROR_PROBES;i++){
+  unsigned at=(h+i)&(CHANNEL_HASH-1),id=atomic_load_explicit(s->owner_directory+at,memory_order_relaxed);
+  if(!id){slot=at;break;}
+  if(full&&id<=CHANNEL_OWNERS&&channel_owner_spendable(s->owners+id-1)){slot=at;reuse=id;break;}
+  if(keep&&id==keep){slot=at;if(full)reuse=keep;break;}
+  if(channel_owner_slot_stale(at)){slot=at;break;}
+ }
+ if(slot==CHANNEL_HASH){if(full)channel_owner_refusals++;channel_owner_error(kind,CH_CAPACITY);return;}
+ if(full&&!reuse&&!(reuse=channel_owner_victim(s))){channel_owner_refusals++;channel_owner_error(kind,CH_CAPACITY);return;}
  /* A new native constructor is an explicit new lifetime, including reuse after
   * a failed construction. Old copied cells keep their old owner incarnation. */
  if(old)atomic_store_explicit(&old->live,0,memory_order_release);
- ChannelOwner *o=s->owners+n;atomic_store(&o->address,address);atomic_store(&o->kind,kind);atomic_store(&o->incarnation,n+1);atomic_store(&o->live,1);
- atomic_store_explicit(&s->owners_used,n+1,memory_order_release);atomic_store_explicit(s->owner_directory+slot,n+1,memory_order_release);
+ unsigned index=reuse?reuse-1:n;
+ if(reuse){
+  unsigned entry=channel_owner_entry[index];
+  if(entry&&entry-1!=slot)channel_owner_slot_mark(entry-1,1);
+  channel_owner_entry[index]=0;
+ }
+ /* The token carries its own slot, so a reused slot never hands the new lifetime
+  * the retired lifetime's token: every stale id, cached owner word, cell
+  * owner_incarnation and in-flight request that still quotes the old token is
+  * refused on the incarnation test and never resolves to the new lifetime. */
+ unsigned incarnation=(index+1)|(++channel_owner_generation<<CHANNEL_OWNER_SLOT_BITS);
+ ChannelOwner *o=s->owners+index;
+ atomic_store_explicit(&o->live,0,memory_order_release);
+ /* STORE ORDER IS LOAD-BEARING. ChannelOwner has no revision word, so the only
+  * thing that stops a reader from pairing a new token with a retired lifetime's
+  * address or kind is that incarnation is published LAST, in one seq_cst total
+  * order. copy_channel reads live, then kind, then incarnation, and only then
+  * address: having matched the token it must already have seen the address and
+  * kind that belong to it. Moving the incarnation store ahead of either of the
+  * other two reintroduces exactly that torn pair. Do not reorder these three. */
+ atomic_store(&o->address,address);atomic_store(&o->kind,kind);
+ CHANNEL_OWNER_PUBLISH(o,address,kind,incarnation); /* must stay here: address and kind already stored, incarnation not yet */
+ atomic_store(&o->incarnation,incarnation);
+ atomic_store_explicit(&o->live,1,memory_order_release);
+ if(reuse)channel_owner_reclaims++;else atomic_store_explicit(&s->owners_used,n+1,memory_order_release);
+ unsigned prev=atomic_load_explicit(s->owner_directory+slot,memory_order_relaxed);
+ if(prev&&prev<=CHANNEL_OWNERS&&channel_owner_entry[prev-1]==slot+1)channel_owner_entry[prev-1]=0;
+ channel_owner_entry[index]=(uint16_t)(slot+1);channel_owner_slot_mark(slot,0);
+ atomic_store_explicit(s->owner_directory+slot,index+1,memory_order_release);
 }
 static void channel_owner_death(uint32_t address){ChannelOwner *o=channel_owner(address);if(o)atomic_store_explicit(&o->live,0,memory_order_release);}
+static void channel_payload(ChannelCell *c,unsigned field,uint32_t bits,const char *text,unsigned length){
+ atomic_store_explicit(&c->bits,bits,memory_order_relaxed);
+ if(field==CF_NAME||field==CI_AUDIO_OUT||field==CI_AUDIO_OUT_AUDIO){for(unsigned i=0;i<CHANNEL_TEXT/4;i++){uint32_t w=0;if(i*4<length){unsigned n=length-i*4;if(n>4)n=4;memcpy(&w,text+i*4,n);}atomic_store_explicit(c->text+i,w,memory_order_relaxed);}atomic_store_explicit(&c->length,length,memory_order_relaxed);}
+}
 static void channel_write(ChannelCell *c,uint32_t bits,const char *text,unsigned length,int death){
  unsigned field=atomic_load_explicit(&c->field,memory_order_relaxed);
  if(!atomic_load_explicit(&c->live,memory_order_acquire))return;
@@ -43,26 +134,105 @@ static void channel_write(ChannelCell *c,uint32_t bits,const char *text,unsigned
  if((field==CF_ARM||field==CF_SOLO)&&token()!=atomic_load_explicit(&mirror_state->channel.owner_token,memory_order_acquire)){channel_error(field,CH_OWNER);return;}
  unsigned rev=atomic_load_explicit(&c->revision,memory_order_relaxed);
  if((rev&1)||rev>UINT32_MAX-2){channel_error(field,CH_WRAP);return;}
- atomic_store_explicit(&c->revision,rev+1,memory_order_relaxed);atomic_thread_fence(memory_order_release);
+ /* The odd-on-entry test keeps its meaning and still latches CH_WRAP. Only the
+  * acquire is a CAS, and only a lost CAS is silent: dropping one update is
+  * strictly better than the mixed payload a plain load-then-store leaves when a
+  * non-owner-thread writer and a reclaim reach the same cell. */
+ if(!atomic_compare_exchange_strong_explicit(&c->revision,&rev,rev+1,memory_order_relaxed,memory_order_relaxed))return;
+ atomic_thread_fence(memory_order_release);
  if(death)atomic_store_explicit(&c->live,0,memory_order_relaxed);
  else{
-  atomic_store_explicit(&c->bits,bits,memory_order_relaxed);atomic_store_explicit(&c->updates,atomic_load_explicit(&c->updates,memory_order_relaxed)+1,memory_order_relaxed);
-  if(field==CF_NAME||field==CI_AUDIO_OUT||field==CI_AUDIO_OUT_AUDIO){for(unsigned i=0;i<CHANNEL_TEXT/4;i++){uint32_t w=0;if(i*4<length){unsigned n=length-i*4;if(n>4)n=4;memcpy(&w,text+i*4,n);}atomic_store_explicit(c->text+i,w,memory_order_relaxed);}atomic_store_explicit(&c->length,length,memory_order_relaxed);}
+  channel_payload(c,field,bits,text,length);atomic_store_explicit(&c->updates,atomic_load_explicit(&c->updates,memory_order_relaxed)+1,memory_order_relaxed);
  }
  atomic_store_explicit(&c->revision,rev+2,memory_order_release);
+}
+/* A cell is reclaimable only when its own owner lifetime is gone. A live owner
+ * structurally protects its cells, so every app-global owner (project, mixer,
+ * timeline, automation, loop, recording, click, editor, zoom) keeps master
+ * level, play state, click, loop and automation for the whole session. */
+static int channel_owner_gone(const ChannelState *s,const ChannelCell *c){
+ unsigned id=atomic_load_explicit(&c->owner_incarnation,memory_order_relaxed),slot=channel_owner_slot(id);
+ if(!slot)return 1;
+ const ChannelOwner *o=s->owners+slot-1;
+ return !atomic_load_explicit(&o->live,memory_order_acquire)||atomic_load_explicit(&o->incarnation,memory_order_relaxed)!=id;
+}
+/* A cell whose lifetime is gone and whose seqlock is neither in flight nor near
+ * wrap. A victim is skipped rather than latching CH_WRAP for an unrelated field. */
+static int channel_spendable(const ChannelState *s,const ChannelCell *c){
+ unsigned rev=atomic_load_explicit(&c->revision,memory_order_relaxed);
+ return channel_owner_gone(s,c)&&!(rev&1)&&rev<=UINT32_MAX-2;
+}
+/* Cursor-amortised scan with a fixed per-call budget: no single UI-thread hook
+ * walks the whole table, and the cursor persists so the work spreads out. */
+static unsigned channel_victim(const ChannelState *s){
+ for(unsigned step=0;step<CHANNEL_RECLAIM_BUDGET;step++){
+  unsigned n=channel_cursor;channel_cursor=n+1<CHANNEL_FIELDS?n+1:0;
+  if(channel_spendable(s,s->fields+n))return n+1;
+ }
+ return 0;
 }
 static void channel_birth(uint32_t address,uint32_t property,unsigned field,uint32_t bits,const char *text,unsigned length,unsigned seed_kind){
  ChannelState *s=&mirror_state->channel;ChannelOwner *o=channel_owner(address);
  if(!o||!atomic_load_explicit(&o->live,memory_order_acquire)||!channel_on_owner(atomic_load(&o->kind)))return;
- unsigned n=atomic_load_explicit(&s->fields_used,memory_order_relaxed),h=channel_hash(property),slot=CHANNEL_HASH;ChannelCell *old=channel_cell(property);
- if(n==CHANNEL_FIELDS){channel_error(field,CH_CAPACITY);return;}
+ unsigned n=atomic_load_explicit(&s->fields_used,memory_order_relaxed),h=channel_hash(property),slot=CHANNEL_HASH,reuse=0,full=n==CHANNEL_FIELDS;
+ ChannelCell *old=channel_cell(property);
  if(old&&atomic_load(&old->live)&&atomic_load(&old->owner_incarnation)==atomic_load(&o->incarnation)){channel_error(field,CH_LIFETIME);return;}
- for(unsigned i=0;i<MIRROR_PROBES;i++){unsigned at=(h+i)&(CHANNEL_HASH-1),id=atomic_load_explicit(s->field_directory+at,memory_order_relaxed);if(!id||(old&&id==atomic_load(&old->incarnation))){slot=at;break;}}
- if(slot==CHANNEL_HASH){channel_error(field,CH_CAPACITY);return;}
- ChannelCell *c=s->fields+n;
- atomic_store(&c->property,property);atomic_store(&c->owner,address);atomic_store(&c->owner_incarnation,atomic_load(&o->incarnation));atomic_store(&c->incarnation,n+1);atomic_store(&c->field,field);atomic_store(&c->live,1);atomic_store(&c->seed,seed_kind);
- channel_write(c,bits,text,length,0);atomic_store(&c->updates,0);
- atomic_store_explicit(&s->fields_used,n+1,memory_order_release);atomic_store_explicit(s->field_directory+slot,n+1,memory_order_release);
+ unsigned keep=old?(unsigned)(old-s->fields)+1:0;
+ /* One probe of this property's own chain settles both questions. A word that
+  * already points at a retired cell yields the cell and its own directory word
+  * together, so placing the new key costs no extra occupancy. A word left over
+  * from an earlier reclamation is recyclable for the same reason. Neither is
+  * ever zeroed, so the reader's probe still walks through it, and the first
+  * acceptable position is still taken, so no key is placed past an empty word. */
+ for(unsigned i=0;i<MIRROR_PROBES;i++){
+  unsigned at=(h+i)&(CHANNEL_HASH-1),id=atomic_load_explicit(s->field_directory+at,memory_order_relaxed);
+  if(!id){slot=at;break;}
+  if(full&&id<=CHANNEL_FIELDS&&channel_spendable(s,s->fields+id-1)){slot=at;reuse=id;break;}
+  if((keep&&id==keep)||channel_slot_stale(at)){slot=at;break;}
+ }
+ if(slot==CHANNEL_HASH){if(full)channel_refusals++;channel_error(field,CH_CAPACITY);return;}
+ unsigned index=n,claimed=0;
+ if(full){
+  /* Claim the victim's seqlock before anything is disturbed. A lost CAS means
+   * another writer reached this cell first; there are thousands of other
+   * retired cells, so resume the scan instead of dashing this field. */
+  for(unsigned tries=0;tries<CHANNEL_RECLAIM_TRIES;tries++){
+   if(!reuse&&!(reuse=channel_victim(s)))break;
+   ChannelCell *v=s->fields+reuse-1;unsigned rev=atomic_load_explicit(&v->revision,memory_order_relaxed);
+   if(!(rev&1)&&rev<=UINT32_MAX-2&&atomic_compare_exchange_strong_explicit(&v->revision,&rev,rev+1,memory_order_relaxed,memory_order_relaxed)){index=reuse-1;claimed=rev+1;break;}
+   reuse=0;
+  }
+  if(!claimed){channel_refusals++;channel_error(field,CH_CAPACITY);return;}
+ }
+ ChannelCell *c=s->fields+index;
+ if(claimed){
+  /* The victim stops describing whatever the directory said about it. Its owner
+   * lifetime is already gone, so every consumer refuses it either way. Its old
+   * word is never zeroed: it keeps naming a real cell the reader rejects by
+   * property, so no probe chain through it acquires a hole. */
+  unsigned entry=channel_entry[index];
+  if(entry&&entry-1!=slot)channel_slot_mark(entry-1,1);
+  channel_entry[index]=0;
+  /* A reclaimed slot is still reachable through the directory, so identity is
+   * republished inside the seqlock window, not before it as the fresh path does. */
+  atomic_store_explicit(&c->live,0,memory_order_relaxed);atomic_thread_fence(memory_order_release);
+  atomic_store_explicit(&c->property,property,memory_order_relaxed);atomic_store_explicit(&c->owner,address,memory_order_relaxed);
+  atomic_store_explicit(&c->owner_incarnation,atomic_load_explicit(&o->incarnation,memory_order_relaxed),memory_order_relaxed);
+  atomic_store_explicit(&c->incarnation,index+1,memory_order_relaxed);atomic_store_explicit(&c->field,field,memory_order_relaxed);
+  atomic_store_explicit(&c->seed,seed_kind,memory_order_relaxed);atomic_store_explicit(&c->length,0,memory_order_relaxed);
+  channel_payload(c,field,bits,text,length);atomic_store_explicit(&c->updates,0,memory_order_relaxed);
+  atomic_store_explicit(&c->live,1,memory_order_relaxed);
+  atomic_store_explicit(&c->revision,claimed+1,memory_order_release);
+  channel_reclaims++;
+ }else{
+  atomic_store(&c->property,property);atomic_store(&c->owner,address);atomic_store(&c->owner_incarnation,atomic_load(&o->incarnation));atomic_store(&c->incarnation,n+1);atomic_store(&c->field,field);atomic_store(&c->live,1);atomic_store(&c->seed,seed_kind);
+  channel_write(c,bits,text,length,0);atomic_store(&c->updates,0);
+  atomic_store_explicit(&s->fields_used,n+1,memory_order_release);
+ }
+ unsigned prev=atomic_load_explicit(s->field_directory+slot,memory_order_relaxed);
+ if(prev&&prev<=CHANNEL_FIELDS&&channel_entry[prev-1]==slot+1)channel_entry[prev-1]=0;
+ channel_entry[index]=(uint16_t)(slot+1);channel_slot_mark(slot,0);
+ atomic_store_explicit(s->field_directory+slot,index+1,memory_order_release);
 }
 static int channel_name(uint32_t property,char text[CHANNEL_TEXT],unsigned *length){
  uint32_t p=word(property+0x28);if(p<4096||p>UINT32_MAX-CHANNEL_TEXT){channel_error(CF_NAME,CH_TEXT);return 0;}

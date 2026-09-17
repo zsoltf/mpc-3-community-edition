@@ -159,8 +159,15 @@ typedef struct {snd_seq_t *seq;snd_seq_addr_t full,ingress;int sink,source;unsig
 #ifdef MIRROR_INPUT
  snd_seq_addr_t stop_adapter,stop_mpc;int stop_sink;
  ChannelWire wire[8];unsigned char colors[8];unsigned wire_valid[8],colors_valid,next_wire,mode_valid,mode_led[128],playing_valid,playing_value,master_owner,master_incarnation,master_touch,master_tick;int master_sent;unsigned char position_text[10];unsigned position_valid,chooser_cleared;
+ /* Last formatted playhead source, so an unchanged BBT skips formatting and
+  * the ten-controller comparison instead of recomputing the same bytes. */
+ unsigned position_bar,position_beat,position_clock,position_source;
  unsigned state_valid[8];
  unsigned meter_enabled[8],meter_identity[8],meter_valid,meter_tick,zoom_mode,data_wheel,name_value,display_until[8];
+ /* Last channel-pressure level sent per strip, -1 when unknown. The hardware
+  * decays on its own, so a sustained nonzero level is refreshed every cadence
+  * while a repeated zero is suppressed until the level changes. */
+ int meter_last[8];
 #endif
 } Surface;
 static void motor_event(snd_seq_event_t*,const Surface*,unsigned,int);
@@ -336,7 +343,7 @@ static int surface_stop_relay(Surface *s,MirrorInput *in,const CopiedMirror *sna
 static int surface_drain(Surface *s,MirrorBank *bank,const MirrorState *state,int discard){
  if(stopping)return 1;
 #ifdef MIRROR_INPUT
- CopiedMirror snapshot;int batch_valid=0,batch_pads=0;
+ MIRROR_COPY(snapshot);int batch_valid=0,batch_pads=0;
 #endif
  for(unsigned n=0;n<256;n++){
   snd_seq_event_t *event;int rc=snd_seq_event_input(s->seq,&event);if(rc==-EAGAIN)return !lost_events(s->seq);if(rc<0)return 0;
@@ -350,7 +357,7 @@ static int surface_drain(Surface *s,MirrorBank *bank,const MirrorState *state,in
    if(discard)continue;
    if(!surface_stop_route(s,state))return 0;
    if(!address_equal(event->source,s->stop_adapter)||(event->type!=SND_SEQ_EVENT_NOTEON&&event->type!=SND_SEQ_EVENT_NOTEOFF)||event->data.note.channel||event->data.note.note!=93||event->data.note.velocity>127)continue;
-   uint32_t at=source_now(state);CopiedMirror before={0};int fresh=at==UINT32_MAX?0:fresh_copy(state,&before,&at);
+   uint32_t at=source_now(state);MIRROR_COPY(before);int fresh=at==UINT32_MAX?0:fresh_copy(state,&before,&at);
    if(!surface_stop_relay(s,&input,&before,fresh>0&&!atomic_load(&input.commands->new_project_intent),event->type==SND_SEQ_EVENT_NOTEON&&event->data.note.velocity,at))return 0;
    if(fresh<0)return 0;
    continue;
@@ -462,7 +469,7 @@ static int meter_output(Surface *s,const MirrorBank *bank,const CopiedMirror *sn
  if(!bank->ready&&!s->meter_valid)return 1;
  unsigned due=!s->meter_valid||snapshot->heartbeat<s->meter_tick||snapshot->heartbeat-s->meter_tick>=50;
  for(unsigned i=0;i<8;i++){
-  const CopiedTrack *t=bank->ready?input_track(snapshot,&bank->strips[i]):NULL;
+  const CopiedTrack *t=bank->ready?bank_strip_track(snapshot,bank,i):NULL;
   unsigned enabled=t&&t->meter.available,id=enabled?t->meter.incarnation:0;
   snd_seq_event_t e;
   if(!s->meter_valid||s->meter_enabled[i]!=enabled||s->meter_identity[i]!=id){
@@ -470,11 +477,17 @@ static int meter_output(Surface *s,const MirrorBank *bank,const CopiedMirror *sn
    snd_seq_ev_clear(&e);snd_seq_ev_set_sysex(&e,sizeof(bytes),bytes);if(!channel_send(s,&e))return 0;
    snd_seq_ev_clear(&e);snd_seq_ev_set_chanpress(&e,0,(i<<4)|0xf);if(!channel_send(s,&e))return 0;
    if(!enabled){snd_seq_ev_clear(&e);snd_seq_ev_set_chanpress(&e,0,i<<4);if(!channel_send(s,&e))return 0;}
-   s->meter_enabled[i]=enabled;s->meter_identity[i]=id;
+   s->meter_enabled[i]=enabled;s->meter_identity[i]=id;s->meter_last[i]=-1; /* enable/identity change leaves the hardware level unknown */
   }
   /* Sustained native levels refresh hardware's own decay. A stale source is
-   * disabled rather than refreshed with an invented zero or synthetic decay. */
-  if(enabled&&due){snd_seq_ev_clear(&e);snd_seq_ev_set_chanpress(&e,0,(i<<4)|meter_level(&t->meter));if(!channel_send(s,&e))return 0;}
+   * disabled rather than refreshed with an invented zero or synthetic decay.
+   * A repeated zero is the one level the hardware cannot decay further, so it
+   * is sent once and then suppressed until the level changes; every nonzero
+   * level is still re-sent on each cadence. */
+  if(enabled&&due){
+   int level=(int)meter_level(&t->meter);
+   if(level||s->meter_last[i]!=0){snd_seq_ev_clear(&e);snd_seq_ev_set_chanpress(&e,0,(i<<4)|(unsigned)level);if(!channel_send(s,&e))return 0;s->meter_last[i]=level;}
+  }
  }
  s->meter_valid=1;if(due)s->meter_tick=snapshot->heartbeat;return 1;
 }
@@ -541,7 +554,7 @@ static int parent_led_clear(Surface *s){
 /* Each Send strip is a physical encoder/fader pair. Six readable characters
  * leave the normal LCD separator; neither Name/Value nor edits swap rows. */
 static void send_pair_text(unsigned char out[7],const CopiedMirror *snapshot,const CopiedTrack *t,unsigned field,unsigned slot,int ret,int names){
- char text[24];CopiedField volume;const CopiedField *f=t?copied_field(snapshot,t,field,&volume):NULL;
+ char text[24];MIRROR_FIELD(volume);const CopiedField *f=t?copied_field(snapshot,t,field,&volume):NULL;
  float value=0;if(f)memcpy(&value,&f->bits,4);
  if(!t||!mixable(t->vptr)||!f||!f->available||!isfinite(value)||value<0||value>1)snprintf(text,sizeof(text),"%c%u ---",ret?'R':'S',slot+1);
  else if(names)snprintf(text,sizeof(text),"%s%u",ret?"Rtn":"Send",slot+1);
@@ -571,11 +584,18 @@ static int channel_output(Surface *s,const MirrorBank *bank,const CopiedMirror *
   return 1;
  } /* unavailable topology is not an empty bank */
  snd_seq_event_t global;
- unsigned char position[10];channel_position(position,snapshot);
- for(unsigned i=0;i<10;i++)if(!s->position_valid||position[i]!=s->position_text[i]){snd_seq_ev_clear(&global);snd_seq_ev_set_controller(&global,0,0x49-i,position[i]);if(!channel_send(s,&global))return 0;}
- unsigned beats=snapshot->position_available?127:0;
- if(!s->position_valid||s->mode_led[114]!=beats){for(unsigned note=113;note<=114;note++){snd_seq_ev_clear(&global);snd_seq_ev_set_noteon(&global,0,note,note==114?beats:0);if(!channel_send(s,&global))return 0;}s->mode_led[113]=0;s->mode_led[114]=beats;}
- memcpy(s->position_text,position,10);s->position_valid=1;
+ /* channel_position reads exactly these four words, so an unchanged source
+  * produces the identical ten characters: skip formatting and comparing them.
+  * The beats LED depends on the same availability word and is skipped with
+  * them; mode_led[113]/[114] have no other writer while position_valid holds. */
+ if(!s->position_valid||s->position_source!=snapshot->position_available||s->position_bar!=snapshot->bar||s->position_beat!=snapshot->beat||s->position_clock!=snapshot->clock){
+  unsigned char position[10];channel_position(position,snapshot);
+  for(unsigned i=0;i<10;i++)if(!s->position_valid||position[i]!=s->position_text[i]){snd_seq_ev_clear(&global);snd_seq_ev_set_controller(&global,0,0x49-i,position[i]);if(!channel_send(s,&global))return 0;}
+  unsigned beats=snapshot->position_available?127:0;
+  if(!s->position_valid||s->mode_led[114]!=beats){for(unsigned note=113;note<=114;note++){snd_seq_ev_clear(&global);snd_seq_ev_set_noteon(&global,0,note,note==114?beats:0);if(!channel_send(s,&global))return 0;}s->mode_led[113]=0;s->mode_led[114]=beats;}
+  memcpy(s->position_text,position,10);s->position_valid=1;
+  s->position_source=snapshot->position_available;s->position_bar=snapshot->bar;s->position_beat=snapshot->beat;s->position_clock=snapshot->clock;
+ }
  unsigned notes[]={40,41,42,43,44,50,51,62,63,64,65,66,67,68,69};
  unsigned modes[]={bank->assignment==BA_TRACK,bank->assignment==BA_SEND,bank->assignment==BA_PAN,bank->assignment==BA_EFFECT,bank->assignment==BA_QLINK,bank->flip,bank->view==BV_ALL,bank->view==BV_MIDI,bank->view==BV_INPUT||bank->assignment==BA_IO,bank->view==BV_AUDIO,bank->view==BV_INSTRUMENT,bank->view==BV_RETURN||bank->view==BV_DRUM_PADS,bank->view==BV_SUBMIX,bank->view==BV_OUTPUT,bank->view==BV_ALL};
  for(unsigned i=0;i<sizeof(notes)/sizeof(notes[0]);i++)if(!s->mode_valid||s->mode_led[notes[i]]!=modes[i]){snd_seq_ev_clear(&global);snd_seq_ev_set_noteon(&global,0,notes[i],modes[i]?127:0);if(!channel_send(s,&global))return 0;s->mode_led[notes[i]]=modes[i];}
@@ -606,7 +626,7 @@ static int channel_output(Surface *s,const MirrorBank *bank,const CopiedMirror *
  }
  const CopiedTrack *encoder=input_track(snapshot,bank_encoder_identity(bank,strip));
  unsigned ring_field=bank_encoder_field(bank,strip);w.ring=0;
- if(encoder&&ring_field<CF_COUNT){CopiedField volume;const CopiedField *rf=copied_field(snapshot,encoder,ring_field,&volume);if(rf&&rf->available&&(ring_field==CF_MIDI_VOLUME?midi_volume(encoder->vptr):mixable(encoder->vptr))){float x;memcpy(&x,&rf->bits,4);w.ring=(unsigned)(x*10.0f+0.5f)+1;if(ring_field==CF_PAN&&x==0.5f)w.ring|=64;}}
+ if(encoder&&ring_field<CF_COUNT){MIRROR_FIELD(volume);const CopiedField *rf=copied_field(snapshot,encoder,ring_field,&volume);if(rf&&rf->available&&(ring_field==CF_MIDI_VOLUME?midi_volume(encoder->vptr):mixable(encoder->vptr))){float x;memcpy(&x,&rf->bits,4);w.ring=(unsigned)(x*10.0f+0.5f)+1;if(ring_field==CF_PAN&&x==0.5f)w.ring|=64;}}
  if(bank->assignment==BA_EFFECT){
   const EffectsCopy *e=&snapshot->effects;if(!bank->flip)w.ring=0;memset(w.name,' ',7);memset(w.value,' ',7);
   int current=snapshot->effects_available&&e->serial==bank->selected.serial&&e->slot==bank->effects_slot&&e->page==bank->effects_page;
@@ -762,7 +782,7 @@ int main(int argc,char **argv){
  pid=state->pid;start=start_time(pid);long hz=sysconf(_SC_CLK_TCK);
  uint32_t began_sec=state->origin_sec,began_nsec=state->origin_nsec;
  if(!start||hz<=0||(uint64_t)began_sec*(unsigned long)hz+(uint64_t)began_nsec*(unsigned long)hz/1000000000<start||!process_file(pid,&exe,1)||!source_identity(argv[1],fd,&file,state,pid,start,&exe))goto done;
- CopiedMirror snapshot={0};uint32_t now;
+ MIRROR_COPY(snapshot);uint32_t now;
  if(fresh_copy_view(state,&snapshot,&now,bank.view==BV_DRUM_PADS)<0){reason="mirror unavailable or stale at start";goto done;}
 #ifdef MIRROR_INPUT
  if(!input_open_file(argv[2],state,start)){reason=input.error==C_BUSY?"command mailbox not idle at bridge start":input.error?"command producer unavailable at bridge start":"command mailbox identity, format or lock unavailable at bridge start";goto done;}

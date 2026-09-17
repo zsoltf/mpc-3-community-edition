@@ -153,7 +153,7 @@ static Track *io_track_source(Context *c,const IODemand *d,unsigned selected){
 }
 static Track *io_track(Context *c,const IODemand *d){return io_track_source(c,d,1);}
 static int io_scalar(Track *t,unsigned tag,uint32_t property,IOField *out,uint32_t now){
- if(tag>=CHANNEL_FIELD_KINDS||atomic_load(&mirror_state->channel.errors[tag]))return 0;
+ if(tag>=CHANNEL_FIELD_KINDS||channel_fault(atomic_load(&mirror_state->channel.errors[tag])))return 0;
  ChannelCell *cell=channel_cell(property);if(!cell)return 0;
  unsigned rev=atomic_load_explicit(&cell->revision,memory_order_acquire);if(!rev||(rev&1))return 0;
  uint32_t owner=channel_kind(tag)==CO_TRACK?t->track_owner:t->program_owner;
