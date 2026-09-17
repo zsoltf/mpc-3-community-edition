@@ -11,6 +11,8 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <script>try{const t=localStorage.getItem('theme');if(t==='dark'||t==='light')document.documentElement.dataset.theme=t;}catch(e){}</script>
   <style>
+    h1, h2, h3, h4 { text-wrap: balance; }
+    p, li, .lead, .note { text-wrap: pretty; }
     :root {
       color-scheme: light;
       --bg: #f6f6f4; --surface: #ffffff; --ink: #111315; --ink-2: #4a4f55; --ink-3: #7c828a;
@@ -170,7 +172,7 @@
           <li id="step2">
             <div>
               <h3>SSH key<small>optional</small></h3>
-              <p>Add an Ed25519 public key (<code>.pub</code>) if you want SSH access. Without one, SSH stays off.</p>
+              <p>Add an Ed25519 <code>.pub</code> key if you want SSH access. Without one, SSH stays off.</p>
               <div class="row">
                 <button id="selectKey" type="button">Add public key</button>
                 <button id="clearKey" type="button" class="quiet" hidden>Remove key</button>
@@ -212,8 +214,8 @@
         </ul></div>
         <div class="note"><h4>Before you flash</h4><ul>
           <li><b>Back up your projects.</b></li>
-          <li>Keep the official firmware so you can go back.</li>
-          <li>Your settings and projects are kept. <a href="https://github.com/zsoltf/mpc-3-community-edition/releases" rel="noopener noreferrer">Release notes</a></li>
+          <li>Your settings and projects are kept.</li>
+          <li><a href="https://github.com/zsoltf/mpc-3-community-edition/releases" rel="noopener noreferrer">What's new in v0.2.3</a></li>
         </ul></div>
       </div>
     </div>
