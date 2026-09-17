@@ -111,7 +111,7 @@
     #result { display: none; margin-top: 14px; padding: 16px 18px; border: 1px solid var(--ok-line); background: var(--ok-soft); border-radius: var(--radius); font-size: 14px; }
     #result strong { display: block; margin-bottom: 12px; color: var(--ok); }
     #result p { margin: 10px 0 0; overflow-wrap: anywhere; color: var(--ink-2); }
-    #result code { display: block; margin-top: 4px; background: none; padding: 0; font-size: 12px; color: var(--ink); }
+    #result #imageSHA { display: block; margin-top: 4px; background: none; padding: 0; font-size: 12px; color: var(--ink); }
     @media (max-width: 640px) { .page { padding-top: 28px; } ol.procedure > li { grid-template-columns: 1fr; gap: 8px; padding: 18px 16px; } }
 
     /* Notes */
@@ -194,7 +194,7 @@
               <div id="result">
                 <strong>Verified image ready</strong>
                 <div class="row"><a id="imageDownload" class="btn primary">Save image</a></div>
-                <p>Copy it to the top of a USB drive and run the MPC's firmware update. The name must end in <code>-update.img</code>, so remove any <code>(1)</code> your browser adds.</p>
+                <p>Copy it to the top of a USB drive and run the MPC's firmware update. Keep the name ending in <code>-update.img</code> and delete any <code>(1)</code> your browser adds.</p>
                 <p id="sshResult"></p>
                 <p>SHA-256<code id="imageSHA"></code></p>
               </div>
