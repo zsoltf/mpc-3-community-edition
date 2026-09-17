@@ -1,6 +1,6 @@
 {
-  "release": "v0.2.3",
-  "image_revision": "v0_2_3",
+  "release": "v0.2.4",
+  "image_revision": "v0_2_4",
   "firmware": "3.9.1 Gen1",
   "runtime_format": "CMD31/MMV17",
   "runtime_checksums": "firmware/runtime.sha256",

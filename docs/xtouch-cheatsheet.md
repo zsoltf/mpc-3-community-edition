@@ -84,7 +84,7 @@ volume; fields that do not apply show dashes.
 | Rewind / Fast Fwd | Move by beats; hold to repeat. |
 | Cycle | Loop on or off. |
 | Click | Metronome on or off. |
-| Save | Save the project. |
+| Save | Not enabled. Save from the MPC. |
 | Undo | Undo. Shift+Undo is Redo. |
 | Read/Off | Automation Read. |
 | Write | Automation Write. |

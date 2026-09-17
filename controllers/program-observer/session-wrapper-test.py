@@ -90,7 +90,7 @@ case "$1" in stop) rm -f {session}/service-active;; start) touch {session}/servi
 env['PATH'] = f'{stub_bin}:' + env['PATH']
 COMMAND_CLIENT = f'''cd {session}
 case "$1" in
- session-status) test "$2" = "{state}/command.state" -a "$3" = "{state}/volume.state" || exit 9;test -f "$2" -a -f "$3" || exit 5;test ! -f closed || exit 4;test ! -f native-intent || exit 6;test -f project-ready || exit 3;exit 0;;
+ session-status) test "$2" = "{state}/command.state" -a "$3" = "{state}/volume.state" || exit 9;test -f "$2" -a -f "$3" || exit 5;test ! -f source-failed || exit 1;test ! -f closed || exit 4;test ! -f native-intent || exit 6;test -f project-ready || exit 3;exit 0;;
  status) test "$2" = "{state}/command.state" || exit 9
   awk -v n="$(cat status-events 2>/dev/null || echo 2)" 'BEGIN{{printf "{{\\"format\\":\\"CMD31\\",\\"error\\":0,\\"requests\\":[{{\\"slot\\":0,\\"rejected\\":0}}],\\"events\\":[";for(i=0;i<n;i++)printf "%s{{\\"slot\\":0,\\"lane\\":0,\\"index\\":%d,\\"kind\\":1,\\"lr\\":1234567}}",(i?",":""),i;print "],\\"snapshot_atomic\\":false,\\"new_project_intent\\":0,\\"navigation\\":{{\\"watch\\":0}},\\"admission\\":{{\\"category\\":\\"none\\",\\"raw_result\\":0,\\"site\\":77}}}}"}}';;
  new-project-intent) test -f native-intent || exit 1;test "$2" = "{state}/command.state" || exit 9;test "$(cat "$2")" = "$3" || exit 1;test "$(cat native-intent)" = "$3" || exit 1;if test "${{5:-}}" = consume;then test ! -e /proc/$3/exe || exit 1;mv native-intent consumed-intent;fi;;
@@ -252,7 +252,13 @@ try:
     run('bridge-stop'); run('bridge-start'); assert count('armed') == 1
     assert state_inodes == [(state/n).stat().st_ino for n in ('command.state', 'volume.state')]
     run('start'); assert count('launches') == 1
-    print(f'PASS [{MODE}] explicit bridge-start: actual missed chooser arming recovery, route-failure refusal, exact failure cleanup and no duplicate signal (native adapter/protocol substituted)')
+    # A latched source error must not turn the idempotent `mcu start` into a
+    # silent exit 1: the status is reported, the outcome line is still printed.
+    (session/'source-failed').touch()
+    retained = run('start')
+    assert 'Session source status exit 1' in retained.stdout and 'Existing owned session retained' in retained.stdout, retained.stdout
+    (session/'source-failed').unlink(); assert count('launches') == 1 and count('armed') == 1
+    print(f'PASS [{MODE}] explicit bridge-start: actual missed chooser arming recovery, route-failure refusal, exact failure cleanup and no duplicate signal, and a retained start that reports an unhealthy source instead of exiting silently (native adapter/protocol substituted)')
     for expected in (2, 3):
         previous = app_pid(); before = set(entries()); depart(True)
         until(lambda: count('launches') == expected and (session/'generation.ready').exists() and app_pid() != previous, 'accepted New Project restarts once')

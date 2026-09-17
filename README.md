@@ -48,7 +48,7 @@ Your settings and projects are kept. Back up your projects first, and keep the
 official firmware so you can go back.
 
 This is an experimental pre-release. Known limits are in the
-[release notes](docs/releases/v0.2.3.md).
+[release notes](docs/releases/v0.2.4.md).
 
 ## Links
 

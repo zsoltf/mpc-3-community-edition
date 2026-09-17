@@ -10,7 +10,7 @@ setting, the last session's short logs and a small history of earlier sessions
 (at most 16 MB).
 
 For buttons and operating modes, use the [X-Touch cheat sheet](../../docs/xtouch-cheatsheet.md).
-For known limits, see the [release notes](../../docs/releases/v0.2.3.md).
+For known limits, see the [release notes](../../docs/releases/v0.2.4.md).
 
 ## Connection checklist
 

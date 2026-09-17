@@ -10,12 +10,20 @@
 #include <sys/un.h>
 #include "mirror-motor-core.h"
 #include "mirror-fresh.h"
-/* The centre-button focus-press (Enter) and Replace Duplicate Sequence call
- * blocking application entry points from the input drain, which can stall the
- * bridge on items that open a modal or run a threaded rendezvous. They stay
+/* The centre-button focus-press (Enter), Replace Duplicate Sequence and Save
+ * call blocking application entry points from the input drain, which can stall
+ * the bridge on items that open a modal or run a threaded rendezvous. They stay
  * built and fully exercised by the regressions (this defaults on), but the
- * shipped bridge is compiled with -DX_TOUCH_BLOCKING_ENABLED=0 so those two
- * routes never publish, until they are redesigned to run asynchronously. */
+ * shipped bridge is compiled with -DX_TOUCH_BLOCKING_ENABLED=0 so those three
+ * routes never publish, until they are redesigned to run asynchronously.
+ * Save was missed when this gate was introduced. On hardware it is worse than a
+ * stall: the application's save path re-enters a patched hook while the drain
+ * still holds command_in_hook, so the re-entry test in command-capture.c latches
+ * C_REENTRY and the source dies. Nothing recovers it without restarting MPC.
+ * It was missed because nothing ever built the shipped configuration: a route
+ * named here and left out of the expression below passed every check. That is
+ * observed now, by mirror-input-check.sh running mirror-input-test twice, the
+ * second time compiled the way mirror-input-build.sh builds this bridge. */
 #ifndef X_TOUCH_BLOCKING_ENABLED
 #define X_TOUCH_BLOCKING_ENABLED 1
 #endif
@@ -285,7 +293,7 @@ static void surface_general(Surface *surface,MirrorInput *in,const CopiedMirror 
   * the current sequence into the first unused slot under the application's own
   * default name, as one undoable Copy Sequence command. Shift is not consumed
   * here, so the button keeps one meaning in both modes. */
- unsigned op=note==95?GLOBAL_RECORD_TOGGLE:note==89?GLOBAL_CLICK_TOGGLE:note==86?GLOBAL_LOOP_TOGGLE:note==74||note==75||note==79?CF_AUTOMATION:note==80?GLOBAL_SAVE:note==81?(in->jog_shift?GLOBAL_REDO:GLOBAL_UNDO):note==82?GLOBAL_KEY_CANCEL:note==83?GLOBAL_KEY_ENTER:(note==85&&X_TOUCH_BLOCKING_ENABLED)?GLOBAL_SEQ_DUPLICATE:0;
+ unsigned op=note==95?GLOBAL_RECORD_TOGGLE:note==89?GLOBAL_CLICK_TOGGLE:note==86?GLOBAL_LOOP_TOGGLE:note==74||note==75||note==79?CF_AUTOMATION:(note==80&&X_TOUCH_BLOCKING_ENABLED)?GLOBAL_SAVE:note==81?(in->jog_shift?GLOBAL_REDO:GLOBAL_UNDO):note==82?GLOBAL_KEY_CANCEL:note==83?GLOBAL_KEY_ENTER:(note==85&&X_TOUCH_BLOCKING_ENABLED)?GLOBAL_SEQ_DUPLICATE:0;
  if(note>=96&&note<=99){
   static const unsigned ordinary[]={GLOBAL_KEY_UP,GLOBAL_KEY_DOWN,GLOBAL_KEY_LEFT,GLOBAL_KEY_RIGHT};
   static const unsigned zoom[]={GLOBAL_ZOOM_UP,GLOBAL_ZOOM_DOWN,GLOBAL_ZOOM_OUT,GLOBAL_ZOOM_IN};

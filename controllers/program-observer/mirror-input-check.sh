@@ -10,6 +10,7 @@ docker run --rm --network none --memory 256m --pids-limit 32 \
 /usr/arm-linux-gnueabihf/lib/ld-linux-armhf.so.3 --library-path /usr/arm-linux-gnueabihf/lib /src/package/mirror-input/pad-component
 /usr/arm-linux-gnueabihf/lib/ld-linux-armhf.so.3 --library-path /usr/arm-linux-gnueabihf/lib /src/package/mirror-input/midi-component
 /usr/arm-linux-gnueabihf/lib/ld-linux-armhf.so.3 --library-path /usr/arm-linux-gnueabihf/lib /src/package/mirror-input/mirror-input-producer-test /out/volume.state /out/command.state /src/package/mirror-input/mirror-input-test
+/usr/arm-linux-gnueabihf/lib/ld-linux-armhf.so.3 --library-path /usr/arm-linux-gnueabihf/lib /src/package/mirror-input/mirror-input-shipped-test --policy
 /usr/arm-linux-gnueabihf/lib/ld-linux-armhf.so.3 --library-path /usr/arm-linux-gnueabihf/lib /src/package/mirror-input/mirror-motor-regression /out/volume.state
 set +e
 /usr/arm-linux-gnueabihf/lib/ld-linux-armhf.so.3 --library-path /usr/arm-linux-gnueabihf/lib /src/package/mirror-input/mirror-read /out/volume.state --all > /out/channels.json

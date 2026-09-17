@@ -391,7 +391,16 @@ case "$command" in
  start)
   if identity mpc.pid /usr/bin/MPC;then
    session_id=$(cat session.id);authorized || exit 1
-   status;echo 'Existing owned session retained; no restart or signal.';exit 0
+   # The status is reported here, not acted on: this branch is the idempotent
+   # "already running" answer and exits 0. Under set -eu an unhealthy source
+   # (session-status exits non-zero, and on some failures prints no JSON at
+   # all) killed the script before the outcome line, so a dead command lane
+   # looked like a silent exit 1. Say what the source did instead. The identity
+   # and authorization gates on the two lines above are untouched, and
+   # bridge_start still refuses anything but 0 or 3.
+   source_code=0;status || source_code=$?
+   case "$source_code" in 0|3) ;; *) echo "Session source status exit $source_code; the surface stays down until the source is healthy again.";; esac
+   echo 'Existing owned session retained; no restart or signal.';exit 0
   fi
   identity bridge.pid "$here/mirror-input" && exit 1
   if same_boot && [ -f owner.pid ];then read -r owner_pid owner_tick <owner.pid;[ "$(start_tick "$owner_pid")" != "$owner_tick" ] || { echo 'Previous session owner still finishing.' >&2;exit 1; };fi

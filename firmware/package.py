@@ -2,7 +2,7 @@
 """Copy only the accepted package files; never archive a device stage or settings."""
 import hashlib, json, pathlib, shutil, sys
 repo = pathlib.Path(__file__).resolve().parents[1]
-RUNTIME_SOURCE = 'c4906a3'  # commit whose tree built the pinned runtime
+RUNTIME_SOURCE = '7fce0eb'  # commit whose tree built the pinned runtime
 source, output = map(pathlib.Path, sys.argv[1:])
 names = 'command-observer.so command-client mirror-input mirror-read config.h mcu-session.sh mcu mpclearn-controls main-button'.split()
 manifest = {}

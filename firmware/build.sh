@@ -2,7 +2,7 @@
 # Container entrypoint. Inputs mounted read-only at /inputs and /payload.
 set -eu
 cd /work
-output=${MPC_IMAGE_OUTPUT:-artifacts/MPC-3.9.1-Gen1-CE-v0.2.3-PERSONAL-SSH-update.img}
+output=${MPC_IMAGE_OUTPUT:-artifacts/MPC-3.9.1-Gen1-CE-v0.2.4-PERSONAL-SSH-update.img}
 [ ! -e "$output" ] || { echo "Output already exists: $output" >&2; exit 1; }
 mkdir -p build artifacts
 python3 - <<'PY'

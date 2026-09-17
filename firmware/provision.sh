@@ -5,8 +5,8 @@
 set -eu
 payload=/usr/share/mpclearn/mcu
 home=/data/mpclearn
-# Set to <runtime commit>-v0_2_3 when the runtime is pinned for release.
-revision=c4906a3-v0_2_3
+# Set to <runtime commit>-v0_2_4 when the runtime is pinned for release.
+revision=7fce0eb-v0_2_4
 owned_dir(){ [ -d "$1" ] && [ ! -L "$1" ] && [ "$(stat -c %u "$1")" = 0 ] && [ "$(stat -c %a "$1")" = 700 ]; }
 present(){ [ -e "$1" ] || [ -L "$1" ]; }
 umask 077

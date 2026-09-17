@@ -1,6 +1,6 @@
 # MCU image and release candidate
 
-Runtime source: `c4906a3`, CMD31/MMV17, run in place from `/usr/share/mpclearn/mcu`.
+Runtime source: `7fce0eb`, CMD31/MMV17, run in place from `/usr/share/mpclearn/mcu`.
 Qualified combination: MPC Live II, firmware3.9.1 Gen1, full Behringer X-Touch
 in MC/USB mode. Do not infer other MPC or MCU hardware compatibility from the
 Gen1 image header. This is an unofficial experimental integration.
@@ -42,13 +42,13 @@ mkdir -p inputs
 git clone https://github.com/TheKikGen/MPC-LiveXplore.git ../MPC-LiveXplore
 sh firmware/prepare-upstream.sh ../MPC-LiveXplore
 docker build -t mpclearn-build:local .
-# Download mpc3-ce-mcu-c4906a3.tar.gz from this repository's release.
+# Download mpc3-ce-mcu-7fce0eb.tar.gz from this repository's release.
 # Verify it against the release SHA256SUMS before extracting.
-mkdir -p artifacts/mcu-c4906a3-v0_2_3
-tar -xzf mpc3-ce-mcu-c4906a3.tar.gz --strip-components=1 -C artifacts/mcu-c4906a3-v0_2_3
+mkdir -p artifacts/mcu-7fce0eb-v0_2_4
+tar -xzf mpc3-ce-mcu-7fce0eb.tar.gz --strip-components=1 -C artifacts/mcu-7fce0eb-v0_2_4
 docker run --rm --network none \
   -v "$PWD:/work" -v "$PWD/inputs:/inputs:ro" \
-  -v "$PWD/artifacts/mcu-c4906a3-v0_2_3:/payload:ro" \
+  -v "$PWD/artifacts/mcu-7fce0eb-v0_2_4:/payload:ro" \
   mpclearn-build:local sh firmware/build.sh
 ```
 
@@ -123,4 +123,4 @@ prevent raw MCU messages from playing instrument notes or bending pitch. Leave
 other MIDI ports configured as usual. The image preserves user settings.
 Global MIDI Learn and the optional Mini/Launch Control mappings remain a
 separate feature; the MCU image does not install a learned profile.
-See the [release notes](../docs/releases/v0.2.3.md) for known limits.
+See the [release notes](../docs/releases/v0.2.4.md) for known limits.

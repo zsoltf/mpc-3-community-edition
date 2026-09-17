@@ -427,6 +427,7 @@ static void wheel_evidence(CommandState *c,unsigned request,int delivered,uint32
  atomic_store(&slot->dispatched,request);atomic_store(&slot->returned,request);atomic_store(&slot->processed,request);
  atomic_store_explicit(&slot->done,request,memory_order_release);atomic_store_explicit(&slot->sealed,request,memory_order_release);
 }
+#if X_TOUCH_BLOCKING_ENABLED
 /* One press flight's three producer events: dispatch, the observer's boolean
  * call receipt, and return. */
 static void press_evidence(CommandState *c,unsigned request,unsigned delivered,uint32_t tick){
@@ -444,9 +445,11 @@ static void press_evidence(CommandState *c,unsigned request,unsigned delivered,u
  atomic_store(&slot->dispatched,request);atomic_store(&slot->returned,request);atomic_store(&slot->processed,request);
  atomic_store_explicit(&slot->done,request,memory_order_release);atomic_store_explicit(&slot->sealed,request,memory_order_release);
 }
+#endif
 /* X-Touch Scrub selects between the existing scrub behaviour and the wheel
  * acting as the MPC data wheel. Nothing about the physical wheel changes; only
  * where its detents are routed, and the mode lives in the connected Surface. */
+#if X_TOUCH_BLOCKING_ENABLED
 /* One Duplicate Sequence flight's three producer events: the begin, the record
  * of the two slots the observer resolved, and the end. */
 static void duplicate_evidence(CommandState *c,unsigned request,uint32_t source,uint32_t destination,uint32_t result,uint32_t tick,unsigned with_state){
@@ -466,9 +469,13 @@ static void duplicate_evidence(CommandState *c,unsigned request,uint32_t source,
  atomic_store(&slot->dispatched,request);atomic_store(&slot->returned,request);atomic_store(&slot->processed,request);
  atomic_store_explicit(&slot->done,request,memory_order_release);atomic_store_explicit(&slot->sealed,request,memory_order_release);
 }
+#endif
 /* The X-Touch Replace button (note 85) as Duplicate Sequence: one press is one
  * global request against the enrolled Editor, in either wheel mode, and the
- * settlement is the observer's own three-event record of what it submitted. */
+ * settlement is the observer's own three-event record of what it submitted.
+ * Everything from the first press onwards is what X_TOUCH_BLOCKING_ENABLED
+ * owns, so the shipped-configuration build checks the raw classification only;
+ * blocking_gate_checks() below is where that build states what note 85 does. */
 static void sequence_duplicate_bridge_checks(void){
  CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"duplicate bridge state");
  MirrorInput in;MirrorBank b;MIRROR_COPY(s);snd_seq_addr_t address={32,0};
@@ -480,6 +487,7 @@ static void sequence_duplicate_bridge_checks(void){
  need(snd_midi_event_encode(codec,up,3,&ev)==3,"Replace raw release");ev.source=address;
  need(surface_event(&ev,address,&kind,&channel,&value)==1&&kind==11&&channel==85&&!value,"and its release classifies with the same kind");
  reset_fixture(c,&in,&b,&s,2);s.editor_owner=77;s.zoom_owner=88;in.jog_epoch=s.epoch;
+#if X_TOUCH_BLOCKING_ENABLED
  Surface surface={.source=3,.full=address};
  surface_general_press(&surface,&in,&s,85,1,200);
  need(in.global_count==1&&in.global_events[0].operation==GLOBAL_SEQ_DUPLICATE&&in.global_events[0].owner==77&&!in.global_events[0].bits&&!in.wheel_press&&!in.wheel_delta,"one Replace press queues one Duplicate Sequence operation against the enrolled Editor and no wheel work");
@@ -515,8 +523,74 @@ static void sequence_duplicate_bridge_checks(void){
   s.heartbeat=330;input_pump(&in,&b,&s,330);
   need(in.error==C_TRACE_AMBIGUOUS&&!in.settled,"a duplicate receipt that names one slot twice, omits the slot record or carries a non-boolean result is refused");
  }
+#endif
  snd_midi_event_free(codec);free(c);
+#if X_TOUCH_BLOCKING_ENABLED
  puts("PASS X-Touch Replace is Duplicate Sequence: note 85 classification, one queued operation per press edge with no wheel work, the same meaning in both wheel modes and under Shift, reload clearing, publication as one global request naming only the enrolled Editor and Project, settlement on the observer's begin/slot-record/end receipt, and refusal of a receipt that omits the slot record, names one slot twice or carries a non-boolean result (native calls and ALSA hardware substituted)");
+#else
+ puts("PASS X-Touch Replace classifies as note 85 with its release; the shipped build gates the Duplicate Sequence route, so blocking_gate_checks owns what the press does here");
+#endif
+}
+/* What X_TOUCH_BLOCKING_ENABLED actually does to the surface, checked in both
+ * configurations. mirror-input-build.sh compiles the shipped bridge with the
+ * gate off and compiled every test binary with it on, so no check in this tree
+ * had ever observed the configuration that reaches the device: a note named in
+ * the gate's comment and left out of its expression passed everything. Save was
+ * exactly that, and on hardware it killed the command source on the first press.
+ * mirror-input-check.sh now runs this file a second time built the shipped way,
+ * and this is the check that tells the two builds apart.
+ *
+ * Both halves are needed. The gated notes must publish nothing, and ungated
+ * notes must still publish in the SAME session, so the gate-off half cannot
+ * pass by breaking the input path wholesale. Note 81 (Undo, Shift+Undo as Redo)
+ * is deliberately ungated and is checked here as an ungated route in both
+ * builds: it is the nearest neighbour of the gated notes in the same
+ * expression, and a mistake there would silently cost a working button. */
+static void blocking_gate_checks(void){
+ CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"blocking gate state");
+ MirrorInput in;MirrorBank b;MIRROR_COPY(s);snd_seq_addr_t address={32,0};
+ reset_fixture(c,&in,&b,&s,2);s.editor_owner=77;s.zoom_owner=88;in.jog_epoch=s.epoch;
+ s.record_mode=(CopiedField){.available=1,.owner_incarnation=100,.incarnation=101};
+ Surface surface={.source=3,.full=address};
+ /* The three gated routes: Save (80), Replace/Duplicate Sequence (85) and the
+  * data-wheel centre press (100), in both wheel modes and under Shift. */
+ surface_general_press(&surface,&in,&s,80,1,200);surface_general_press(&surface,&in,&s,80,0,201);
+ surface_general_press(&surface,&in,&s,85,1,202);surface_general_press(&surface,&in,&s,85,0,203);
+ in.jog_shift=1;
+ surface_general_press(&surface,&in,&s,80,1,204);surface_general_press(&surface,&in,&s,80,0,205);
+ surface_general_press(&surface,&in,&s,85,1,206);surface_general_press(&surface,&in,&s,85,0,207);
+ in.jog_shift=0;surface.data_wheel=1;
+ surface_general_press(&surface,&in,&s,80,1,208);surface_general_press(&surface,&in,&s,80,0,209);
+ surface_general_press(&surface,&in,&s,85,1,210);surface_general_press(&surface,&in,&s,85,0,211);
+ surface_general_press(&surface,&in,&s,100,1,212);surface_general_press(&surface,&in,&s,100,0,213);
+ surface.data_wheel=0;
+#if X_TOUCH_BLOCKING_ENABLED
+ need(in.global_count==6&&in.wheel_press==1,"with the gate compiled in, Save and Duplicate Sequence queue in both wheel modes and under Shift, and the centre press is pending");
+ need(in.global_events[0].operation==GLOBAL_SAVE&&in.global_events[1].operation==GLOBAL_SEQ_DUPLICATE&&in.global_events[2].operation==GLOBAL_SAVE&&in.global_events[3].operation==GLOBAL_SEQ_DUPLICATE&&in.global_events[4].operation==GLOBAL_SAVE&&in.global_events[5].operation==GLOBAL_SEQ_DUPLICATE,"and every queued operation is the one its note means");
+ input_jog_discard(&in);in.jog_epoch=s.epoch;
+#else
+ need(!in.global_count&&!in.wheel_press,"the shipped bridge queues nothing for Save, Duplicate Sequence or the data-wheel centre press, in either wheel mode and under Shift");
+#endif
+ input_pump(&in,&b,&s,214);
+ need(!in.error&&!atomic_load(&c->published),"and no gated note has published a request");
+ /* Same session, same fixture: the ungated neighbours still work. */
+ surface_general_press(&surface,&in,&s,58,1,220);surface_general_press(&surface,&in,&s,58,0,221);
+ surface_general_press(&surface,&in,&s,95,1,222);surface_general_press(&surface,&in,&s,95,0,223);
+ surface_general_press(&surface,&in,&s,81,1,224);surface_general_press(&surface,&in,&s,81,0,225);
+ in.jog_shift=1;surface_general_press(&surface,&in,&s,81,1,226);surface_general_press(&surface,&in,&s,81,0,227);in.jog_shift=0;
+ need(in.global_count==4&&in.global_events[0].operation==GLOBAL_PAGE_MAIN+4&&in.global_events[1].operation==GLOBAL_RECORD_TOGGLE&&in.global_events[2].operation==GLOBAL_UNDO&&in.global_events[3].operation==GLOBAL_REDO,"a page button, Record, Undo and Shift+Undo are ungated and queue their own operations");
+ input_pump(&in,&b,&s,228);
+ need(!in.error&&!in.global_count&&atomic_load(&c->published)==4,"and all four publish in the same session, so nothing here passes by a dead input path");
+ CommandRequest r;
+ need(command_request_read(c->slots+command_find(c,1),1,&r)&&r.reserved==GLOBAL_PAGE_MAIN+4&&r.global_owner==77,"the page request names the enrolled Editor");
+ need(command_request_read(c->slots+command_find(c,3),3,&r)&&r.reserved==GLOBAL_UNDO&&r.global_owner==77,"and Undo publishes as a history request against the same Editor");
+ need(command_request_read(c->slots+command_find(c,4),4,&r)&&r.reserved==GLOBAL_REDO,"and Shift+Undo publishes as Redo");
+ free(c);
+#if X_TOUCH_BLOCKING_ENABLED
+ puts("PASS X-Touch blocking-route gate, compiled in: Save, Duplicate Sequence and the data-wheel centre press all reach the input queue, while a page button, Record, Undo and Shift+Undo publish alongside them (native calls and ALSA hardware substituted)");
+#else
+ puts("PASS X-Touch blocking-route gate in the shipped configuration (-DX_TOUCH_BLOCKING_ENABLED=0): notes 80, 85 and the data-wheel centre press 100 queue nothing and publish no request in either wheel mode or under Shift, while a page button, Record, Undo and Shift+Undo still publish in the same session (native calls and ALSA hardware substituted)");
+#endif
 }
 static void data_wheel_checks(void){
  CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"data-wheel policy state");MirrorInput in;MirrorBank b;MIRROR_COPY(s);reset_fixture(c,&in,&b,&s,2);
@@ -640,14 +714,19 @@ static void data_wheel_checks(void){
  need(in.global_count==2&&in.global_events[0].operation==GLOBAL_KEY_BACKTAB&&in.global_events[1].operation==GLOBAL_KEY_TAB,"left and right move focus with Shift+Tab and Tab");
  /* The centre button is the data wheel's own push through the focus
   * controller, not a synthetic keyboard Return: on this firmware an injected
-  * Return does nothing to a focused item. */
+  * Return does nothing to a focused item. It is one of the blocking routes the
+  * shipped build compiles out, so the press half belongs to the gate-on build;
+  * blocking_gate_checks owns what the shipped build does with note 100. */
+#if X_TOUCH_BLOCKING_ENABLED
  surface_general_press(&cursor,&in,&s,100,1,420);surface_general_press(&cursor,&in,&s,100,0,421);
  need(in.wheel_press&&in.global_count==2,"the centre button is the data wheel's push and queues no key");
  need(!cursor.zoom_mode,"note 100 does not touch zoom while the wheel is the data wheel");
  surface_general_press(&cursor,&in,&s,100,1,422);surface_general_press(&cursor,&in,&s,100,0,423);
  need(in.wheel_press==1,"a second push before the first is published stays one pending press");
+#endif
  input_pump(&in,&b,&s,430);
  need(!in.error&&command_request_read(c->slots,1,&r)&&r.reserved==GLOBAL_KEY_BACKTAB&&r.global_owner==77&&!r.bits,"the data-mode cursor keys publish as ordinary global key requests against the enrolled Editor");
+#if X_TOUCH_BLOCKING_ENABLED
  unsigned press_seq=atomic_load(&c->published);
  need(command_request_read(c->slots+command_find(c,press_seq),press_seq,&r)&&r.reserved==JOG_PRESS&&r.bits==FOCUS_PRESS_BUTTON,"the centre push publishes one JOG_PRESS request carrying the device-measured button id");
  need(!r.project_owner&&!r.track_owner&&!r.program_owner&&!r.global_owner&&!r.field_incarnation&&!r.pad_owner&&r.epoch==s.epoch,"the press request names no Track, Program, Project or pad target");
@@ -689,11 +768,17 @@ static void data_wheel_checks(void){
  reclaim_fixture(c,press_after);input_pump(&in,&b,&s,521);
  need(atomic_load(&c->published)==press_after+1&&!in.wheel_delta&&!in.error,"and the banked detent publishes once the press is reclaimed");
  input_jog_discard(&in);need(!in.wheel_press&&!in.wheel_delta,"a reload or disconnect clears a pending press with the rest of the jog gesture");
+#endif
  /* Reconnect: the mode is session state and is not persisted. */
  Surface reconnect={.source=3,.full=address};reconnect.data_wheel=1;
  surface_close(&reconnect,&b);need(!reconnect.data_wheel,"a controller reconnect returns the wheel to scrub mode");
  raw_data_wheel=0;snd_midi_event_free(codec);free(c);
- puts("PASS X-Touch Scrub selects data-wheel mode: note 101 classification, footswitch 1/2 as Play relay and Record toggle, press dedup, Scrub/Zoom LED sense, unchanged scrub and Shift routing, signed accumulation and cancellation, one bounded request per pump with single flight and a banked remainder, dispatch/step/return settlement, oversized-step refusal, cursor cluster in both modes with the centre button publishing the data wheel's push as one JOG_PRESS request per press against the same single flight, reload clearing and reconnect reset (native calls and ALSA hardware substituted)");
+#if X_TOUCH_BLOCKING_ENABLED
+#define CENTRE_PRESS_CLAIM "with the centre button publishing the data wheel's push as one JOG_PRESS request per press against the same single flight, "
+#else
+#define CENTRE_PRESS_CLAIM "with the centre button compiled out of this shipped-configuration build, "
+#endif
+ puts("PASS X-Touch Scrub selects data-wheel mode: note 101 classification, footswitch 1/2 as Play relay and Record toggle, press dedup, Scrub/Zoom LED sense, unchanged scrub and Shift routing, signed accumulation and cancellation, one bounded request per pump with single flight and a banked remainder, dispatch/step/return settlement, oversized-step refusal, cursor cluster in both modes " CENTRE_PRESS_CLAIM "reload clearing and reconnect reset (native calls and ALSA hardware substituted)");
 }
 static void stop_type_checks(void){
  CommandState *c=calloc(1,sizeof(*c));need(c!=NULL,"Stop/Type state");MirrorInput in;MirrorBank b;MIRROR_COPY(s);reset_fixture(c,&in,&b,&s,2);
@@ -1085,9 +1170,9 @@ static void outbound_update_checks(void){
  puts("PASS outbound update policy: repeated zero meter levels suppressed while sustained nonzero levels keep refreshing, enable/identity/source changes re-arm the bar, bank strips resolve through a revalidated recorded row in track/paged/Send/pad banks, and the playhead is formatted only when its bar, beat, pulse or availability changed (ALSA hardware and source values substituted)");
 }
 int main(int argc,char **argv){
- if(argc==2&&!strcmp(argv[1],"--policy")){alarm(20);outbound_update_checks();native_text_wire_checks();binding_sync_checks();binding_reversal_checks();qlink_mode_routing_checks();input_page_checks();following_reenable_checks();milestone_checks();drum_channel_checks();drum_surface_checks();policy_checks();toggle_midi_checks();assignment_checks();effects_policy_checks();jog_policy_checks();data_wheel_checks();sequence_duplicate_bridge_checks();stop_type_checks();stop_relay_checks();master_policy_checks();return 0;}
+ if(argc==2&&!strcmp(argv[1],"--policy")){alarm(20);outbound_update_checks();native_text_wire_checks();binding_sync_checks();binding_reversal_checks();qlink_mode_routing_checks();input_page_checks();following_reenable_checks();milestone_checks();drum_channel_checks();drum_surface_checks();policy_checks();toggle_midi_checks();assignment_checks();effects_policy_checks();jog_policy_checks();data_wheel_checks();sequence_duplicate_bridge_checks();blocking_gate_checks();stop_type_checks();stop_relay_checks();master_policy_checks();return 0;}
  if(argc!=3)return 2;
- alarm(20);outbound_update_checks();native_text_wire_checks();binding_sync_checks();binding_reversal_checks();qlink_mode_routing_checks();input_page_checks();following_reenable_checks();milestone_checks();drum_channel_checks();drum_surface_checks();policy_checks();toggle_midi_checks();assignment_checks();effects_policy_checks();jog_policy_checks();data_wheel_checks();sequence_duplicate_bridge_checks();stop_type_checks();stop_relay_checks();master_policy_checks();
+ alarm(20);outbound_update_checks();native_text_wire_checks();binding_sync_checks();binding_reversal_checks();qlink_mode_routing_checks();input_page_checks();following_reenable_checks();milestone_checks();drum_channel_checks();drum_surface_checks();policy_checks();toggle_midi_checks();assignment_checks();effects_policy_checks();jog_policy_checks();data_wheel_checks();sequence_duplicate_bridge_checks();blocking_gate_checks();stop_type_checks();stop_relay_checks();master_policy_checks();
  char *defaults[]={"mirror-input","/volume","/command"};need(servo_arguments(3,defaults)==3&&servo_disabled,"separate-process composition uses default no-echo policy");
  int fd=open(argv[1],O_RDONLY|O_CLOEXEC);struct stat st;need(fd>=0&&!fstat(fd,&st)&&st.st_size==sizeof(MirrorState),"actual producer mirror file");
  const MirrorState *state=mmap(NULL,sizeof(*state),PROT_READ,MAP_SHARED,fd,0);need(state!=MAP_FAILED,"actual read-only mirror mapping");

@@ -2,6 +2,10 @@
 set -eu
 cd "$(dirname "$0")"
 if [ "$#" -ne 3 ];then echo 'mirror-input-build.sh /local/exact/MPC /usr/share/mpclearn/mcu|/data/mpclearn/dev SECONDS|manual' >&2;exit 2;fi
+# The bridge ships with -DX_TOUCH_BLOCKING_ENABLED=0, so mirror-input-test is
+# built twice: once with the gate compiled in, which is what the integration
+# composition runs, and once exactly as the bridge ships, which is the only
+# binary that observes the routes the device actually gets.
 # Reuse the unchanged command producer build, which also refuses any device
 # folder other than the image location or the development override.
 ./command-build.sh "$1" "$2" "$3"
@@ -11,12 +15,13 @@ cp package/command/* package/mirror-input/
 docker run --rm --network none -v "$PWD/..:/controllers:ro" -v "$PWD:/src:ro" -v "$PWD/../stop-route.h:/stop-route.h:ro" -v "$PWD/package/mirror-input:/out" mpclearn-controls-build sh -ec '
 arm-linux-gnueabihf-gcc -std=c11 -O2 -Wall -Wextra -Werror -marm -mfpu=neon -DMIRROR_INPUT -DX_TOUCH_BLOCKING_ENABLED=0 /src/mirror-motor.c -o /out/mirror-input -L/usr/lib/arm-linux-gnueabihf -lasound -lm
 arm-linux-gnueabihf-gcc -std=c11 -O2 -Wall -Wextra -Werror -marm -mfpu=neon /src/mirror-input-test.c -o /out/mirror-input-test -L/usr/lib/arm-linux-gnueabihf -lasound -lm
+arm-linux-gnueabihf-gcc -std=c11 -O2 -Wall -Wextra -Werror -marm -mfpu=neon -DX_TOUCH_BLOCKING_ENABLED=0 /src/mirror-input-test.c -o /out/mirror-input-shipped-test -L/usr/lib/arm-linux-gnueabihf -lasound -lm
 arm-linux-gnueabihf-gcc -std=c11 -O2 -Wall -Wextra -Werror -marm -mfpu=neon -DVOLUME_MIRROR -DMIRROR_COMMAND -DCOMMAND_COMPONENT -no-pie -I/src/package/mirror-input /src/mirror-input-producer-test.c /src/component.S /src/gate.S /src/transport-queue.c -o /out/mirror-input-producer-test -pthread -ldl
 arm-linux-gnueabihf-gcc -std=c11 -O2 -Wall -Wextra -Werror -marm -mfpu=neon /src/mirror-motor-test.c -o /out/mirror-motor-regression -L/usr/lib/arm-linux-gnueabihf -lasound -lm
 arm-linux-gnueabihf-gcc -std=c11 -O2 -Wall -Wextra -Werror -marm -mfpu=neon -DVOLUME_MIRROR -DMIRROR_COMMAND -DCOMMAND_COMPONENT -no-pie -I/src/package/mirror-input /src/pad-component.c /src/component.S /src/gate.S /src/transport-queue.c -o /out/pad-component -pthread -ldl -lm
 arm-linux-gnueabihf-gcc -std=c11 -O2 -Wall -Wextra -Werror -marm -mfpu=neon -DVOLUME_MIRROR -DMIRROR_COMMAND -DCOMMAND_COMPONENT -no-pie -I/src/package/mirror-input /src/midi-component.c /src/component.S /src/gate.S /src/transport-queue.c -o /out/midi-component -pthread -ldl -lm
 arm-linux-gnueabihf-gcc -std=c11 -O2 -Wall -Wextra -Werror -marm -mfpu=neon -DVOLUME_MIRROR -DMIRROR_COMMAND -DCOMMAND_COMPONENT -no-pie -I/src/package/mirror-input /src/effects-component.c /src/component.S /src/gate.S /src/transport-queue.c -o /out/effects-component -pthread -ldl -lm
-file /out/mirror-input /out/mirror-input-test /out/mirror-input-producer-test
+file /out/mirror-input /out/mirror-input-test /out/mirror-input-shipped-test /out/mirror-input-producer-test
 '
 
 docker run --rm --network none -v "$PWD/..:/controllers:ro" -v "$PWD/package/mirror-input:/out" mpclearn-controls-build sh -ec '
