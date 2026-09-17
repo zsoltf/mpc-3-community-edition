@@ -117,6 +117,8 @@
     .note { padding: 16px 18px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); font-size: 13.5px; color: var(--ink-2); }
     .note h4 { margin: 0 0 8px; font-size: 12px; font-family: var(--mono); font-weight: 500; color: var(--ink-3); letter-spacing: .04em; text-transform: uppercase; }
     .note b { color: var(--ink); font-weight: 600; }
+    .note ul { margin: 0; padding-left: 18px; }
+    .note li { margin: 3px 0; }
     .note a { color: var(--ink); }
     .note a:hover { color: var(--accent); }
     @media (max-width: 760px) { .notes { grid-template-columns: 1fr; } }
@@ -132,7 +134,7 @@
 <body>
 <header class="top">
   <div class="wrap">
-    <a class="brand" href="./"><span class="mark"><i></i></span><span class="full">MPC 3 Community Edition</span><span class="short">MPC 3 CE</span> <span class="tag">v0.2.2</span></a>
+    <a class="brand" href="./"><span class="mark"><i></i></span><span class="full">MPC 3 Community Edition</span><span class="short">MPC 3 CE</span> <span class="tag">v0.2.3</span></a>
     <nav aria-label="Site">
       <a href="guide.html">X-Touch guide</a>
       <a href="https://github.com/zsoltf/mpc-3-community-edition/releases" rel="noopener noreferrer">Releases</a>
@@ -149,14 +151,14 @@
   <section class="page" id="builder">
     <div class="wrap">
       <h1>Build your MPC 3 Community Edition image</h1>
-      <p class="lead">Adds Mackie Control for the Behringer X-Touch and USB mouse support to the MPC 3.9.1 Gen1 firmware. The image is built here, in your browser, from Akai's official update file. Nothing is uploaded.</p>
+      <p class="lead">Adds X-Touch control and USB mouse support to the MPC 3.9.1 firmware. The image is built in your browser from Akai's official file. Nothing is uploaded.</p>
 
       <div class="panel">
         <ol class="procedure">
           <li id="step1">
             <div>
               <h3>Official firmware</h3>
-              <p>Choose <code>MPC-3.9.1-Gen1-update.img</code> as downloaded from Akai. Other versions and modified files are refused.</p>
+              <p>Choose <code>MPC-3.9.1-Gen1-update.img</code> from Akai. Other files are refused.</p>
               <div class="row">
                 <button id="select" type="button">Choose firmware file</button>
                 <a class="btn" href="https://cdn.inmusicbrands.com/Software/MPC/MVSU391APC/MPC-3.9.1-Gen1-update.img" rel="noreferrer">Download from Akai</a>
@@ -168,7 +170,7 @@
           <li id="step2">
             <div>
               <h3>SSH key<small>optional</small></h3>
-              <p>Add your Ed25519 public key (<code>.pub</code>) to allow root SSH login for recovery. Without a key, SSH stays disabled.</p>
+              <p>Add an Ed25519 public key (<code>.pub</code>) if you want SSH access. Without one, SSH stays off.</p>
               <div class="row">
                 <button id="selectKey" type="button">Add public key</button>
                 <button id="clearKey" type="button" class="quiet" hidden>Remove key</button>
@@ -180,7 +182,7 @@
           <li id="step3">
             <div>
               <h3>Create the image</h3>
-              <p>Takes a few minutes and about 2.5 GB of free memory. Keep this tab open until verification finishes, then save the file to the root of a USB drive and run the MPC's normal firmware update.</p>
+              <p>Takes a few minutes and about 2.5 GB of free memory. Keep this tab open until it finishes.</p>
               <div class="row"><button id="create" type="button" class="primary" disabled>Create image</button></div>
               <section id="progress" class="progress" aria-live="polite">
                 <progress id="bar" max="100" value="0"></progress>
@@ -190,7 +192,7 @@
               <div id="result">
                 <strong>Verified image ready</strong>
                 <div class="row"><a id="imageDownload" class="btn primary">Save image</a></div>
-                <p>Keep the name ending in <code>-update.img</code>; remove any <code>(1)</code> the browser adds. Run MPC's firmware update from the USB drive.</p>
+                <p>Copy it to the top of a USB drive and run the MPC's firmware update. The name must end in <code>-update.img</code>, so remove any <code>(1)</code> your browser adds.</p>
                 <p id="sshResult"></p>
                 <p>SHA-256<code id="imageSHA"></code></p>
               </div>
@@ -200,9 +202,19 @@
       </div>
 
       <div class="notes">
-        <div class="note"><h4>Included</h4><b>Mackie Control</b>, currently for the full-size Behringer X-Touch only (MC mode over USB): mixer, sends, inserts, Q-Links, transport, motor faders and meters, plus the jog wheel as the MPC data wheel (the Scrub button toggles it), the cursor cluster for data steps and Tab/Shift+Tab focus navigation, and the footswitches as Play and Record. <a href="guide.html">Guide</a>.<br><b>USB mouse</b>: cursor, click, drag-select, wheel as the data wheel.</div>
-        <div class="note"><h4>Requirements</h4><b>MPC Live II</b> on firmware 3.9.1. Other Gen1 models are untested; Gen2 and Force are not supported. Other MCU controllers and HUI are not supported yet. Upgrading from an earlier Community Edition image keeps your settings and projects.</div>
-        <div class="note"><h4>Before you flash</h4><b>Back up your projects</b> and keep the official firmware. This page builds an image; it does not flash the MPC. Reinstalling official firmware restores the stock system files. <a href="https://github.com/zsoltf/mpc-3-community-edition/releases" rel="noopener noreferrer">Release notes</a>.</div>
+        <div class="note"><h4>What you get</h4><ul>
+          <li><b>X-Touch control:</b> mixer, sends, plug-ins, Q-Links, transport, motor faders, meters and the jog wheel. <a href="guide.html">Guide</a></li>
+          <li><b>USB mouse:</b> pointer, click, drag and scroll.</li>
+        </ul></div>
+        <div class="note"><h4>Requirements</h4><ul>
+          <li><b>MPC Live II</b> on firmware 3.9.1. Other Gen1 MPCs are untested.</li>
+          <li><b>Full-size Behringer X-Touch.</b> Other controllers are not supported yet.</li>
+        </ul></div>
+        <div class="note"><h4>Before you flash</h4><ul>
+          <li><b>Back up your projects.</b></li>
+          <li>Keep the official firmware so you can go back.</li>
+          <li>Your settings and projects are kept. <a href="https://github.com/zsoltf/mpc-3-community-edition/releases" rel="noopener noreferrer">Release notes</a></li>
+        </ul></div>
       </div>
     </div>
   </section>
@@ -215,11 +227,11 @@
       <a href="https://github.com/zsoltf/mpc-3-community-edition/issues" rel="noopener noreferrer">Report a result or bug</a>
       <a href="https://github.com/zsoltf/mpc-3-community-edition" rel="noopener noreferrer">GitHub</a>
     </nav>
-    <p>Built on research shared in <a href="https://github.com/TheKikGen/MPC-LiveXplore" rel="noopener noreferrer">MPC-LiveXplore</a>. Unofficial; not affiliated with Akai, inMusic or Behringer. Do not share generated images.</p>
+    <p>Built on research from <a href="https://github.com/TheKikGen/MPC-LiveXplore" rel="noopener noreferrer">MPC-LiveXplore</a>. Unofficial, and not affiliated with Akai, inMusic or Behringer. Please don't share the images you build.</p>
   </div>
 </footer>
 <script>
-const imageName = 'MPC-3.9.1-Gen1-CE-v0.2.2-update.img';
+const imageName = 'MPC-3.9.1-Gen1-CE-v0.2.3-update.img';
 
 document.querySelector('#themeToggle').onclick = () => {
   const root = document.documentElement;

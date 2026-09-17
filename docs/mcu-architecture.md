@@ -23,7 +23,8 @@ flowchart LR
    It starts the matched observer, bridge and MIDI adapter, validates process
    identity and owns cleanup/recovery. A confirmed native New Project action
    permits a fresh app and controller session; generic crashes do not cause an
-   uncontrolled restart loop. The writable boot selector chooses the package.
+   uncontrolled restart loop. The package runs in place from the flashed image;
+   a single development override can replace it only while it matches that image.
    Initial blank creation and saved-project import have separate qualified
    completion hooks; both publish into the same state service. The controller
    remains unavailable at Select Project until one completes.

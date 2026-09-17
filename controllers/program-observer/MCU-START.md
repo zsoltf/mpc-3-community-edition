@@ -4,12 +4,13 @@ After installing Community Edition, turn on MPC, create a blank project or
 load a template/saved project, and use the X-Touch. The controller waits while
 the project chooser is open. No computer or manual command is needed in normal use.
 
-The r5 image installs its matched runtime at
-`/data/mpclearn-model.mouse-r5`. Earlier r2, r3 and r4 installations use
-different directories, which an r5 upgrade leaves in place. The selected installation is recorded in `/etc/mpclearn-boot-stage`.
+The controller runs from the installed image. It keeps one folder,
+`/data/mpclearn`, in the MPC's internal system storage: your motor-fader
+setting, the last session's short logs and a small history of earlier sessions
+(at most 16 MB).
 
 For buttons and operating modes, use the [X-Touch cheat sheet](../../docs/xtouch-cheatsheet.md).
-For tested scope, see the [release notes](../../docs/releases/v0.1.0-rc.3.md).
+For known limits, see the [release notes](../../docs/releases/v0.2.3.md).
 
 ## Connection checklist
 
@@ -31,63 +32,66 @@ from your computer, replacing the key filename and address:
 ssh -i ~/.ssh/YOUR_MPC_KEY root@YOUR_MPC_IP
 ```
 
-On MPC, inspect the selected installation and service:
+On MPC:
 
 ```sh
-cat /etc/mpclearn-boot-stage
 systemctl status mpclearn-boot.service
+/usr/share/mpclearn/mcu/mcu status
 ```
 
-For **r5**, use:
-
-```sh
-/data/mpclearn-model.mouse-r5/mcu status
-```
-
-If the selector names an earlier stage, use that installation's `mcu` instead.
 An explicit start or stop can restart the MPC application. **Save your project
 before either command.** Starting an already owned session retains it.
 
 ```sh
-/data/mpclearn-model.mouse-r5/mcu start
-/data/mpclearn-model.mouse-r5/mcu stop
+/usr/share/mpclearn/mcu/mcu start
+/usr/share/mpclearn/mcu/mcu stop
 ```
 
-`stop` ends the owned controller session and restores stock MPC. It does not
-disable the next boot's controller startup.
+`stop` ends the controller session and restores stock MPC with the MPC
+settings from when the session started. After the MPC has been switched off in
+between, it leaves the current settings as they are. It does not disable
+startup at the next boot.
 
 ## Disable automatic startup
 
 Save the project, then run on MPC:
 
 ```sh
-/data/mpclearn-boot/mcu-boot-install.sh disable
+/usr/share/mpclearn/mcu/mcu-boot-install.sh disable
 ```
 
-This removes the writable boot selector and stops the boot-owned controller
-session. The early system service remains installed but dormant. It does not
-delete projects or the runtime package. The provisioner preserves this disabled
-state on subsequent boots and known-version upgrades.
+This stops the controller session, returns to the stock app and creates
+`/data/mpclearn/disabled`, which keeps the controller off at every boot. To turn it back on from the next boot:
 
-For a later one-session trial, the r5 `mcu start` command above remains available.
-Restoring persistent autostart uses the maintainer boot installer, which requires
-the matched stage and access to its systemd unit directory; do not substitute an
-old stage or copy individual executables from another release.
+```sh
+/usr/share/mpclearn/mcu/mcu-boot-install.sh enable
+```
+
+## Trying a development build
+
+A development package can replace the image's runtime without reflashing. It
+has exactly one place, `/data/mpclearn/dev`, and runs only on the image it was
+installed for; with any other image it is ignored. See
+[building from source](../../docs/BUILDING.md#trying-a-build-on-your-own-mpc).
+Remove it with `/usr/share/mpclearn/mcu/mcu-boot-install.sh override clear`.
 
 ## Return to official firmware
 
 Reinstall the official firmware through MPC's normal update procedure. This
-restores system files, but does not erase user projects or the extension's
-files on the writable `/data` partition. Keep an official firmware download
-available before experimenting. An image made without SSH has no SSH recovery
-access; use MPC's firmware update flow.
+restores the system files. Your projects and settings are not touched, and the
+`/data/mpclearn` folder stays behind; nothing uses it. On an image made with
+your own SSH key you can delete it before reinstalling: disable automatic
+startup as above, then run `rm -rf /data/mpclearn`. That image also keeps its
+SSH host key in `/data/ssh/mpclearn`. An image made without SSH has no SSH access; use MPC's
+firmware update flow.
 
 ## If controls or audio misbehave
 
 Save musical work before troubleshooting. Record the release, MPC model,
 project operation and whether X-Touch was connected. With SSH, `mcu status`
 and the boot service status help distinguish a controller failure from an app
-failure. Avoid posting complete settings or projects in a public issue.
+failure; `/data/mpclearn/session` and `/data/mpclearn/history` hold the logs.
+Avoid posting complete settings or projects in a public issue.
 
 The session owner validates the executable and process lifetime, handles
 project replacement, and does not endlessly restart MPC after arbitrary crashes.

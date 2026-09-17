@@ -130,7 +130,7 @@
 <body>
 <div class="top">
   <div class="wrap">
-    <a class="brand" href="./"><span class="mark"><i></i></span><span class="full">MPC 3 Community Edition</span><span class="short">MPC 3 CE</span> <span class="tag">v0.2.2</span></a>
+    <a class="brand" href="./"><span class="mark"><i></i></span><span class="full">MPC 3 Community Edition</span><span class="short">MPC 3 CE</span> <span class="tag">v0.2.3</span></a>
     <nav aria-label="Pages">
       <a href="./">Image builder</a>
       <a href="https://github.com/zsoltf/mpc-3-community-edition" rel="noopener noreferrer">GitHub</a>
@@ -145,7 +145,7 @@
   <header>
     <span class="label">Mackie Control</span>
     <h1>X-Touch guide</h1>
-    <p class="lede">Only the full-size <strong>Behringer X-Touch</strong> in MC mode over USB is supported right now. X-Touch Compact, One and Extender, other Mackie Control surfaces and HUI are not. The controller connects on its own once a project is loaded and follows the MPC: motor faders, names, colors and meters track whatever changes on the screen.</p>
+    <p class="lede">For the full-size <strong>Behringer X-Touch</strong> in MC mode over USB. It connects when a project loads and follows the MPC: faders, names, colors and meters update as you work.</p>
     <nav class="tools" aria-label="Guide actions">
       <button type="button" onclick="window.print()">Print or save as PDF</button>
       <a href="xtouch-cheatsheet.md" download>Text cheat sheet</a>
@@ -164,21 +164,21 @@
   <section id="setup">
     <h2>Setup</h2>
     <ol class="steps">
-      <li><div><b>Put the X-Touch in MC mode over USB.</b><span>Power it off. Hold channel 1 <kbd>Select</kbd> while powering on. Set encoder 1 to <strong>MC</strong> and encoder 2 to <strong>USB</strong>, then press <kbd>Select</kbd> to save. Connect its USB port directly to the MPC.</span></div></li>
-      <li><div><b>Keep raw controller messages away from instruments.</b><span>On the MPC, open Preferences &gt; MIDI/Sync and turn off <strong>Track, Global and Control</strong> for the <code>X-TOUCH_INT</code> input. The Community Edition reads the controller on its own; no Global MIDI Learn or XMM profile is involved. Your other MIDI ports stay as they are.</span></div></li>
-      <li><div><b>Load a project.</b><span>After the Community Edition image boots, create a blank project or load a saved one or your User Template. The controller connects when loading completes. Unplugging and replugging it reconnects.</span></div></li>
+      <li><div><b>Set the X-Touch to MC over USB.</b><span>Hold channel 1 <kbd>Select</kbd> while powering it on. Set encoder 1 to <strong>MC</strong> and encoder 2 to <strong>USB</strong>, then press <kbd>Select</kbd>. Plug it straight into the MPC.</span></div></li>
+      <li><div><b>Keep it away from your instruments.</b><span>In Preferences &gt; MIDI/Sync, turn off <strong>Track, Global and Control</strong> for the <code>X-TOUCH_INT</code> input. No MIDI Learn setup is needed.</span></div></li>
+      <li><div><b>Load a project.</b><span>The controller connects when the project finishes loading, and reconnects if you replug it.</span></div></li>
     </ol>
-    <p class="notice"><strong>Shift</strong> on the X-Touch is the modifier for every combination on this page. Motor following can be turned off with <kbd>Shift</kbd>+<kbd>Flip</kbd>; the setting is remembered.</p>
+    <p class="notice"><strong>Shift</strong> is the modifier for every combination below. <kbd>Shift</kbd>+<kbd>Flip</kbd> turns motor faders on or off.</p>
   </section>
 
   <section id="strips">
     <h2>Channel strips</h2>
-    <p>Eight strips show the current view. In the normal mixer that is eight tracks with names, colors and meters on the scribble strips.</p>
+    <p>The eight strips show the current view. In the mixer, that is eight tracks with names, colors and meters.</p>
     <table>
       <thead><tr><th>Control</th><th>Action</th></tr></thead>
       <tbody>
-        <tr><td>Fader</td><td>Track volume, or the control the current view puts on faders. <small>MPC dB scale: 0 dB default, +6 dB maximum. MIDI track volume is 0 to 127.</small></td></tr>
-        <tr><td>Encoder</td><td>Pan, or the current view's encoder control. Push centers pan.</td></tr>
+        <tr><td>Fader</td><td>Track volume, or whatever the current view puts on faders.</td></tr>
+        <tr><td>Encoder</td><td>Pan, or the current view's encoder control. Push to center pan.</td></tr>
         <tr><td>Select</td><td>Select that track. In Send and Drum Mix the lit Select shows the parent track.</td></tr>
         <tr><td>Mute / Solo</td><td>Toggle mute or solo. In Drum Mix they act on the pad.</td></tr>
         <tr><td>Rec</td><td>Toggle record arm where the track supports it.</td></tr>
@@ -232,7 +232,7 @@
         <tr><td>4</td><td>Send To Track (internal MIDI routing)</td><td>8</td><td>Audio In</td></tr>
       </tbody>
     </table>
-    <p>Turn an encoder to step through the MPC's choices for that field. Faders keep track volume; fields that do not apply show dashes.</p>
+    <p>Turn an encoder to step through that field's choices. Faders stay on track volume. Fields that don't apply show dashes.</p>
   </section>
 
   <section id="plugins">
@@ -274,8 +274,8 @@
           <tr><td>Read/Off</td><td>Automation Read.</td></tr>
           <tr><td>Write</td><td>Automation Write.</td></tr>
           <tr><td>Group</td><td>Automation Off.</td></tr>
-          <tr><td>Enter / Cancel</td><td>The MPC's Enter and Cancel keys. Not every popup accepts them; use the screen when in doubt.</td></tr>
-          <tr><td>Footswitch 1 / 2</td><td>Play / Record, for hands-free looping. Check the X-Touch footswitch polarity setting if a switch reads as pressed at rest.</td></tr>
+          <tr><td>Enter / Cancel</td><td>The MPC's Enter and Cancel. Some popups ignore them.</td></tr>
+          <tr><td>Footswitch 1 / 2</td><td>Play and Record. If a switch acts pressed when released, change the X-Touch footswitch polarity.</td></tr>
         </tbody>
       </table>
     </div>
@@ -288,13 +288,13 @@
     <table>
       <thead><tr><th>Control</th><th>Scrub mode (LED on)</th><th>Data-wheel mode (LED off)</th></tr></thead>
       <tbody>
-        <tr><td>Jog wheel</td><td>Move the position by beats. <kbd>Shift</kbd>+jog moves by ticks.</td><td>The MPC data wheel: one detent is one step on the focused control, on lists, fields and sliders alike.</td></tr>
-        <tr><td>Up / Down</td><td>Cursor up / down.</td><td>One data-wheel step up / down, like the MPC's plus and minus.</td></tr>
-        <tr><td>Left / Right</td><td>Cursor left / right.</td><td>Previous / next control, like Shift+Tab and Tab.</td></tr>
-        <tr><td>Center (Zoom)</td><td>Toggle the arrows between cursor moves and zoom.</td><td>No action yet. Select/confirm from the controller is planned.</td></tr>
+        <tr><td>Jog wheel</td><td>Move by beats. <kbd>Shift</kbd>+jog moves by ticks.</td><td>The MPC data wheel. One click is one step on whatever is selected.</td></tr>
+        <tr><td>Up / Down</td><td>Cursor up / down.</td><td>One step up / down, like the MPC's plus and minus.</td></tr>
+        <tr><td>Left / Right</td><td>Cursor left / right.</td><td>Previous / next control.</td></tr>
+        <tr><td>Center (Zoom)</td><td>Switch the arrows between cursor and zoom.</td><td>No action.</td></tr>
       </tbody>
     </table>
-    <p>In data-wheel mode a fast spin is delivered in short bursts of up to four steps so the MPC's own acceleration behaves. Total travel is kept, so a hard flick can keep moving for a moment after your hand stops.</p>
+    <p>A hard flick can keep moving briefly after you stop.</p>
   </section>
 
   <section id="limits">

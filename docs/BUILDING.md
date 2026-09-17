@@ -47,28 +47,55 @@ Build and run the release component tests:
 
 ```sh
 ./controllers/program-observer/mirror-input-build.sh \
-  "$PWD/build/MPC" /data/mpclearn-model.mouse-r5 600
+  "$PWD/build/MPC" /usr/share/mpclearn/mcu manual
 ./controllers/program-observer/mirror-input-check.sh
+./controllers/program-observer/location-check.sh
 ```
 
 These ARM tests exercise the observer, command mailbox and controller logic
 with component substitutes. They do not run an MPC musical project or prove
-hardware/audio acceptance.
+hardware/audio acceptance. `/usr/share/mpclearn/mcu` is where the image runs
+the package from; the build writes
+`controllers/program-observer/package/mirror-input/`. To create an image of the
+tested release, use its published runtime archive; see
+[firmware preparation](../firmware/README.md).
 
-After checks, rebuild with an unlimited runtime lifetime:
+### Trying a build on your own MPC
+
+A development build has exactly one place on the device: the override folder
+`/data/mpclearn/dev`. The build scripts refuse any other folder, so an
+experiment cannot leave copies, backups or staging folders behind. This needs
+an image made with your own SSH key.
 
 ```sh
 ./controllers/program-observer/mirror-input-build.sh \
-  "$PWD/build/MPC" /data/mpclearn-model.mouse-r5 manual
+  "$PWD/build/MPC" /data/mpclearn/dev manual
 ```
 
-The build writes `controllers/program-observer/package/mirror-input/`.
-To create an image of the tested release, use its published runtime archive;
-see [firmware preparation](../firmware/README.md).
+Copy `package/mirror-input/` to a temporary folder on the MPC, such as
+`/tmp/mcu-dev`, then on the MPC:
+
+```sh
+/usr/share/mpclearn/mcu/mcu-boot-install.sh disable
+/usr/share/mpclearn/mcu/mcu-boot-install.sh override /tmp/mcu-dev
+rm -rf /tmp/mcu-dev
+/usr/share/mpclearn/mcu/mcu-boot-install.sh enable
+reboot
+```
+
+`disable` stops the running session and restores the stock app first; save the
+project before it. The installer checks the package and sets root ownership and
+the shipped modes.
+The override runs only on the image it was installed for; with a different
+image it is ignored and the image runtime runs. Remove it yourself with
+`/usr/share/mpclearn/mcu/mcu-boot-install.sh override clear`. An override is
+built for the override folder, so the exact release bytes are tested only by
+flashing an image.
 
 `firmware/package.py` is a release qualification gate, not a general installer.
 It accepts only the nine files
-pinned by `firmware/runtime.sha256`, with the correct stage and manual lifetime.
+pinned by `firmware/runtime.sha256`, built for the image location with the
+manual lifetime.
 A changed compiler or source may produce different bytes. Such a build is a
 new candidate, not the tested release: do not bypass the package check or update
 pins merely to make it pass. Native lifecycle, controller and playback tests

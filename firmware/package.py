@@ -2,7 +2,7 @@
 """Copy only the accepted package files; never archive a device stage or settings."""
 import hashlib, json, pathlib, shutil, sys
 repo = pathlib.Path(__file__).resolve().parents[1]
-RUNTIME_SOURCE = '1ffe005'  # commit whose tree built the pinned runtime
+RUNTIME_SOURCE = 'c4906a3'  # commit whose tree built the pinned runtime
 source, output = map(pathlib.Path, sys.argv[1:])
 names = 'command-observer.so command-client mirror-input mirror-read config.h mcu-session.sh mcu mpclearn-controls main-button'.split()
 manifest = {}
@@ -22,15 +22,18 @@ qualified = dict((name, digest) for digest, name in
                  (line.split() for line in (repo/'firmware/runtime.sha256').read_text().splitlines()))
 if manifest != qualified:
     raise SystemExit('Not the accepted '+RUNTIME_SOURCE+' package; qualify a new release first')
-if '#define WINDOW_SECONDS 0u' not in (source/'config.h').read_text():
+LOCATION = '/usr/share/mpclearn/mcu'
+config = (source/'config.h').read_text().splitlines()
+if '#define WINDOW_SECONDS 0u' not in config:
     raise SystemExit('Timed verification packages cannot be released')
-if '#define OBSERVER_LIBRARY "/data/mpclearn-model.v0_2_2/command-observer.so"' not in (source/'config.h').read_text():
-    raise SystemExit('Wrong runtime path')
+for line in ['#define OBSERVER_LIBRARY "'+LOCATION+'/command-observer.so"', '#define OBSERVER_LOG "/run/mpclearn/state/volume.state"', '#define COMMAND_PATH "/run/mpclearn/state/command.state"']:
+    if line not in config:
+        raise SystemExit('Not built for the image location: '+line)
 output.mkdir(parents=True, exist_ok=False)
 for name in names + ['session-package.sha256']:
     shutil.copyfile(source/name, output/name)
-for name in ['mcu-boot.sh','mcu-boot-install.sh','mpclearn-boot.service']:
+for name in ['mcu-boot.sh','mcu-boot-install.sh']:
     shutil.copyfile(repo/'controllers/program-observer'/name, output/name)
 shutil.copyfile(repo/'controllers/program-observer/LICENSE', output/'LICENSE')
-(output/'BUILD.json').write_text(json.dumps({'runtime_source':RUNTIME_SOURCE, 'firmware':'3.9.1 Gen1', 'qualified_hardware':'MPC Live II + full X-Touch MC/USB', 'stage':'/data/mpclearn-model.v0_2_2', 'format':'CMD31/MMV17', 'fresh_device_setup':'MCU transport is native; Global MIDI Learn and XMM profiles are not required. Disable raw X-TOUCH_INT musical input; see guide.'}, indent=2)+'\n')
+(output/'BUILD.json').write_text(json.dumps({'runtime_source':RUNTIME_SOURCE, 'firmware':'3.9.1 Gen1', 'qualified_hardware':'MPC Live II + full X-Touch MC/USB', 'location':LOCATION, 'format':'CMD31/MMV17', 'fresh_device_setup':'MCU transport is native; Global MIDI Learn and XMM profiles are not required. Disable raw X-TOUCH_INT musical input; see guide.'}, indent=2)+'\n')
 (output/'payload.sha256').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in sorted(output.iterdir())))

@@ -1,6 +1,6 @@
 # MCU image and release candidate
 
-Runtime source: `81f3086`, native transport with the disconnected-CPU repair, the heavy-project snapshot/meter repair, USB mouse support (pointer enable and wheel to data wheel) and the X-Touch jog/cursor/footswitch control set, CMD31/MMV17.
+Runtime source: `c4906a3`, CMD31/MMV17, run in place from `/usr/share/mpclearn/mcu`.
 Qualified combination: MPC Live II, firmware3.9.1 Gen1, full Behringer X-Touch
 in MC/USB mode. Do not infer other MPC or MCU hardware compatibility from the
 Gen1 image header. This is an unofficial experimental integration.
@@ -8,7 +8,8 @@ Gen1 image header. This is an unofficial experimental integration.
 ## Deliverables
 
 - A **personal** firmware image containing the exact accepted MCU binaries,
-  existing boot/session helpers and a one-time payload installer.
+  which run in place from the image, the boot/session helpers and a boot-time
+  provisioner.
 - A standalone MCU payload without Akai firmware, credentials, settings,
   projects, plug-ins or session data.
 - The source and build instructions. No firmware redistribution permission is
@@ -41,21 +42,21 @@ mkdir -p inputs
 git clone https://github.com/TheKikGen/MPC-LiveXplore.git ../MPC-LiveXplore
 sh firmware/prepare-upstream.sh ../MPC-LiveXplore
 docker build -t mpclearn-build:local .
-# Download mpc3-ce-mcu-1ffe005.tar.gz from this repository's release.
+# Download mpc3-ce-mcu-c4906a3.tar.gz from this repository's release.
 # Verify it against the release SHA256SUMS before extracting.
-mkdir -p artifacts/mcu-1ffe005-v0_2_2
-tar -xzf mpc3-ce-mcu-1ffe005.tar.gz --strip-components=1 -C artifacts/mcu-1ffe005-v0_2_2
+mkdir -p artifacts/mcu-c4906a3-v0_2_3
+tar -xzf mpc3-ce-mcu-c4906a3.tar.gz --strip-components=1 -C artifacts/mcu-c4906a3-v0_2_3
 docker run --rm --network none \
   -v "$PWD:/work" -v "$PWD/inputs:/inputs:ro" \
-  -v "$PWD/artifacts/mcu-1ffe005-v0_2_2:/payload:ro" \
+  -v "$PWD/artifacts/mcu-c4906a3-v0_2_3:/payload:ro" \
   mpclearn-build:local sh firmware/build.sh
 ```
 
 `package.py` accepts only the qualified observer and matched nine-file package.
 It intentionally refuses an arbitrary unqualified runtime. Rebuild that runtime
 with the existing controller build guide and `mirror-input-build.sh`, using the
-exact MPC executable extracted from your own official image and stage
-`/data/mpclearn-model.v0_2_2`, lifetime `manual`.
+exact MPC executable extracted from your own official image, location
+`/usr/share/mpclearn/mcu` and lifetime `manual`.
 
 The image builder reuses TheKikGen's pinned image tool at
 `9be3e63bf03d3467cf06478b48671894dcc634f4`, then independently decodes the output.
@@ -84,22 +85,36 @@ placeholder is replaced locally before the final image verification.
 
 ## First boot and rollback
 
-An early unit invokes `provision.sh` after writable `/data` and `/etc` mount.
-It copies the immutable payload to the versioned `/data` stage, installs the
-existing helper files, and selects the existing MCU session owner. The marker
-makes this one-time: later boots do not copy or hash the payload, and removing
-the boot selector to disable MCU remains effective.
+The runtime runs in place from `/usr/share/mpclearn/mcu`. The image sets its
+modes (executables 0700, observer, `config.h` and manifest 0600, folder 0700);
+`verify.py` asserts them by name and the browser recipes carry the same inode
+bytes. The boot unit starts the session unless `/data/mpclearn/disabled` exists.
 
-An identical existing package is retained, including its session files.
-Known prior images upgrade into the separate v0.2.2 stage, preserving the
-old stages, and replace their boot helpers with this release's versions.
-A disabled installation stays disabled. Unknown revisions and custom stage
-selections require explicit migration. Conflicting package/helper bytes cause installation to stop; stock firmware
-files and user settings are not repaired or replaced speculatively. A previous
-stage selection is retained at `/data/mpclearn-image/previous-stage`.
-Use the [startup/recovery guide](../controllers/program-observer/MCU-START.md)
-for normal disable/start/stop. Reinstalling the official firmware restores its
-root filesystem, but does not erase the MCU payload or user data in `/data`.
+An early unit runs `provision.sh` on every boot, after writable `/data` and
+before the session unit. It checks the payload once per image revision and
+prepares exactly one folder, `/data/mpclearn` (root, 0700), with `session/`,
+`history/` and the `image` marker. It uses an existing `/data/mpclearn` only if
+it is a root-owned 0700 folder; anything else there is refused with a message
+and nothing is changed. It reads, writes and deletes nothing else. A
+development override in `/data/mpclearn/dev` is used only while it matches the
+image; otherwise it is ignored and left in place.
+
+Reinstalling the official firmware restores its root filesystem and leaves
+`/data/mpclearn` (and, on SSH images, `/data/ssh/mpclearn`) behind. Use the
+[startup/recovery guide](../controllers/program-observer/MCU-START.md) for
+normal disable/start/stop.
+
+`provision-check.py` runs the image's provisioner and runtime with the image's
+own ARM userland in an extracted root:
+
+```sh
+docker run --rm --network none --tmpfs /provision-root/run -v "$PWD:/work" \
+  mpclearn-build:local python3 firmware/provision-check.py build/rootfs.final.ext
+```
+
+Add `--recipe DIR` to check the root that a browser recipe produces from the
+official root instead, and `--downgrade OLDER_ROOT` to also run an earlier
+release's provisioner beside `/data/mpclearn`.
 
 **MIDI setup:** MCU uses native MPC commands and does not require Global MIDI
 Learn, a selected XMM profile or the virtual adapter's Control input. In MPC
@@ -108,35 +123,4 @@ prevent raw MCU messages from playing instrument notes or bending pitch. Leave
 other MIDI ports configured as usual. The image preserves user settings.
 Global MIDI Learn and the optional Mini/Launch Control mappings remain a
 separate feature; the MCU image does not install a learned profile.
-See [release notes](../docs/releases/v0.2.2.md) for qualification.
-
-## Hardware qualification
-
-The device owner confirmed that the earlier r2 image flashed successfully, MPC
-Live II booted, and the controller worked with both User Template and blank
-project. The preceding native runtime test confirmed transport and a fader
-with Global MIDI Learn and virtual-input Control disabled. This post-flash
-check does not establish every control, other hardware or sustained workloads.
-
-The r3 image was built from the published site and flashed by the device owner;
-it booted and ran the controller. Under a roughly 40-track synth/drum project
-it clicked during concurrent fader moves. The r4 runtime repairs that load
-(see [performance](../docs/performance.md)); the owner reported no clicks with
-eight faders, unplug/reconnect and Drum Mix on that project. The r4 stage,
-upgrade provisioner and helper replacement are tested in the extracted ARM
-filesystem, and the owner then flashed the r4 image over r3 on the Live II:
-it booted, selected the r4 stage, replaced the boot helpers, connected the
-controller and played the heavy project cleanly.
-
-The v0.2.2 runtime fixes the automation-Write controller freeze and the dashed
-track names, on top of the v0.2.0 USB mouse support and X-Touch jog/cursor/footswitch
-control set on top of that heavy-project runtime. The owner ran it on the Live
-II (build owner-confirmed 2026-09-16): a cursor with no manual step at boot and
-after hot-plug, pointer clicks and drag-select, the mouse and jog wheel driving
-the focused control's data wheel at slow and fast speeds, the cursor cluster's
-data steps and Tab/Shift+Tab focus navigation, and the footswitches as Play and
-Record. The centre-button Enter and one-press Duplicate Sequence are built and
-exercised by the regressions but disabled in the shipped bridge pending an
-asynchronous redesign. The v0.2.2 image itself, its stage and its upgrade have
-not been flashed or booted on hardware; the provisioner and image checks here
-are filesystem-level only.
+See the [release notes](../docs/releases/v0.2.3.md) for known limits.

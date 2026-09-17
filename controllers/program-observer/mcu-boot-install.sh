@@ -1,82 +1,70 @@
 #!/bin/sh
-# Explicit root enable/disable operation; enabling does not restart the live app.
+# Root operations: autostart on/off and the development override. Enabling does
+# not restart the live app. Writes only inside /data/mpclearn.
 set -eu
-here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+image=/usr/share/mpclearn/mcu
+home=/data/mpclearn
+override=$home/dev
 [ "$(id -u)" -eq 0 ] || exit 2
-boot_copy(){
- boot_copy_tmp="$2.tmp.$$"
- trap 'rm -f "$boot_copy_tmp"' EXIT HUP INT TERM
- cp "$1" "$boot_copy_tmp"
- chown 0:0 "$boot_copy_tmp"
- chmod "$3" "$boot_copy_tmp"
- mv -f "$boot_copy_tmp" "$2"
+owned_dir(){ [ -d "$1" ] && [ ! -L "$1" ] && [ "$(stat -c %u "$1")" = 0 ] && [ "$(stat -c %a "$1")" = 700 ]; }
+owned_dir "$home" || { echo "$home is not a root-owned 0700 folder; refusing." >&2;exit 2; }
+executables='command-client mirror-input mirror-read mcu-session.sh mcu mpclearn-controls main-button'
+private='command-observer.so config.h session-package.sha256'
+unit_state(){ systemctl is-active mpclearn-boot.service || :; }
+session_idle(){
+ case "$(unit_state)" in active|activating|deactivating) echo 'Stop mpclearn-boot.service (or disable autostart) first.' >&2;return 1;; esac
+ s=$home/session
+ if [ -f "$s/session.id" ] && [ ! -f "$s/session.revoked" ] && [ -f "$s/session.boot-id" ] && [ "$(cat "$s/session.boot-id")" = "$(cat /proc/sys/kernel/random/boot_id)" ];then
+  echo 'Run mcu stop first.' >&2;return 1
+ fi
 }
+# Explicit developer action only, inside /data/mpclearn.
+retire(){ rm -rf "$1";! [ -e "$1" ]; }
 case "${1:-}" in
  enable)
-  [ "$#" -le 3 ] || exit 2
-  unit_directory=${3:-/usr/lib/systemd/system}
-  case "$unit_directory" in /usr/lib/systemd/system|/etc/systemd/system) ;; *) echo 'Unsupported systemd unit directory.' >&2;exit 2;; esac
-  # The caller owns any required root remount. Never remount from this helper.
-  [ -d "$unit_directory" ] && [ -w "$unit_directory" ] || { echo "Unit directory is not writable: $unit_directory" >&2;exit 1; }
-  state=$(systemctl is-active mpclearn-boot.service || :)
-  case "$state" in active|activating|deactivating) echo 'Disable the existing boot session before changing its selection.' >&2;exit 1;; esac
-  stage=${2:-/data/mpclearn-model.mouse-r5}
-  case "$stage" in /data/mpclearn-model.*) ;; *) exit 2;; esac
-  case "$stage" in *[!a-zA-Z0-9/._-]*) exit 2;; esac
-  [ -d "$stage" ] && [ ! -L "$stage" ] && [ "$(stat -c %u "$stage")" = 0 ] && [ "$(stat -c %a "$stage")" = 700 ] || exit 2
-  (cd "$stage" && sha256sum -c session-package.sha256 && grep -Fqx '#define WINDOW_SECONDS 0u' config.h && grep -Fqx "#define OBSERVER_LIBRARY \"$stage/command-observer.so\"" config.h) || exit 1
-  # Migration of a running pre-boot-integration package must be explicit: its
-  # historical PID files alone cannot identify their originating boot.
-  if [ -f "$stage/session.id" ] && [ ! -f "$stage/session.boot-id" ];then
-   echo 'Selected legacy session needs a verified current-boot stamp before enabling.' >&2;exit 1
-  fi
-  cmp -s "$here/mcu-session.sh" "$stage/mcu-session.sh" || { echo 'Install the matching boot-aware session helper and refresh its package manifest first.' >&2;exit 1; }
-  umask 077
-  mkdir -p /data/mpclearn-boot
-  chown 0:0 /data/mpclearn-boot
-  chmod 700 /data/mpclearn-boot
-  if [ "$here" != /data/mpclearn-boot ];then
-   for file in mcu-boot.sh mcu-boot-install.sh mcu-session.sh;do boot_copy "$here/$file" "/data/mpclearn-boot/$file" 700;done
-   boot_copy "$here/mpclearn-boot.service" /data/mpclearn-boot/mpclearn-boot.service 600
-  fi
-  boot_copy "$here/mpclearn-boot.service" "$unit_directory/mpclearn-boot.service" 644
-  mkdir -p "$unit_directory/multi-user.target.wants"
-  chown 0:0 "$unit_directory/multi-user.target.wants"
-  chmod 755 "$unit_directory/multi-user.target.wants"
-  ln -sfn ../mpclearn-boot.service "$unit_directory/multi-user.target.wants/mpclearn-boot.service"
-  if [ "$unit_directory" != /etc/systemd/system ];then
-   # Retire this installer's old overlay-only unit, which otherwise shadows
-   # the early-visible version after /etc mounts.
-   rm -f /etc/systemd/system/multi-user.target.wants/mpclearn-boot.service /etc/systemd/system/mpclearn-boot.service
-  fi
-  printf '%s\n' "$stage" >/etc/mpclearn-boot-stage.tmp
-  chown 0:0 /etc/mpclearn-boot-stage.tmp
-  chmod 600 /etc/mpclearn-boot-stage.tmp
-  mv /etc/mpclearn-boot-stage.tmp /etc/mpclearn-boot-stage
-  systemctl daemon-reload
-  echo "Enabled next-boot controller session: $stage; unit/link in $unit_directory. Current app unchanged.";;
+  [ "$#" -eq 1 ] || exit 2
+  rm -f "$home/disabled"
+  echo 'Autostart enabled from the next boot. Current app unchanged.';;
  disable)
   [ "$#" -eq 1 ] || exit 2
-  state=$(systemctl is-active mpclearn-boot.service || :)
+  state=$(unit_state)
   case "$state" in activating|deactivating) echo 'Boot transition still active; wait for its bounded completion.' >&2;exit 1;; esac
-  stage=
-  if [ -f /etc/mpclearn-boot-stage ];then
-   SERVICE_RESULT=success /data/mpclearn-boot/mcu-boot.sh recover
-   IFS= read -r stage </etc/mpclearn-boot-stage
-   rm /etc/mpclearn-boot-stage
-  fi
+  : >"$home/disabled"
   recovery=0
-  if [ "$state" = active ];then
-   [ -n "$stage" ] || { echo 'Active boot session has no validated selector; stop refused.' >&2;exit 1; }
-   "$stage/mcu" stop || recovery=$?
-  fi
-  # A vendor-directory link can remain on the read-only root. The selector is
-  # the unit's native ConditionPathExists gate; removing it disables boot
-  # execution without a hidden root remount.
+  if [ "$state" = active ];then "$here/mcu-boot.sh" stop || recovery=$?;fi
   systemctl stop mpclearn-boot.service
-  # An incomplete receipt is not a failed stock restoration. Finish disabling
-  # after the unit's children are gone, and retry only owned cleanup, not start.
-  if [ "$recovery" -ne 0 ];then SERVICE_RESULT=exit-code /data/mpclearn-boot/mcu-boot.sh recover "$stage";fi
-  echo 'Boot selector removed; early unit/link remain dormant. Stock acvs retained.';;
- *) echo 'mcu-boot-install.sh enable [MATCHED_STAGE] [UNIT_DIRECTORY]|disable' >&2;exit 2;;
+  # Incomplete receipt: retry only owned cleanup once the unit's children are gone.
+  if [ "$recovery" -ne 0 ];then SERVICE_RESULT=exit-code "$here/mcu-boot.sh" recover;fi
+  echo 'Autostart disabled. Stock acvs retained.';;
+ override)
+  [ "$#" -eq 2 ] || exit 2
+  session_idle || exit 1
+  retire "$override.next";retire "$override.old"
+  if [ "$2" = clear ];then retire "$override";echo 'Override removed.';exit 0;fi
+  source=$2
+  [ -d "$source" ] && [ ! -L "$source" ] || { echo "Not a package folder: $source" >&2;exit 2; }
+  for name in $executables $private;do [ -f "$source/$name" ] && [ ! -L "$source/$name" ] || { echo "Missing package file: $name" >&2;exit 1; };done
+  (cd "$source" && sha256sum -c session-package.sha256 >/dev/null) || { echo 'Package manifest does not verify.' >&2;exit 1; }
+  for name in $executables command-observer.so config.h;do
+   awk -v n="$name" '$2==n{f=1}END{exit !f}' "$source/session-package.sha256" || { echo "Manifest does not cover $name." >&2;exit 1; }
+  done
+  for line in '#define WINDOW_SECONDS 0u' "#define OBSERVER_LIBRARY \"$override/command-observer.so\"" '#define OBSERVER_LOG "/run/mpclearn/state/volume.state"' '#define COMMAND_PATH "/run/mpclearn/state/command.state"';do
+   grep -Fqx "$line" "$source/config.h" || { echo "Package was not built for $override (config.h lacks: $line)." >&2;exit 1; }
+  done
+  umask 077
+  mkdir -m 700 "$override.next"
+  for name in $executables $private;do cp "$source/$name" "$override.next/$name";done
+  # Shipped owner/modes; a copied tar keeps the build machine's.
+  chown 0:0 "$override.next" "$override.next"/*
+  for name in $executables;do chmod 700 "$override.next/$name";done
+  for name in $private;do chmod 600 "$override.next/$name";done
+  (cd "$override.next" && sha256sum -c session-package.sha256 >/dev/null)
+  set -- $(sha256sum "$image/payload.sha256")
+  printf '%s\n' "$1" >"$override.next/for-image"
+  [ ! -e "$override" ] || mv "$override" "$override.old"
+  mv "$override.next" "$override"
+  retire "$override.old"
+  echo "Override installed for this image. Reboot, or run $override/mcu start.";;
+ *) echo 'mcu-boot-install.sh enable|disable|override PACKAGE_DIR|override clear' >&2;exit 2;;
 esac

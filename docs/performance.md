@@ -123,7 +123,8 @@ one project and one passage, not an all-features stress test, a long-session
 guarantee, a controller-absent or reconnect comparison, or a flashed image.
 
 The r4 release package was built from commit 9000390 for stage
-`/data/mpclearn-model.mcu-perf-r4`. Its bridge, client, reader, adapter,
+`/data/mpclearn-model.mcu-perf-r4` (historical: releases since v0.2.3 run the
+package from the image instead of a stage). Its bridge, client, reader, adapter,
 button helper and session script were byte-identical to the tested candidate;
 its observer differed only in the compiled stage path (three bytes) and the
 resulting build-id note. `firmware/runtime.sha256` pinned those nine files at

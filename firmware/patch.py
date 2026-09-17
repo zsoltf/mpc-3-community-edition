@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Add the frozen MCU payload and early boot entries to the SSH-patched rootfs."""
+"""Add the frozen MCU payload, with its shipped modes, and early boot entries to the SSH-patched rootfs."""
 import hashlib, json, os, pathlib, subprocess, sys, tempfile
 os.environ['E2FSPROGS_FAKE_TIME'] = '1783599420'
 repo = pathlib.Path(__file__).resolve().parents[1]
@@ -12,14 +12,22 @@ def debug(command, write=True):
         raise RuntimeError(r.stderr)
     return r
 
+PAYLOAD = '/usr/share/mpclearn/mcu'
+# The runtime runs in place from the image, so the image carries the shipped
+# modes; the browser recipes copy these inode bytes verbatim.
+MODES = dict.fromkeys('command-client mirror-input mirror-read mcu-session.sh mcu mpclearn-controls main-button mcu-boot.sh mcu-boot-install.sh'.split(), 0o100700)
+MODES.update(dict.fromkeys('command-observer.so config.h session-package.sha256'.split(), 0o100600))
+MODES.update(dict.fromkeys('LICENSE BUILD.json payload.sha256'.split(), 0o100644))
+
 def directory(path):
     if 'Inode:' in debug('stat '+path, False).stdout:
         return
     parent = str(pathlib.PurePosixPath(path).parent)
     directory(parent)
     debug('mkdir '+path)
-    for k,v in [('mode',0o40755),('uid',0),('gid',0)]: debug(f'set_inode_field {path} {k} {v}')
-    added[path] = {'type':'directory','mode':0o40755}
+    mode = 0o40700 if path == PAYLOAD else 0o40755
+    for k,v in [('mode',mode),('uid',0),('gid',0)]: debug(f'set_inode_field {path} {k} {v}')
+    added[path] = {'type':'directory','mode':mode}
 
 def file(source, destination, mode=0o100644):
     if 'Inode:' in debug('stat '+destination, False).stdout:
@@ -34,9 +42,10 @@ def symlink(path, target):
     debug(f'symlink {path} {target}')
     added[path] = {'type':'symlink','target':target}
 
+if {p.name for p in payload.iterdir()} != set(MODES): raise RuntimeError('Unexpected payload file set')
 for p in sorted(payload.iterdir()):
     if not p.is_file() or p.is_symlink(): raise RuntimeError('Only plain payload files allowed')
-    file(p, '/usr/share/mpclearn/mcu/'+p.name)
+    file(p, PAYLOAD+'/'+p.name, MODES[p.name])
 file(repo/'firmware/provision.sh', '/usr/libexec/mpclearn/provision.sh', 0o100755)
 file(repo/'firmware/mpclearn-provision.service', '/usr/lib/systemd/system/mpclearn-provision.service')
 with tempfile.TemporaryDirectory() as temp:

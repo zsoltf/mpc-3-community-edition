@@ -14,9 +14,17 @@ old, new = map(inventory, sys.argv[1:3])
 expected = json.loads(pathlib.Path(sys.argv[3]).read_text())
 rootfs = sys.argv[4]
 base = '/usr/share/mpclearn/mcu/'
-files = 'command-observer.so command-client mirror-input mirror-read config.h mcu-session.sh mcu mpclearn-controls main-button session-package.sha256 mcu-boot.sh mcu-boot-install.sh mpclearn-boot.service LICENSE BUILD.json payload.sha256'.split()
-required = {base+n for n in files} | {'/usr/libexec/mpclearn/provision.sh','/usr/lib/systemd/system/mpclearn-provision.service','/usr/lib/systemd/system/mpclearn-boot.service','/usr/lib/systemd/system/multi-user.target.wants/mpclearn-provision.service','/usr/lib/systemd/system/multi-user.target.wants/mpclearn-boot.service'}
+# Shipped modes, stated here independently of patch.py: the image runs these
+# files in place, so a wrong mode is a runtime that cannot start.
+executable = 'command-client mirror-input mirror-read mcu-session.sh mcu mpclearn-controls main-button mcu-boot.sh mcu-boot-install.sh'.split()
+private = 'command-observer.so config.h session-package.sha256'.split()
+public = 'LICENSE BUILD.json payload.sha256'.split()
+modes = {base+n:0o100700 for n in executable} | {base+n:0o100600 for n in private} | {base+n:0o100644 for n in public}
+modes |= {base.rstrip('/'):0o40700, '/usr/libexec/mpclearn/provision.sh':0o100755, '/usr/lib/systemd/system/mpclearn-provision.service':0o100644, '/usr/lib/systemd/system/mpclearn-boot.service':0o100644}
+required = {base+n for n in executable+private+public} | {'/usr/libexec/mpclearn/provision.sh','/usr/lib/systemd/system/mpclearn-provision.service','/usr/lib/systemd/system/mpclearn-boot.service','/usr/lib/systemd/system/multi-user.target.wants/mpclearn-provision.service','/usr/lib/systemd/system/multi-user.target.wants/mpclearn-boot.service'}
 assert {p for p,v in expected.items() if v['type'] != 'directory'} == required
+for name, mode in modes.items():
+    assert int(dict(x.split(':',1) for x in new[name].split())['mode'],8) == mode, ('shipped mode',name,oct(mode))
 assert new.keys()-old.keys() == expected.keys()
 assert not old.keys()-new.keys()
 parents = {}
@@ -47,4 +55,4 @@ with tempfile.TemporaryDirectory() as temp:
             subprocess.run(['debugfs','-R',f'dump {name} {output}',rootfs],check=True,capture_output=True)
             assert hashlib.sha256(output.read_bytes()).hexdigest()==spec['sha256'],name
         if spec['type'] != 'directory': assert fields['links']=='1'
-print('PASS: exact MCU payload bytes/modes/owners; only added paths and parent links changed; stock MPC and all other stock content unchanged')
+print('PASS: exact MCU payload bytes/owners and shipped modes (executables 0700, payload folder 0700); only added paths and parent links changed; stock MPC and all other stock content unchanged')

@@ -5,13 +5,13 @@ Wants=acvs.service
 # session owner synchronously stops that service during its admission.
 After=az01-network-midi.service az01-script-runner.service az01-usbsata-fixer.service touch-fw-update.service xmos-update.service
 RequiresMountsFor=/data /media/az01-internal /etc
-ConditionPathExists=/etc/mpclearn-boot-stage
+ConditionPathExists=!/data/mpclearn/disabled
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/data/mpclearn-boot/mcu-boot.sh start
-ExecStopPost=/data/mpclearn-boot/mcu-boot.sh recover
+ExecStart=/usr/share/mpclearn/mcu/mcu-boot.sh start
+ExecStopPost=/usr/share/mpclearn/mcu/mcu-boot.sh recover
 TimeoutStartSec=90
 TimeoutStopSec=90
 KillMode=control-group

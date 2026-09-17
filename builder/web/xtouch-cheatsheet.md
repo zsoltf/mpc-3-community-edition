@@ -1,32 +1,28 @@
 # X-Touch cheat sheet
 
-MPC 3 Community Edition, Mackie Control feature. Only the full-size Behringer
-X-Touch in MC mode over USB is supported right now. X-Touch Compact, One and
-Extender, other Mackie Control surfaces and HUI are not. The controller
-connects on its own once a project is loaded and follows the MPC: motor faders,
-names, colors and meters track whatever changes on the screen.
+For the full-size Behringer X-Touch in MC mode over USB. It connects when a
+project loads and follows the MPC: faders, names, colors and meters update as
+you work.
 
 ## Setup
 
-1. Put the X-Touch in MC mode over USB. Power it off, hold channel 1 Select
-   while powering on, set encoder 1 to MC and encoder 2 to USB, press Select
-   to save. Connect its USB port directly to the MPC.
-2. On the MPC, open Preferences > MIDI/Sync and turn off Track, Global and
-   Control for the `X-TOUCH_INT` input. No Global MIDI Learn or XMM profile is
-   involved; other MIDI ports stay as they are.
-3. Load a project: create a blank one, or load a saved project or your User
-   Template. The controller connects when loading completes. Unplugging and
-   replugging it reconnects.
+1. Set the X-Touch to MC over USB. Hold channel 1 Select while powering it
+   on, set encoder 1 to MC and encoder 2 to USB, then press Select. Plug it
+   straight into the MPC.
+2. In Preferences > MIDI/Sync, turn off Track, Global and Control for the
+   `X-TOUCH_INT` input. No MIDI Learn setup is needed.
+3. Load a project. The controller connects when it finishes loading, and
+   reconnects if you replug it.
 
-Shift on the X-Touch is the modifier for every combination below. Shift+Flip
-turns motor following off or on; the setting is remembered.
+Shift is the modifier for every combination below. Shift+Flip turns motor
+faders on or off.
 
 ## Channel strips
 
 | Control | Action |
 | --- | --- |
-| Fader | Track volume, or the control the current view puts on faders. MPC dB scale: 0 dB default, +6 dB maximum. MIDI track volume is 0 to 127. |
-| Encoder | Pan, or the current view's encoder control. Push centers pan. |
+| Fader | Track volume, or whatever the current view puts on faders. |
+| Encoder | Pan, or the current view's encoder control. Push to center pan. |
 | Select | Select that track. In Send and Drum Mix the lit Select shows the parent track. |
 | Mute / Solo | Toggle mute or solo. In Drum Mix they act on the pad. |
 | Rec | Toggle record arm where the track supports it. |
@@ -93,8 +89,8 @@ volume; fields that do not apply show dashes.
 | Read/Off | Automation Read. |
 | Write | Automation Write. |
 | Group | Automation Off. |
-| Enter / Cancel | The MPC's Enter and Cancel keys. Not every popup accepts them; use the screen when in doubt. |
-| Footswitch 1 / 2 | Play / Record, for hands-free looping. Check the X-Touch footswitch polarity setting if a switch reads as pressed at rest. |
+| Enter / Cancel | The MPC's Enter and Cancel. Some popups ignore them. |
+| Footswitch 1 / 2 | Play and Record. If a switch acts pressed when released, change the X-Touch footswitch polarity. |
 
 The position display shows bars, beats and ticks.
 
@@ -106,15 +102,12 @@ loads or the controller reconnects.
 
 | Control | Scrub mode (LED on) | Data-wheel mode (LED off) |
 | --- | --- | --- |
-| Jog wheel | Move the position by beats. Shift+jog moves by ticks. | The MPC data wheel: one detent is one step on the focused control, on lists, fields and sliders alike. |
-| Up / Down | Cursor up / down. | One data-wheel step up / down, like the MPC's plus and minus. |
-| Left / Right | Cursor left / right. | Previous / next control, like Shift+Tab and Tab. |
-| Center (Zoom) | Toggle the arrows between cursor moves and zoom. | No action yet. Select/confirm from the controller is planned. |
+| Jog wheel | Move by beats. Shift+jog moves by ticks. | The MPC data wheel. One click is one step on whatever is selected. |
+| Up / Down | Cursor up / down. | One step up / down, like the MPC's plus and minus. |
+| Left / Right | Cursor left / right. | Previous / next control. |
+| Center (Zoom) | Switch the arrows between cursor and zoom. | No action. |
 
-In data-wheel mode a fast spin is delivered in short bursts of up to four
-steps so the MPC's own acceleration behaves. Total travel is kept, so a hard
-flick can keep moving for a moment after your hand stops. A step the MPC
-refuses while it is busy is dropped, like other controller commands.
+A hard flick can keep moving briefly after you stop.
 
 ## Not available
 
