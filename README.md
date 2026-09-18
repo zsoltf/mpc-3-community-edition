@@ -1,3 +1,5 @@
+https://github.com/user-attachments/assets/d2c28bb4-6c1e-4adf-b646-ca75fded7a5c
+
 # MPC 3 Community Edition
 
 A community build of the MPC 3.9.1 firmware that adds X-Touch control and USB
