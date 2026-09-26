@@ -89,6 +89,7 @@
     .page { padding: 40px 0 8px; }
     .page h1 { font-size: clamp(26px, 3.4vw, 34px); font-weight: 700; letter-spacing: -.025em; line-height: 1.15; margin: 0 0 8px; }
     .page .lead { margin: 0; color: var(--ink-2); font-size: 16px; max-width: 70ch; }
+    @media (min-width: 641px) { .lead-build { display: block; } }
     .page .lead a { color: var(--ink); text-decoration-thickness: 1px; text-underline-offset: 3px; }
     .page .lead a:hover { color: var(--accent); }
 
@@ -128,6 +129,7 @@
     .diagnostic-help li { margin: 5px 0; }
     .install-list { margin: 8px 0 0; padding-left: 20px; color: var(--ink-2); font-size: 14.5px; max-width: 72ch; }
     .install-list li { margin: 5px 0; }
+    .install-list code { overflow-wrap: anywhere; }
     @media (max-width: 640px) { .page { padding-top: 28px; } ol.procedure > li { grid-template-columns: 1fr; gap: 8px; padding: 18px 16px; } .choices { display: grid; } }
 
     /* Notes */
@@ -169,7 +171,7 @@
   <section class="page" id="builder">
     <div class="wrap">
       <h1>Build your MPC 3 Community Edition image</h1>
-      <p class="lead">Adds X-Touch control, USB mouse support and Shift+wheel note selection to MPC 3.9.1. The image is built in your browser from Akai's official file. Nothing is uploaded.</p>
+      <p class="lead">Adds X-Touch control, USB mouse support and Shift+wheel note selection to MPC 3.9.1. <span class="lead-build">The image is built in your browser from Akai's official file. Nothing is uploaded.</span></p>
 
       <div class="panel">
         <ol class="procedure">
@@ -235,7 +237,7 @@
             <div>
               <h3>Install on your MPC</h3>
               <ol class="install-list">
-                <li>Copy the generated CE <code>-update.img</code> to the USB drive, outside any folders. Keep only the intended update image there, and remove a duplicate <code>(1)</code> so its name ends in <code>-update.img</code>.</li>
+                <li>Copy <code id="installImageName">MPC-3.9.1-Gen1-CE-v0.2.6-update.img</code> to the USB drive, outside any folders. Keep only this update image there. If your browser added <code>(1)</code>, remove it to match this filename.</li>
                 <li>Safely eject the USB drive and connect it to the MPC. Save your work, back up important projects, and connect the power adapter.</li>
                 <li>Open <b>Menu &gt; Preferences &gt; Info &gt; Update &gt; USB Drive Update</b>, choose the image, and confirm <b>Update</b> or reinstall. Let the MPC restart without turning off its power.</li>
                 <li>After restart, check that <b>Preferences &gt; Info</b> shows <em>MPC CE v0.2.6</em>. See Akai's <a href="https://support.akaipro.com/en/support/solutions/articles/69000816160-akai-pro-mpc-firmware-update-walkthrough" rel="noopener noreferrer">firmware update walkthrough</a> for the stock update screens.</li>
@@ -364,6 +366,7 @@ keyPicker.onchange = () => {
 };
 clearKey.onclick = () => { invalidateResult(); selectedKey = null; keyPicker.value = ''; setKeyStatus(); };
 imageTypes.forEach(input => input.onchange = () => {
+  document.querySelector('#installImageName').textContent = diagnosticsSelected() ? diagnosticImageName : standardImageName;
   invalidateResult();
   if (diagnosticsSelected()) { selectedKey = null; keyPicker.value = ''; }
   setKeyStatus();
