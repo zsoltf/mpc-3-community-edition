@@ -1,9 +1,9 @@
-# MCU image and release candidate
+# MCU image and release
 
-Runtime source: `7fce0eb`, CMD31/MMV17, run in place from `/usr/share/mpclearn/mcu`.
-Qualified combination: MPC Live II, firmware3.9.1 Gen1, full Behringer X-Touch
-in MC/USB mode. Do not infer other MPC or MCU hardware compatibility from the
-Gen1 image header. This is an unofficial experimental integration.
+Release identity: `v0.2.5`, CMD31/MMV17, run in place from
+`/usr/share/mpclearn/mcu`. It supports MPC Live II firmware 3.9.1 and the
+full-size Behringer X-Touch in MC mode over USB. Do not infer other MPC or MCU
+hardware compatibility from the Gen1 image header.
 
 ## Deliverables
 
@@ -42,14 +42,17 @@ mkdir -p inputs
 git clone https://github.com/TheKikGen/MPC-LiveXplore.git ../MPC-LiveXplore
 sh firmware/prepare-upstream.sh ../MPC-LiveXplore
 docker build -t mpclearn-build:local .
-# Download mpc3-ce-mcu-7fce0eb.tar.gz from this repository's release.
-# Verify it against the release SHA256SUMS before extracting.
-mkdir -p artifacts/mcu-7fce0eb-v0_2_4
-tar -xzf mpc3-ce-mcu-7fce0eb.tar.gz --strip-components=1 -C artifacts/mcu-7fce0eb-v0_2_4
-docker run --rm --network none \
-  -v "$PWD:/work" -v "$PWD/inputs:/inputs:ro" \
-  -v "$PWD/artifacts/mcu-7fce0eb-v0_2_4:/payload:ro" \
-  mpclearn-build:local sh firmware/build.sh
+# Extract the pristine MPC once, then create the exact separate CE executable.
+docker run --rm --network none -v "$PWD:/work" -w /work mpclearn-build:local sh -ec '
+python3 scripts/image_format.py inputs/MPC-3.9.1-Gen1-update.img build/rootfs.original.ext
+debugfs -R "dump /usr/bin/MPC /work/build/MPC" build/rootfs.original.ext
+'
+python3 firmware/patch-mpc-ce.py build/MPC build/v0_2_5/MPC
+./controllers/program-observer/mirror-input-build.sh \
+  "$PWD/build/v0_2_5/MPC" /usr/share/mpclearn/mcu manual
+# After the component and native qualification gates, maintainers build the
+# local release roots, images and three browser recipes together:
+sh firmware/build-v0.2.5.sh
 ```
 
 `package.py` accepts only the qualified observer and matched nine-file package.
@@ -66,7 +69,8 @@ license or require users to obtain it from upstream; do not silently relicense i
 Generated files are under `artifacts/`; the USB image name retains `-update.img`.
 Verification checks the exact official input, XZ/SHA1 image structure, geometry,
 filesystem consistency, full semantic delta, each payload byte/mode/owner and
-unchanged stock MPC executable. It does not prove the image flashed or booted.
+the exact nine-byte CE label delta in `/usr/bin/MPC`, with its stock metadata
+preserved. It does not prove the image flashed or booted.
 
 ### Browser patch variants
 
@@ -79,9 +83,24 @@ compare its inventory: only those three paths may differ from the enabled root.
 Generate that recipe with `make-patch.py --no-ssh`; its manifest must declare
 `ssh_enabled: false`, `key_offset: -1`, and an empty `key_placeholder`.
 
-The browser embeds both verified recipes. No selected key means the disabled
-recipe. A valid selected Ed25519 public key selects the enabled recipe, whose
-placeholder is replaced locally before the final image verification.
+The browser embeds the two normal verified recipes. No selected key means the
+disabled recipe. A valid selected Ed25519 public key selects the enabled recipe,
+whose placeholder is replaced locally before the final image verification.
+
+The separate USB diagnostics choice is a third no-SSH recipe. It overlays the
+exact current no-SSH root with one bounded current-report ARMhf collector, an independent
+systemd unit and its `multi-user.target.wants` link. Maintainers generate it
+without rebuilding the released runtime:
+
+```sh
+sh firmware/build-diagnostic-root.sh
+```
+
+`diagnostics-verify.py` compares every pre-existing filesystem inventory entry
+with the current root and checks the three added paths, modes, bytes and unit
+contract. `diagnostics-test.py` exercises the bounded report/export failure
+fixtures in Linux. A native MPC flash/reboot is still required to qualify boot,
+input, process-memory and USB behavior.
 
 ## First boot and rollback
 
@@ -123,4 +142,4 @@ prevent raw MCU messages from playing instrument notes or bending pitch. Leave
 other MIDI ports configured as usual. The image preserves user settings.
 Global MIDI Learn and the optional Mini/Launch Control mappings remain a
 separate feature; the MCU image does not install a learned profile.
-See the [release notes](../docs/releases/v0.2.4.md) for known limits.
+See the [release notes](../docs/releases/v0.2.5.md) for known limits.

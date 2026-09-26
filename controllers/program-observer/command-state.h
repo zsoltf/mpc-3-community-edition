@@ -30,7 +30,7 @@ static inline const char *command_error_name(unsigned code){
 }
 enum {CA_NONE,CA_ENROLL_INCREMENT,CA_ENROLL_DECREMENT,CA_LANE_GUARD,CA_CONSTRUCTOR_OWNER,CA_SOURCE_REENTRY};
 static inline uint32_t command_admission_detail(unsigned guard,unsigned result,unsigned site){return (site<<16)|(guard<<8)|(result&255u);}
-enum {JOG_BAR=CF_COUNT,JOG_BEAT,JOG_PULSE,GLOBAL_SAVE,GLOBAL_ZOOM_IN,GLOBAL_ZOOM_OUT,GLOBAL_ZOOM_UP,GLOBAL_ZOOM_DOWN,GLOBAL_KEY_ENTER,GLOBAL_KEY_CANCEL,GLOBAL_KEY_LEFT,GLOBAL_KEY_UP,GLOBAL_KEY_RIGHT,GLOBAL_KEY_DOWN,GLOBAL_RECORD_TOGGLE,GLOBAL_CLICK_TOGGLE,GLOBAL_LOOP_TOGGLE,GLOBAL_PAGE_MAIN,GLOBAL_PAGE_ARRANGE,GLOBAL_PAGE_CLIP,GLOBAL_PAGE_MIX,GLOBAL_PAGE_PAD_MIX,GLOBAL_PAGE_TRACK_EDIT,GLOBAL_PAGE_SAMPLE_EDIT,GLOBAL_PAGE_STEP,EFFECT_PARAMETER,EFFECT_ENABLE,QLINK_VALUE,QLINK_MODE,IO_PARAMETER,EFFECT_CHOOSER,GLOBAL_TRACK_TYPE,GLOBAL_TRACK_NEW,GLOBAL_PLAY,GLOBAL_STOP,GLOBAL_UNDO,GLOBAL_REDO,JOG_DATA,GLOBAL_KEY_TAB,GLOBAL_KEY_BACKTAB,JOG_PRESS,GLOBAL_SEQ_DUPLICATE};
+enum {JOG_BAR=CF_COUNT,JOG_BEAT,JOG_PULSE,GLOBAL_SAVE,GLOBAL_ZOOM_IN,GLOBAL_ZOOM_OUT,GLOBAL_ZOOM_UP,GLOBAL_ZOOM_DOWN,GLOBAL_KEY_ENTER,GLOBAL_KEY_CANCEL,GLOBAL_KEY_LEFT,GLOBAL_KEY_UP,GLOBAL_KEY_RIGHT,GLOBAL_KEY_DOWN,GLOBAL_RECORD_TOGGLE,GLOBAL_CLICK_TOGGLE,GLOBAL_LOOP_TOGGLE,GLOBAL_PAGE_MAIN,GLOBAL_PAGE_ARRANGE,GLOBAL_PAGE_CLIP,GLOBAL_PAGE_MIX,GLOBAL_PAGE_PAD_MIX,GLOBAL_PAGE_TRACK_EDIT,GLOBAL_PAGE_SAMPLE_EDIT,GLOBAL_PAGE_STEP,EFFECT_PARAMETER,EFFECT_ENABLE,QLINK_VALUE,QLINK_MODE,IO_PARAMETER,EFFECT_CHOOSER,GLOBAL_TRACK_TYPE,GLOBAL_TRACK_NEW,GLOBAL_PLAY,GLOBAL_STOP,GLOBAL_UNDO,GLOBAL_REDO,JOG_DATA,GLOBAL_KEY_TAB,GLOBAL_KEY_BACKTAB,JOG_PRESS,GLOBAL_SEQ_DUPLICATE,NOTE_SELECT};
 static inline int command_chooser(unsigned op){return op==EFFECT_CHOOSER;}
 static inline int command_io(unsigned op){return op==IO_PARAMETER;}
 static inline int command_qlink_mode(unsigned op){return op==QLINK_MODE;}
@@ -94,6 +94,8 @@ static inline int command_jog(unsigned op){return op>=JOG_BAR&&op<=JOG_PULSE;}
  * transport jog: it never reaches the AsyncSequencer facade, so it shares no
  * predicate with command_jog and takes its own service lane. */
 static inline int command_data_wheel(unsigned op){return op==JOG_DATA;}
+static inline int command_note_select(unsigned op){return op==NOTE_SELECT;}
+static inline int command_counted_focus(unsigned op){return command_data_wheel(op)||command_note_select(op);}
 /* The MPC data wheel's own push, delivered through the same focus controller as
  * the steps: UIFocusController vtable slot 5 (35c2648), the controller-side
  * press entry, called as (controller, int buttonId). It is not a key press: it
@@ -109,7 +111,7 @@ static inline int command_focus_press(unsigned op){return op==JOG_PRESS;}
 /* Both focus-controller operations reach the app through the same active
  * controller and the same one-call-per-request shape, so they share a single
  * flight. */
-static inline int command_focus_controller(unsigned op){return command_data_wheel(op)||command_focus_press(op);}
+static inline int command_focus_controller(unsigned op){return command_counted_focus(op)||command_focus_press(op);}
 /* The signed data-wheel count one ProcessDataWheelRotation call may carry. The
  * app's own accelerator scales whatever delta it is handed and truncates the
  * result with sxtb, so a fast spin must not be passed through verbatim. Shared

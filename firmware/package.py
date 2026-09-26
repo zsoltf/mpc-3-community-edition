@@ -2,7 +2,7 @@
 """Copy only the accepted package files; never archive a device stage or settings."""
 import hashlib, json, pathlib, shutil, sys
 repo = pathlib.Path(__file__).resolve().parents[1]
-RUNTIME_SOURCE = '7fce0eb'  # commit whose tree built the pinned runtime
+RUNTIME_SOURCE = 'v0.2.5-candidate'  # local identity; no source commit is claimed before acceptance
 source, output = map(pathlib.Path, sys.argv[1:])
 names = 'command-observer.so command-client mirror-input mirror-read config.h mcu-session.sh mcu mpclearn-controls main-button'.split()
 manifest = {}
@@ -35,5 +35,5 @@ for name in names + ['session-package.sha256']:
 for name in ['mcu-boot.sh','mcu-boot-install.sh']:
     shutil.copyfile(repo/'controllers/program-observer'/name, output/name)
 shutil.copyfile(repo/'controllers/program-observer/LICENSE', output/'LICENSE')
-(output/'BUILD.json').write_text(json.dumps({'runtime_source':RUNTIME_SOURCE, 'firmware':'3.9.1 Gen1', 'qualified_hardware':'MPC Live II + full X-Touch MC/USB', 'location':LOCATION, 'format':'CMD31/MMV17', 'fresh_device_setup':'MCU transport is native; Global MIDI Learn and XMM profiles are not required. Disable raw X-TOUCH_INT musical input; see guide.'}, indent=2)+'\n')
+(output/'BUILD.json').write_text(json.dumps({'runtime_source':RUNTIME_SOURCE, 'firmware':'3.9.1 Gen1', 'qualified_hardware':'MPC Live II + full X-Touch MC/USB (v0.2.4 baseline)', 'candidate_features':'Built-in Shift+wheel note selection; native acceptance pending', 'location':LOCATION, 'format':'CMD31/MMV17', 'fresh_device_setup':'MCU transport is native; Global MIDI Learn and XMM profiles are not required. Disable raw X-TOUCH_INT musical input; see guide.'}, indent=2)+'\n')
 (output/'payload.sha256').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in sorted(output.iterdir())))

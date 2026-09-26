@@ -32,16 +32,37 @@ type patchSpan struct {
 	PatchOffset int64 `json:"patch_offset"`
 }
 
-func loadPatch(sshEnabled bool) (patchManifest, []byte, []byte, error) {
-	variant := "no-ssh"
-	if sshEnabled {
-		variant = "ssh"
+type recipeKind string
+
+const (
+	recipeNoSSH       recipeKind = "no-ssh"
+	recipeSSH         recipeKind = "ssh"
+	recipeDiagnostics recipeKind = "diagnostics"
+)
+
+func selectRecipe(ownerPublicKey []byte, diagnostics bool) (recipeKind, error) {
+	if diagnostics {
+		if len(ownerPublicKey) != 0 {
+			return "", errors.New("the diagnostic image keeps SSH disabled; remove the owner key")
+		}
+		return recipeDiagnostics, nil
 	}
-	manifestBytes, err := assets.ReadFile("resources/" + variant + "/manifest.json")
+	if len(ownerPublicKey) != 0 {
+		return recipeSSH, nil
+	}
+	return recipeNoSSH, nil
+}
+
+func loadPatch(variant recipeKind) (patchManifest, []byte, []byte, error) {
+	sshEnabled := variant == recipeSSH
+	if variant != recipeNoSSH && variant != recipeSSH && variant != recipeDiagnostics {
+		return patchManifest{}, nil, nil, errors.New("unknown image recipe")
+	}
+	manifestBytes, err := assets.ReadFile("resources/" + string(variant) + "/manifest.json")
 	if err != nil {
 		return patchManifest{}, nil, nil, err
 	}
-	patch, err := assets.ReadFile("resources/" + variant + "/patch.bin")
+	patch, err := assets.ReadFile("resources/" + string(variant) + "/patch.bin")
 	if err != nil {
 		return patchManifest{}, nil, nil, err
 	}

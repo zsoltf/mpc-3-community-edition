@@ -132,7 +132,7 @@
 <body>
 <div class="top">
   <div class="wrap">
-    <a class="brand" href="./"><span class="mark"><i></i></span><span class="full">MPC 3 Community Edition</span><span class="short">MPC 3 CE</span> <span class="tag">v0.2.4</span></a>
+    <a class="brand" href="./"><span class="mark"><i></i></span><span class="full">MPC 3 Community Edition</span><span class="short">MPC 3 CE</span> <span class="tag">v0.2.5</span></a>
     <nav aria-label="Pages">
       <a href="./">Image builder</a>
       <a href="https://github.com/zsoltf/mpc-3-community-edition" rel="noopener noreferrer">GitHub</a>
@@ -159,6 +159,7 @@
       <li><a href="#plugins">Plug-ins and Q-Links</a></li>
       <li><a href="#transport">Transport</a></li>
       <li><a href="#jog">Jog wheel and cursor keys</a></li>
+      <li><a href="#files">Files over SSH</a></li>
       <li><a href="#limits">Not available</a></li>
     </ul>
   </header>
@@ -290,13 +291,23 @@
     <table>
       <thead><tr><th>Control</th><th>Scrub mode (LED on)</th><th>Data-wheel mode (LED off)</th></tr></thead>
       <tbody>
-        <tr><td>Jog wheel</td><td>Move by beats. <kbd>Shift</kbd>+jog moves by ticks.</td><td>The MPC data wheel. One click is one step on whatever is selected.</td></tr>
+        <tr><td>Jog wheel</td><td>Move by beats. <kbd>Shift</kbd>+jog moves by ticks.</td><td>The MPC data wheel. One click is one step on whatever is selected. In the Grid, <kbd>Shift</kbd>+jog selects the previous or next note.</td></tr>
         <tr><td>Up / Down</td><td>Cursor up / down.</td><td>One step up / down, like the MPC's plus and minus.</td></tr>
         <tr><td>Left / Right</td><td>Cursor left / right.</td><td>Previous / next control.</td></tr>
         <tr><td>Center (Zoom)</td><td>Switch the arrows between cursor and zoom.</td><td>No action.</td></tr>
       </tbody>
     </table>
     <p>A hard flick can keep moving briefly after you stop.</p>
+  </section>
+
+  <section id="files">
+    <h2>Files over SSH</h2>
+    <p>An image built with your SSH key can also copy files. Connect with <code>sftp</code>, <code>scp</code> or an app such as Cyberduck, WinSCP or FileZilla: user <code>root</code>, your private key, and the address shown in the MPC's Wi-Fi settings.</p>
+    <ul>
+      <li>Your USB drive is <code>/media/MPC</code>, named after its label. The internal storage is <code>/media/az01-internal-sd</code>.</li>
+      <li>Copied files show up in the Browser right away.</li>
+      <li>Expect 1&ndash;2 MB/s over Wi-Fi. Don't replace a file a loaded project is using.</li>
+    </ul>
   </section>
 
   <section id="limits">

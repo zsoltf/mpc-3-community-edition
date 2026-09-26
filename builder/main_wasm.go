@@ -15,8 +15,8 @@ func main() {
 }
 
 func startWebBuild(this js.Value, args []js.Value) any {
-	if len(args) != 2 || !args[0].InstanceOf(js.Global().Get("Uint8Array")) || !args[1].InstanceOf(js.Global().Get("Uint8Array")) {
-		return "expected image and optional owner-key Uint8Arrays"
+	if len(args) != 3 || !args[0].InstanceOf(js.Global().Get("Uint8Array")) || !args[1].InstanceOf(js.Global().Get("Uint8Array")) || args[2].Type() != js.TypeBoolean {
+		return "expected image and optional owner-key Uint8Arrays plus diagnostics choice"
 	}
 	inputValue := args[0]
 	keyValue := args[1]
@@ -37,7 +37,7 @@ func startWebBuild(this js.Value, args []js.Value) any {
 			js.Global().Call("postMessage", map[string]any{"type": "error", "message": "could not read the complete owner public key"})
 			return
 		}
-		result, err := buildImageMemory(input, ownerKey, func(percent int, message string) {
+		result, err := buildImageMemory(input, ownerKey, args[2].Bool(), func(percent int, message string) {
 			js.Global().Call("postMessage", map[string]any{"type": "progress", "progress": percent, "message": message})
 		})
 		input = nil
@@ -49,7 +49,7 @@ func startWebBuild(this js.Value, args []js.Value) any {
 		image := js.Global().Get("Uint8Array").New(len(result.Image))
 		js.CopyBytesToJS(image, result.Image)
 		js.Global().Call("postMessage", map[string]any{
-			"type": "complete", "image": image, "imageSHA256": result.ImageSHA256, "sshEnabled": result.SSHEnabled,
+			"type": "complete", "image": image, "imageSHA256": result.ImageSHA256, "sshEnabled": result.SSHEnabled, "diagnostics": result.Diagnostics,
 		}, []any{image.Get("buffer")})
 		result = memoryBuildResult{}
 		debug.FreeOSMemory()

@@ -44,6 +44,7 @@
  * segment [6877010,6bd6078). module_ranges carries p_filesz only, so this
  * slot, which lives past the writable segment's file image, is qualified
  * here the way pointer-capture.inc qualifies the peer's cursor slot. */
+#define M_NATIVE_WHEEL 302u
 #define FOCUS_SLOT_RVA 0x6b6f798u
 /* TouchFocusController::DataWheelUp / ::DataWheelDown, one folded exidx range
  * [35c2b04,35c2e24). UIFocusController is the primary base of all four
@@ -213,6 +214,8 @@ static void wheel_data(Context *c){
  wheel_store(c->r[6]+4,0);
 }
 
+#include "note-selection.inc"
+
 /* X-Touch jog wheel acting as the data wheel: a JOG_DATA command lane.
  *
  * This is deliberately NOT the jog lane. jog_resolve qualifies the native
@@ -234,7 +237,7 @@ static void wheel_data(Context *c){
  * rejection: the hardware panel path drops those steps silently too. */
 static unsigned wheel_command_resolve(Context *c,const CommandRequest *r){
  uint32_t now=atomic_load_explicit(&mirror_state->heartbeat,memory_order_acquire);
- if(!command_data_wheel(r->reserved)||!command_jog_delta(r->bits))return C_FORMAT;
+ if(!command_counted_focus(r->reserved)||!command_jog_delta(r->bits))return C_FORMAT;
  /* Every field of another family must be zero: this request names no Track,
   * Program, Project, pad, effect, Q-Link or I/O target at all. */
  if(r->serial||r->binding||r->incarnation||r->before_bits||r->before_revision||
@@ -268,7 +271,8 @@ static void wheel_command_service(Context *c,unsigned at,const CommandRequest *r
  native_started[at]=r->seq;
  /* The one call. wheel_dispatch clamps, resolves the app's own active focus
   * controller and returns the count it actually passed. */
- int steps=wheel_dispatch((int32_t)r->bits);
+ int steps=command_note_select(r->reserved)?note_dispatch((int32_t)r->bits,&why):wheel_dispatch((int32_t)r->bits);
+ if(why)goto rejected;
  event(c,CE_WHEEL_STEP,r->seq,0,0,0,0,r->reserved,(uint32_t)(int32_t)steps,0,r->epoch);
  event(c,CE_RETURN,r->seq,0,0,0,0,r->reserved,r->bits,0,r->epoch);
  atomic_store_explicit(active_request+at,0,memory_order_seq_cst);

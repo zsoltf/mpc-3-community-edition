@@ -55,6 +55,7 @@ typedef struct {
   * them because native transport packets keep their order and magnitude.
   * Guarded by jog_epoch and cleared with the rest of the jog gesture state. */
  int32_t wheel_delta;
+ unsigned wheel_operation;
  /* The data wheel's own push, waiting for a free slot and a quiet focus
   * controller. One flag, not a counter: a press is an edge, and a second
   * one banked behind the first would fire into whatever the first selected.
@@ -178,7 +179,16 @@ static inline int input_master_blocked(const MirrorInput *in){
  for(unsigned i=0;i<COMMAND_SLOTS;i++)if(in->flights[i].flight&&in->flights[i].field==CF_MASTER&&!in->flights[i].acknowledged)return 1;
  return 0;
 }
-static inline void input_jog_discard(MirrorInput *in){in->wheel_delta=0;in->wheel_press=0;in->jog_head=in->jog_count=0;in->global_head=in->global_count=0;in->jog_rewind=in->jog_forward=in->jog_shift=0;in->jog_repeat_tick=0;in->jog_wait=0;in->stop_down=in->play_down=in->stop_play_wait=in->stop_home=0;}
+static inline void input_jog_discard(MirrorInput *in){in->wheel_delta=0;in->wheel_operation=JOG_DATA;in->wheel_press=0;in->jog_head=in->jog_count=0;in->global_head=in->global_count=0;in->jog_rewind=in->jog_forward=in->jog_shift=0;in->jog_repeat_tick=0;in->jog_wait=0;in->stop_down=in->play_down=in->stop_play_wait=in->stop_home=0;}
+/* A project reload discards the old project's banked jog work, but Shift is a
+ * physical button: it stays held until its own release. The not-ready path in
+ * mirror-motor.c already keeps a Shift held through a load; this keeps it at
+ * the first jog after the load too. In ordinary use a Shift press resyncs
+ * before it is recorded, so this matters only for Shift held through a load. */
+static inline void input_jog_resync(MirrorInput *in,const CopiedMirror *s){
+ if(in->jog_epoch==s->epoch)return;
+ unsigned held_shift=in->jog_shift;input_jog_discard(in);in->jog_shift=held_shift;in->jog_epoch=s->epoch;
+}
 static inline void input_discard(MirrorInput *in){memset(in->io_delta,0,sizeof(in->io_delta));in->mode_delta=0;for(unsigned i=0;i<QLINK_SLOTS;i++)in->qlinks[i].pending=0;memset(in->effects,0,sizeof(in->effects));memset(in->gestures,0,sizeof(in->gestures));memset(in->desires,0,sizeof(in->desires));memset(in->edges,0,sizeof(in->edges));in->edge_head=in->edge_count=0;}
 /* A strip-bank move changes fader/button bindings, not the selected Track
  * subview or a Channel navigation target. Assignment/view/disconnect still use
@@ -480,7 +490,7 @@ static inline unsigned input_global_field(const CopiedMirror *s,unsigned op){
 }
 static inline void input_global_add(MirrorInput *in,const CopiedMirror *s,unsigned op,unsigned bits,uint32_t now){
  if(!s->ready||!s->alive||s->error||!command_global(op)||in->error||now>UINT32_MAX-2000)return;
- if(in->jog_epoch!=s->epoch){input_jog_discard(in);in->jog_epoch=s->epoch;}
+ input_jog_resync(in,s);
  unsigned owner=input_global_owner(s,op);
  if(!owner||(op==GLOBAL_TRACK_TYPE&&!s->selected_serial)||(op==CF_AUTOMATION&&!s->automation.available))return;
  if(in->global_count==INPUT_JOG_EVENTS){in->error=C_CAPACITY;return;}
@@ -536,7 +546,7 @@ static inline int input_global_proof(MirrorInput *in,InputFlight *tx){
  * Events are immutable after each lane's release frontier. Source phases must
  * share a lane/tuple. Cross-lane dispatch/return order is deliberately unused. */
 static inline void input_jog_add_origin(MirrorInput *in,const CopiedMirror *s,unsigned operation,int delta,uint32_t now,unsigned origin){
- if(in->jog_epoch!=s->epoch){input_jog_discard(in);in->jog_epoch=s->epoch;}
+ input_jog_resync(in,s);
  if(!s->ready||!s->alive||s->error||!command_jog(operation)||!command_jog_delta((uint32_t)delta)||in->error)return;
  if(now>UINT32_MAX-120000){in->error=C_EXPIRED;return;}
  if(in->jog_count){InputJogEvent *last=in->jog_events+(in->jog_head+in->jog_count-1)%INPUT_JOG_EVENTS;
@@ -553,18 +563,21 @@ static inline void input_jog_add(MirrorInput *in,const CopiedMirror *s,unsigned 
  * saturates well inside JOG_DELTA_LIMIT, and no event ring is used: the whole
  * accumulator is one signed integer published once per pump. */
 #define INPUT_WHEEL_LIMIT 64
-static inline void input_wheel_add(MirrorInput *in,const CopiedMirror *s,int delta){
- if(in->jog_epoch!=s->epoch){input_jog_discard(in);in->jog_epoch=s->epoch;}
+static inline void input_counted_focus_add(MirrorInput *in,const CopiedMirror *s,int delta,unsigned operation){
+ input_jog_resync(in,s);
  if(!s->ready||!s->alive||s->error||in->error||!delta)return;
+ if(in->wheel_operation!=operation){in->wheel_delta=0;in->wheel_operation=operation;}
  int32_t sum=in->wheel_delta+delta;
  if(sum>INPUT_WHEEL_LIMIT)sum=INPUT_WHEEL_LIMIT;
  if(sum<-INPUT_WHEEL_LIMIT)sum=-INPUT_WHEEL_LIMIT;
  in->wheel_delta=sum;
 }
+static inline void input_wheel_add(MirrorInput *in,const CopiedMirror *s,int delta){input_counted_focus_add(in,s,delta,JOG_DATA);}
+static inline void input_note_add(MirrorInput *in,const CopiedMirror *s,int delta){input_counted_focus_add(in,s,delta,NOTE_SELECT);}
 /* One press of the data wheel's push. It is an edge, so a second press while
  * one is still waiting for a slot is the same single pending press. */
 static inline void input_press_add(MirrorInput *in,const CopiedMirror *s){
- if(in->jog_epoch!=s->epoch){input_jog_discard(in);in->jog_epoch=s->epoch;}
+ input_jog_resync(in,s);
  if(!s->ready||!s->alive||s->error||in->error)return;
  in->wheel_press=1;
 }
@@ -574,7 +587,7 @@ static inline void input_jog_release(MirrorInput *in,unsigned origin){
 /* Play and Stop are serialized native intents. A Stop after an unsampled Play
  * remains a Stop; only an independently observed stopped state returns home. */
 static inline void input_stop_button(MirrorInput *in,const CopiedMirror *s,unsigned note,int down,uint32_t now){
- if(in->jog_epoch!=s->epoch){input_jog_discard(in);in->jog_epoch=s->epoch;}
+ input_jog_resync(in,s);
  if(note==94){
   if(!down){in->play_down=0;return;}
   if(in->play_down)return;
@@ -738,7 +751,7 @@ static inline void input_events(MirrorInput *in,InputFlight *tx,unsigned at){
     if(part>=2){if(!tx->phase||lane!=tx->lane||e->token!=tx->token||(part==2&&tx->phase!=1)||(part==3&&tx->phase!=2)||(part==4&&(tx->phase<1||tx->phase>3))){in->error=C_TRACE_AMBIGUOUS;return;}tx->phase=part;}
     tx->midi_events[part]=*e;tx->midi_seen|=1u<<part;continue;
    }
-   if(command_data_wheel(tx->field)){
+   if(command_counted_focus(tx->field)){
     unsigned part=e->kind==CE_DISPATCH?0:e->kind==CE_WHEEL_STEP?1:e->kind==CE_RETURN?2:3;
     if(part==3||(tx->global_seen&(1u<<part))||e->request!=tx->flight||e->reserved!=tx->field||e->controller!=tx->field||
        e->arg_kind||e->program||e->capture||e->counter||e->property||e->incarnation||e->revision!=tx->target.epoch||
@@ -941,14 +954,14 @@ static inline void input_pump_mode(MirrorInput *in,MirrorBank *bank,const Copied
     INPUT_LOG("MASTER_DONE request=%u requested_bits=%u actual_bits=%u revision=%u submission_epoch=%u execution_epoch=%u completion_epoch=%u tick=%u\n",tx->flight,tx->bits,s->master.bits,s->master.revision,tx->global_epoch,tx->master_events[2].revision,tx->master_events[5].revision,now);
    }continue;
   }
-  if(command_data_wheel(tx->field)){
+  if(command_counted_focus(tx->field)){
    if(done&&sealed){
     if(!input_wheel_proof(in,tx))return;
     if(s->epoch!=tx->target.epoch){in->error=C_IDENTITY;return;}
     if(s->heartbeat<=tx->done_tick)continue;
     if(!command_publish_settlement(in->commands,tx->flight)){in->error=C_CLOSED;return;}
     tx->acknowledged=1;in->settled++;
-    INPUT_LOG("WHEEL_DONE request=%u requested=%d delivered=%d epoch=%u tick=%u; one focus-controller data-wheel call, not a value acknowledgement\n",tx->flight,(int32_t)tx->bits,(int32_t)tx->global_events[1].bits,s->epoch,now);
+    INPUT_LOG("WHEEL_DONE request=%u requested=%d delivered=%d epoch=%u tick=%u; counted focus operation, not an audio value acknowledgement\n",tx->flight,(int32_t)tx->bits,(int32_t)tx->global_events[1].bits,s->epoch,now);
    }continue;
   }
   if(command_focus_press(tx->field)){
@@ -1024,7 +1037,7 @@ static inline void input_pump_mode(MirrorInput *in,MirrorBank *bank,const Copied
  input_mode_submit(in,bank,s,now);
  input_io_submit(in,bank,s,now);
  input_qlink_submit(in,bank,s,now);if(in->error)return;
- if(in->jog_epoch!=s->epoch){input_jog_discard(in);in->jog_epoch=s->epoch;}
+ input_jog_resync(in,s);
  for(unsigned batch=0;batch<8&&in->global_count&&s->ready;batch++){
   InputGlobalEvent *g=in->global_events+in->global_head;
   unsigned owner=input_global_owner(s,g->operation);
@@ -1069,8 +1082,8 @@ static inline void input_pump_mode(MirrorInput *in,MirrorBank *bank,const Copied
   if(at<COMMAND_SLOTS){
    CommandState *c=in->commands;unsigned seq=atomic_load(&c->published)+1;
    int32_t step=in->wheel_delta>WHEEL_MAX_STEPS?WHEEL_MAX_STEPS:in->wheel_delta<-WHEEL_MAX_STEPS?-WHEEL_MAX_STEPS:in->wheel_delta;
-   CommandRequest r={.seq=seq,.pid=c->pid,.start_lo=c->start_lo,.start_hi=c->start_hi,.origin_sec=c->origin_sec,.origin_nsec=c->origin_nsec,.epoch=s->epoch,.bits=(uint32_t)step,.created=now,.expires=now+120000,.reserved=JOG_DATA};
-   InputFlight *tx=in->flights+at;memset(tx,0,sizeof(*tx));tx->flight=seq;tx->field=JOG_DATA;tx->bits=r.bits;tx->expires=r.expires;tx->target.epoch=s->epoch;
+   CommandRequest r={.seq=seq,.pid=c->pid,.start_lo=c->start_lo,.start_hi=c->start_hi,.origin_sec=c->origin_sec,.origin_nsec=c->origin_nsec,.epoch=s->epoch,.bits=(uint32_t)step,.created=now,.expires=now+120000,.reserved=in->wheel_operation};
+   InputFlight *tx=in->flights+at;memset(tx,0,sizeof(*tx));tx->flight=seq;tx->field=r.reserved;tx->bits=r.bits;tx->expires=r.expires;tx->target.epoch=s->epoch;
    if(!command_publish_request_at(c,&r,at)){memset(tx,0,sizeof(*tx));if(!atomic_load(&c->new_project_intent))in->error=C_CLOSED;return;}
    /* A refused or suppressed request loses its own detents, as the jog and
     * global lanes do; the ones still banked here are unaffected. */

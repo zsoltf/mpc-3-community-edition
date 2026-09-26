@@ -28,6 +28,7 @@
 #define X_TOUCH_BLOCKING_ENABLED 1
 #endif
 #include "sha256.h"
+#include "mpc-identity.h"
 static volatile sig_atomic_t stopping;
 #ifdef MIRROR_INPUT
 #include <sys/file.h>
@@ -83,7 +84,7 @@ static int fresh_copy_view(const MirrorState*,CopiedMirror*,uint32_t*,int);
 #ifndef INPUT_LOG
 #define INPUT_LOG(...) BRIDGE_LOG(__VA_ARGS__)
 #endif
-static const char expected_sha[]="bc054a3f3ba02c2d33ac9a515a4a8638964da779223502286d6a64b517bf1426";
+static const char expected_sha[]=MPC_EXECUTABLE_SHA256;
 static void signal_stop(int sig){(void)sig;stopping=1;}
 static uint64_t monotonic_ms(void){struct timespec t;if(clock_gettime(CLOCK_MONOTONIC,&t))return UINT64_MAX;return (uint64_t)t.tv_sec*1000+(uint64_t)t.tv_nsec/1000000;}
 /* Same signed producer-relative arithmetic, including fractional second edges. */
@@ -250,13 +251,11 @@ static void surface_assignment(Surface *s,MirrorInput *in,MirrorBank *bank,const
  for(unsigned j=0;j<8;j++)s->display_field[j]=bank->assignment==BA_TRACK?CF_VOLUME:bank_parameter(bank,j);
  BRIDGE_LOG("MODE view=%u assignment=%u flip=%u; unsent work canceled\n",bank->view,bank->assignment,bank->flip);
 }
-/* In data-wheel mode every detent is one data-wheel step and Shift is ignored
- * for the wheel: the app's coarse flag comes from its own action object and no
- * modifier on this firmware is known to feed it. Shift keeps its other roles,
- * and the Rewind/Forward buttons (kind 9) are unchanged in both modes. */
+/* In data-wheel mode Shift selects notes in the focused Grid; ordinary turns
+ * retain the native data wheel. Rewind/Forward are unchanged. */
 static void surface_jog(MirrorInput *in,const CopiedMirror *snapshot,unsigned kind,unsigned key,int value,uint32_t now,unsigned data_wheel){
- if(in->jog_epoch!=snapshot->epoch){input_jog_discard(in);in->jog_epoch=snapshot->epoch;}
- if(kind==8){if(data_wheel)input_wheel_add(in,snapshot,value);else input_jog_add(in,snapshot,in->jog_shift?JOG_PULSE:JOG_BEAT,value,now);}
+ input_jog_resync(in,snapshot);
+ if(kind==8){if(data_wheel){if(in->jog_shift)input_note_add(in,snapshot,value);else input_wheel_add(in,snapshot,value);}else input_jog_add(in,snapshot,in->jog_shift?JOG_PULSE:JOG_BEAT,value,now);}
  else{if(key==70)in->jog_shift=value;else if(key==91)in->jog_rewind=value;else in->jog_forward=value;if(!value){in->jog_repeat_tick=now;if(key==91||key==92)input_jog_release(in,key==92?1:2);}}
 }
 static void surface_navigation(MirrorInput *in,MirrorBank *bank,const CopiedMirror *snapshot,unsigned button,uint32_t now){

@@ -1,0 +1,17 @@
+[Unit]
+Description=MPC Learn current USB debug report
+DefaultDependencies=no
+After=systemd-remount-fs.service
+Before=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/mpclearn/usb-diagnostics
+RuntimeDirectory=mpclearn-diagnostics
+RuntimeDirectoryMode=0700
+TimeoutStopSec=5
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target

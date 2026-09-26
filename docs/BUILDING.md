@@ -43,11 +43,20 @@ Expected extracted MPC SHA-256:
 `bc054a3f3ba02c2d33ac9a515a4a8638964da779223502286d6a64b517bf1426`.
 Preparation rejects a different executable or unexpected native instructions.
 
+Create the separate CE executable; this keeps the pristine extraction intact:
+
+```sh
+python3 firmware/patch-mpc-ce.py build/MPC build/v0_2_5/MPC
+```
+
+The output must be 112,222,004 bytes with SHA-256
+`3b49507f4d946bef6bd1f47d66dd8a9743df2cef6295b8468667c9cbbe3c4fbe`.
+
 Build and run the release component tests:
 
 ```sh
 ./controllers/program-observer/mirror-input-build.sh \
-  "$PWD/build/MPC" /usr/share/mpclearn/mcu manual
+  "$PWD/build/v0_2_5/MPC" /usr/share/mpclearn/mcu manual
 ./controllers/program-observer/mirror-input-check.sh
 ./controllers/program-observer/location-check.sh
 ```
@@ -69,7 +78,7 @@ an image made with your own SSH key.
 
 ```sh
 ./controllers/program-observer/mirror-input-build.sh \
-  "$PWD/build/MPC" /data/mpclearn/dev manual
+  "$PWD/build/v0_2_5/MPC" /data/mpclearn/dev manual
 ```
 
 Copy `package/mirror-input/` to a temporary folder on the MPC, such as
@@ -116,7 +125,5 @@ See [firmware preparation](../firmware/README.md) for rebuilding patch data,
 [performance](performance.md) before changing recurring runtime work.
 
 The current toolchain can vary a temporary assembler object name in the
-observer's non-loaded `.strtab` section. The cleanup build matched all other
-bytes and the other eight packaged files, but this metadata still changes the
-whole-file hash. The release retains the original qualified binary and pins;
-do not claim byte-for-byte reproducibility or bypass admission checks.
+observer's non-loaded `.strtab` section. A different whole-file hash is a new
+candidate even when loaded bytes match; do not bypass the package gate.

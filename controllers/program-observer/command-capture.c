@@ -87,6 +87,9 @@ static int qlink_mode_receipted(unsigned);
 static int qlink_receipted(unsigned);
 static int effects_receipted(unsigned);
 static void recording_lifetime(uint32_t,int);
+#ifdef NATIVE_WHEEL_PROBE
+static void native_wheel_probe_initialize(void);
+#endif
 void command_initialize(void){
  qlink_command_initialize();qlink_mode_initialize();qlink_initialize();effects_initialize();io_initialize();jog_initialize();master_initialize();meter_initialize();global_initialize();recording_initialize();midi_initialize();
  command_owner=token();command_queues=0;atomic_store(&command_in_hook,0);atomic_store(&command_violation,0);for(unsigned i=0;i<COMMAND_SLOTS;i++)atomic_store(active_request+i,0);for(unsigned i=0;i<COMMAND_LANES;i++)release(&lane_claims[i].busy);atomic_store(&lane_claims[0].busy,1);
@@ -94,6 +97,9 @@ void command_initialize(void){
  channel_initialize();
  command_state->owner_token=command_owner;atomic_store(&command_state->lane_tokens[0],command_owner);
  for(unsigned i=0;i<COMMAND_LANES;i++)atomic_store(lane_in_hook+i,0);
+#ifdef NATIVE_WHEEL_PROBE
+ native_wheel_probe_initialize();
+#endif
 }
 unsigned command_enrollment_detail(void){return atomic_load_explicit(&enrollment_detail,memory_order_seq_cst);}
 unsigned command_enrollment_error(void){return atomic_load_explicit(&enrollment_fault,memory_order_seq_cst);}
@@ -385,6 +391,9 @@ void command_retire(void){
 #include "io-capture.inc"
 #include "pointer-capture.inc"
 #include "wheel-capture.inc"
+#ifdef NATIVE_WHEEL_PROBE
+#include "native-wheel-probe.inc"
+#endif
 #include "focus-press-capture.inc"
 static void service_one(Context *c,unsigned at){
  CommandSlot *slot=command_state->slots+at;
@@ -397,7 +406,7 @@ static void service_one(Context *c,unsigned at){
  if(command_io(r.reserved)){io_input_service(c,at,&r);return;}
  if(command_qlink_mode(r.reserved)){qlink_mode_service(c,at,&r);return;}
  if(command_qlink(r.reserved)){qlink_input_service(c,at,&r);return;}
- if(command_data_wheel(r.reserved)){wheel_command_service(c,at,&r);return;}
+ if(command_counted_focus(r.reserved)){wheel_command_service(c,at,&r);return;}
  if(command_focus_press(r.reserved)){focus_press_service(c,at,&r);return;}
  if(command_jog(r.reserved)){jog_service(c,at,&r);return;}
  if(r.reserved==CF_MASTER){master_service(c,at,&r);return;}
@@ -612,6 +621,11 @@ static void position_point(Context *c,unsigned site,unsigned lane){
 void observer_hook(Context *c,unsigned kind){
  if(!c||kind<MODEL_HOOK_BASE||!command_state)return;
  unsigned site=kind-MODEL_HOOK_BASE;
+#ifdef NATIVE_WHEEL_PROBE
+ if(site==NWP_SITE){native_wheel_probe_capture(c);return;}
+#else
+ if(site==M_NATIVE_WHEEL){note_native_wheel(c);return;}
+#endif
  /* Product hook, not a diagnostic: it enrolls no lane and publishes no row. */
  if(site==M_POINTER_DEVICE){pointer_device_enable(c);return;}
  if(site==M_WHEEL_DATA){wheel_data(c);return;}

@@ -17,11 +17,12 @@
 #include <unistd.h>
 #include "sha256.h"
 #include "config.h"
+#include "mpc-identity.h"
 extern _Atomic uint32_t observer_error,observer_published,observer_tick,observer_armed;
 extern Record observer_records[RECORD_COUNT];
 int install_patches(uint32_t,int,void**);
-static const char digest[]="bc054a3f3ba02c2d33ac9a515a4a8638964da779223502286d6a64b517bf1426";
-static const unsigned char buildid[20]={0x83,0x71,0x19,0x9f,0x94,0x5e,0xcc,0x40,0xf7,0x9c,0xb1,0x9c,0x17,0xff,0x5d,0xe7,0x28,0x10,0xa9,0x1c};
+static const char digest[]=MPC_EXECUTABLE_SHA256;
+static const unsigned char buildid[20]=MPC_EXECUTABLE_BUILD_ID_BYTES;
 static uint32_t load_bias;static int found,started;static pthread_t consumer;
 #ifndef VOLUME_MIRROR
 static int logfd=-1;
@@ -46,11 +47,11 @@ static int image(struct dl_phdr_info *i,size_t size,void *unused){
 }
 static int exact_file(void){
  char path[128];ssize_t n=readlink("/proc/self/exe",path,sizeof(path)-1);if(n<0)return 0;path[n]=0;if(strcmp(path,"/usr/bin/MPC"))return 0;
- int fd=open("/proc/self/exe",O_RDONLY|O_CLOEXEC);if(fd<0)return 0;struct stat before={0},after={0};int ok=!fstat(fd,&before)&&S_ISREG(before.st_mode)&&before.st_size==112222004;
+ int fd=open("/proc/self/exe",O_RDONLY|O_CLOEXEC);if(fd<0)return 0;struct stat before={0},after={0};int ok=!fstat(fd,&before)&&S_ISREG(before.st_mode)&&before.st_size==MPC_EXECUTABLE_SIZE;
  Sha sha;sha_init(&sha);unsigned char bytes[65536];off_t total=0;
- while(ok){ssize_t got=read(fd,bytes,sizeof(bytes));if(got<0){ok=0;break;}if(!got)break;total+=got;if(total>112222004){ok=0;break;}sha_add(&sha,bytes,(size_t)got);}
+ while(ok){ssize_t got=read(fd,bytes,sizeof(bytes));if(got<0){ok=0;break;}if(!got)break;total+=got;if(total>MPC_EXECUTABLE_SIZE){ok=0;break;}sha_add(&sha,bytes,(size_t)got);}
  if(fstat(fd,&after)||before.st_dev!=after.st_dev||before.st_ino!=after.st_ino||before.st_size!=after.st_size||before.st_mtim.tv_sec!=after.st_mtim.tv_sec||before.st_mtim.tv_nsec!=after.st_mtim.tv_nsec)ok=0;
- close(fd);unsigned char hash[32];sha_end(&sha,hash);char hex[65];for(unsigned j=0;j<32;j++)snprintf(hex+2*j,3,"%02x",hash[j]);return ok&&total==112222004&&!strcmp(hex,digest);
+ close(fd);unsigned char hash[32];sha_end(&sha,hash);char hex[65];for(unsigned j=0;j<32;j++)snprintf(hex+2*j,3,"%02x",hash[j]);return ok&&total==MPC_EXECUTABLE_SIZE&&!strcmp(hex,digest);
 }
 static int only_thread(void){DIR *d=opendir("/proc/self/task");if(!d)return 0;unsigned n=0;struct dirent *e;while((e=readdir(d)))if(e->d_name[0]>='0'&&e->d_name[0]<='9')n++;closedir(d);return n==1;}
 #ifdef VOLUME_MIRROR

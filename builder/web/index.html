@@ -102,6 +102,14 @@
     ol.procedure h3 small { font-weight: 500; color: var(--ink-3); font-size: 12px; margin-left: 8px; font-family: var(--mono); }
     ol.procedure p { margin: 0 0 12px; color: var(--ink-2); font-size: 14.5px; max-width: 70ch; }
     .row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+    .image-types { border: 0; margin: 16px 0 0; padding: 0; }
+    .image-types legend { margin-bottom: 6px; padding: 0; font-size: 13px; font-weight: 600; color: var(--ink-2); }
+    .choices { display: flex; flex-wrap: wrap; gap: 8px; }
+    .choice { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-s); cursor: pointer; }
+    .choice:has(input:checked) { border-color: var(--ink-3); background: var(--line-2); }
+    .choice input { margin-top: 4px; accent-color: var(--accent); }
+    .choice span { color: var(--ink-2); font-size: 14px; }
+    .choice b { color: var(--ink); }
     .status { font-family: var(--mono); font-size: 13px; color: var(--ink-3); overflow-wrap: anywhere; }
     .status.set { color: var(--ink); }
     .progress { display: none; margin-top: 14px; max-width: 560px; }
@@ -112,7 +120,13 @@
     #result strong { display: block; margin-bottom: 12px; color: var(--ok); }
     #result p { margin: 10px 0 0; overflow-wrap: anywhere; color: var(--ink-2); }
     #result #imageSHA { display: block; margin-top: 4px; background: none; padding: 0; font-size: 12px; color: var(--ink); }
-    @media (max-width: 640px) { .page { padding-top: 28px; } ol.procedure > li { grid-template-columns: 1fr; gap: 8px; padding: 18px 16px; } }
+    .diagnostic-help { margin-top: 12px; color: var(--ink-2); }
+    .diagnostic-help summary { color: var(--ink); cursor: pointer; font-weight: 600; }
+    .diagnostic-help summary:hover { color: var(--accent); }
+    .diagnostic-help summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+    .diagnostic-help ol { margin: 10px 0 0; padding-left: 22px; }
+    .diagnostic-help li { margin: 5px 0; }
+    @media (max-width: 640px) { .page { padding-top: 28px; } ol.procedure > li { grid-template-columns: 1fr; gap: 8px; padding: 18px 16px; } .choices { display: grid; } }
 
     /* Notes */
     .notes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 16px; }
@@ -136,7 +150,7 @@
 <body>
 <header class="top">
   <div class="wrap">
-    <a class="brand" href="./"><span class="mark"><i></i></span><span class="full">MPC 3 Community Edition</span><span class="short">MPC 3 CE</span> <span class="tag">v0.2.4</span></a>
+    <a class="brand" href="./"><span class="mark"><i></i></span><span class="full">MPC 3 Community Edition</span><span class="short">MPC 3 CE</span> <span class="tag">v0.2.5</span></a>
     <nav aria-label="Site">
       <a href="guide.html">X-Touch guide</a>
       <a href="https://github.com/zsoltf/mpc-3-community-edition/releases" rel="noopener noreferrer">Releases</a>
@@ -153,7 +167,7 @@
   <section class="page" id="builder">
     <div class="wrap">
       <h1>Build your MPC 3 Community Edition image</h1>
-      <p class="lead">Adds X-Touch control and USB mouse support to the MPC 3.9.1 firmware. The image is built in your browser from Akai's official file. Nothing is uploaded.</p>
+      <p class="lead">Adds X-Touch control, USB mouse support and Shift+wheel note selection to MPC 3.9.1. The image is built in your browser from Akai's official file. Nothing is uploaded.</p>
 
       <div class="panel">
         <ol class="procedure">
@@ -167,12 +181,19 @@
                 <span id="file" class="status">No file chosen</span>
               </div>
               <input id="picker" type="file" accept=".img,application/octet-stream">
+              <fieldset class="image-types">
+                <legend>Image type</legend>
+                <div class="choices">
+                  <label class="choice"><input type="radio" name="imageType" value="standard" checked><span><b>Standard CE v0.2.5</b></span></label>
+                  <label class="choice"><input type="radio" name="imageType" value="diagnostics"><span><b>Debug build</b> - current USB report, SSH off.</span></label>
+                </div>
+              </fieldset>
             </div>
           </li>
           <li id="step2">
             <div>
               <h3>SSH key<small>optional</small></h3>
-              <p>Add an Ed25519 <code>.pub</code> key if you want SSH access. Without one, SSH stays off.</p>
+              <p>Add an Ed25519 <code>.pub</code> key if you want SSH access, which also lets you copy files to and from the MPC. Without one, SSH stays off.</p>
               <div class="row">
                 <button id="selectKey" type="button">Add public key</button>
                 <button id="clearKey" type="button" class="quiet" hidden>Remove key</button>
@@ -192,10 +213,19 @@
               </section>
               <div id="error" role="alert"></div>
               <div id="result">
-                <strong>Verified image ready</strong>
+                <strong id="resultTitle">Standard CE image ready</strong>
                 <div class="row"><a id="imageDownload" class="btn primary">Save image</a></div>
-                <p>Copy it to the top of a USB drive and run the MPC's firmware update. Keep the name ending in <code>-update.img</code> and delete any <code>(1)</code> your browser adds.</p>
+                <p>Keep only this generated CE <code>-update.img</code> at the top of the update USB. Remove the original Akai image and any <code>(1)</code> from the filename.</p>
                 <p id="sshResult"></p>
+                <details id="diagnosticResult" class="diagnostic-help" hidden>
+                  <summary>How to use the debug build</summary>
+                  <ol>
+                    <li>Before boot, create <code>MPCLEARN-DIAGNOSTICS</code> at the USB root and remove any old <code>report.txt</code> inside it.</li>
+                    <li>Leave the drive connected, boot the debug build, then reproduce the problem. The report updates as evidence arrives.</li>
+                    <li>Retrieve <code>MPCLEARN-DIAGNOSTICS/report.txt</code> after reproducing the problem.</li>
+                    <li>Reflash the standard CE or official image afterward. Use the same step if the report is unavailable.</li>
+                  </ol>
+                </details>
                 <p>SHA-256<code id="imageSHA"></code></p>
               </div>
             </div>
@@ -207,15 +237,17 @@
         <div class="note"><h4>What you get</h4><ul>
           <li><b>X-Touch control:</b> mixer, sends, plug-ins, Q-Links, transport, motor faders, meters and the jog wheel. <a href="guide.html">Guide</a></li>
           <li><b>USB mouse:</b> pointer, click, drag and scroll.</li>
+          <li><b>Built-in note selection:</b> hold MPC Shift and turn the MPC data wheel in the Grid.</li>
         </ul></div>
         <div class="note"><h4>Requirements</h4><ul>
           <li><b>MPC Live II</b> on firmware 3.9.1. Other Gen1 MPCs are untested.</li>
-          <li><b>Full-size Behringer X-Touch.</b> Other controllers are not supported yet.</li>
+          <li><b>Full-size Behringer X-Touch</b> for controller features. A USB mouse can be used by itself.</li>
         </ul></div>
         <div class="note"><h4>Before you flash</h4><ul>
           <li><b>Back up your projects.</b></li>
           <li>Your settings and projects are kept.</li>
-          <li><a href="https://github.com/zsoltf/mpc-3-community-edition/releases" rel="noopener noreferrer">What's new in v0.2.4</a></li>
+          <li>After installing, Preferences &gt; Info identifies <em>MPC CE v0.2.5</em>.</li>
+          <li><a href="https://github.com/zsoltf/mpc-3-community-edition/releases" rel="noopener noreferrer">What's new in v0.2.5</a></li>
         </ul></div>
       </div>
     </div>
@@ -233,7 +265,8 @@
   </div>
 </footer>
 <script>
-const imageName = 'MPC-3.9.1-Gen1-CE-v0.2.4-update.img';
+const standardImageName = 'MPC-3.9.1-Gen1-CE-v0.2.5-update.img';
+const diagnosticImageName = 'MPC-3.9.1-Gen1-CE-v0.2.5-DEBUG-update.img';
 
 document.querySelector('#themeToggle').onclick = () => {
   const root = document.documentElement;
@@ -250,11 +283,15 @@ const clearKey = document.querySelector('#clearKey');
 const create = document.querySelector('#create');
 const file = document.querySelector('#file');
 const sshStatus = document.querySelector('#sshStatus');
+const sshStep = document.querySelector('#step2');
+const sshResult = document.querySelector('#sshResult');
+const imageTypes = [...document.querySelectorAll('input[name=imageType]')];
 const progress = document.querySelector('#progress');
 const bar = document.querySelector('#bar');
 const message = document.querySelector('#message');
 const errorBox = document.querySelector('#error');
 const result = document.querySelector('#result');
+const resultTitle = document.querySelector('#resultTitle');
 let selectedFile = null;
 let selectedKey = null;
 let workerReady = false;
@@ -274,13 +311,16 @@ worker.onmessage = event => {
     showError(data.message);
     finishBusy();
   } else if (data.type === 'complete') {
-    setDownload('imageDownload', data.image, imageName, 'application/octet-stream');
+    setDownload('imageDownload', data.image, data.diagnostics ? diagnosticImageName : standardImageName, 'application/octet-stream');
+    resultTitle.textContent = data.diagnostics ? 'Debug build ready' : 'Standard CE image ready';
     document.querySelector('#imageSHA').textContent = data.imageSHA256;
-    document.querySelector('#sshResult').textContent = data.sshEnabled
+    sshResult.textContent = data.sshEnabled
       ? 'SSH enabled for the selected public key only.'
       : 'SSH disabled in this image.';
+    sshResult.hidden = data.diagnostics;
+    document.querySelector('#diagnosticResult').hidden = !data.diagnostics;
     bar.value = 100;
-    message.textContent = 'Verified image created';
+    message.textContent = 'Image ready';
     result.style.display = 'block';
     finishBusy();
   }
@@ -313,11 +353,21 @@ keyPicker.onchange = () => {
   setKeyStatus();
 };
 clearKey.onclick = () => { invalidateResult(); selectedKey = null; keyPicker.value = ''; setKeyStatus(); };
+imageTypes.forEach(input => input.onchange = () => {
+  invalidateResult();
+  if (diagnosticsSelected()) { selectedKey = null; keyPicker.value = ''; }
+  setKeyStatus();
+});
+function diagnosticsSelected() { return imageTypes.find(input => input.checked).value === 'diagnostics'; }
 function setKeyStatus() {
-  sshStatus.textContent = selectedKey ? 'SSH enabled for ' + selectedKey.name : 'SSH disabled';
+  const diagnostic = diagnosticsSelected();
+  sshStep.hidden = diagnostic;
+  selectKey.disabled = diagnostic;
+  sshStatus.textContent = diagnostic ? 'SSH disabled for diagnostics' : (selectedKey ? 'SSH enabled for ' + selectedKey.name : 'SSH disabled');
   sshStatus.classList.toggle('set', !!selectedKey);
-  clearKey.hidden = !selectedKey;
+  clearKey.hidden = !selectedKey || diagnostic;
 }
+setKeyStatus();
 create.onclick = async () => {
   if (!selectedFile || !workerReady) return;
   clearDownloads();
@@ -325,12 +375,13 @@ create.onclick = async () => {
   result.style.display = 'none';
   progress.style.display = 'block';
   select.disabled = selectKey.disabled = clearKey.disabled = create.disabled = true;
+  imageTypes.forEach(input => input.disabled = true);
   bar.value = 1;
   message.textContent = 'Reading the selected image';
   try {
     const image = await selectedFile.arrayBuffer();
     const ownerKey = selectedKey ? await selectedKey.arrayBuffer() : new ArrayBuffer(0);
-    worker.postMessage({type: 'build', image, ownerKey}, [image, ownerKey]);
+    worker.postMessage({type: 'build', image, ownerKey, diagnostics: diagnosticsSelected()}, [image, ownerKey]);
   } catch (error) {
     showError('Could not read the selected image: ' + error.message);
     finishBusy();
@@ -345,7 +396,7 @@ function setDownload(id, bytes, name, type) {
 }
 function clearDownloads() { downloads.forEach(URL.revokeObjectURL); downloads = []; }
 function invalidateResult() { clearDownloads(); result.style.display = 'none'; document.querySelector('#imageSHA').textContent = ''; }
-function finishBusy() { select.disabled = selectKey.disabled = clearKey.disabled = false; create.disabled = !(selectedFile && workerReady); }
+function finishBusy() { select.disabled = clearKey.disabled = false; imageTypes.forEach(input => input.disabled = false); selectKey.disabled = diagnosticsSelected(); create.disabled = !(selectedFile && workerReady); }
 function showError(text) { errorBox.textContent = text; errorBox.style.display = text ? 'block' : 'none'; }
 function formatBytes(value) { return (value / (1024 * 1024)).toFixed(1) + ' MB'; }
 </script>

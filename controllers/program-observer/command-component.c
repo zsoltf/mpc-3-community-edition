@@ -167,6 +167,7 @@ static void replay_checks(void){
   if(hook_ids[i]==M_POINTER_DEVICE)in.r[6]=ptr(track_objects[0]); /* displaced pair loads cursor x/y through the cursor state object in r6 */
   if(hook_ids[i]==M_WHEEL_DATA)in.r[4]=ptr(track_objects[0]); /* displaced NEON pair loads the cursor x/y vector through r4 */
   if(hook_ids[i]>=M_WHEEL_FLUSH&&hook_ids[i]<=M_WHEEL_FLUSH_LAST){in.r[7]=ptr(track_objects[0]);in.r[4]=ptr(track_objects[0]);} /* displaced ldrsh reads +114 through r7 or r4 */
+  if(hook_ids[i]==M_NATIVE_WHEEL){in.r[3]=ptr(track_objects[0]);in.r[5]=ptr(file_handler);} /* actual pair loads vtable+0x20 */
   /* Adjacent native hooks are legal. Install this fixture's one-pair
    * continuation immediately before its exercise, so another site's +8
    * continuation cannot overwrite the pair under test. */
@@ -755,6 +756,158 @@ static unsigned press_command_case(void){
  command_retire();require(command_idle(command_state),"settled press request reclaims on the same protocol");
  return delivered;
 }
+/* Note selection over a fake focused Grid. The native batch, clear, select and
+ * reveal calls are substituted by a recorder that keeps the Grid's selected set
+ * the way the native clear/select pair does. Runs after wheel_data_checks,
+ * whose fixture page holds the app's active focus controller slot. */
+static uint32_t note_grid_fixture[0x4a8/4],note_holder_fixture[0x28/4],note_receiver_fixture[0x100/4],note_items_fixture[260][0x114/4],note_children_fixture[260],note_selected_fixture[260];
+static unsigned note_call_kinds[8],note_call_count;static uint32_t note_selected_item;
+static void note_call_fixture(unsigned kind,uint32_t grid,uint32_t item){
+ require(grid==ptr(note_grid_fixture),"every native selection call receives the focused Grid");
+ if(note_call_count<8)note_call_kinds[note_call_count]=kind;
+ note_call_count++;
+ if(kind==1){for(unsigned i=0;i<word(grid+0x174);i++){uint32_t s=word(word(grid+0x16c)+i*4);put(s+0x80,word(s+0x80)&~0x800u);}put(grid+0x174,0);}
+ else if(kind==2){put(item+0x80,word(item+0x80)|0x800u);put(word(grid+0x16c),item);put(grid+0x174,1);note_selected_item=item;}
+}
+/* One Grid note: its live event record at +0xb0 and the copied record at +0x78
+ * that note_quiet requires to match, with the pitch inside the payload. */
+static void note_item_fixture(unsigned i,uint32_t time,unsigned pitch){
+ unsigned char *raw=(unsigned char*)note_items_fixture[i];uint32_t item=ptr(raw);memset(raw,0,sizeof note_items_fixture[i]);
+ put(item,NOTE_ITEM_VTABLE);put(item+0x70,ptr(note_grid_fixture));put(item+0x104,ptr(note_grid_fixture));
+ put(item+0xb0,time);put(item+0xb8,3);raw[0xc0]=0x90;raw[0xc4]=100;raw[0xe0]=(unsigned char)pitch;
+ memcpy(raw+0x78,raw+0xb0,8);put(item+0x80,3);memcpy(raw+0x88,raw+0xc0,37);
+}
+static int note_run(int steps){
+ note_call_count=0;note_selected_item=0;unsigned why=0;int moved=note_dispatch(steps,&why);
+ require(!why,"a stable Grid reports no identity failure");return moved;
+}
+static int note_one_batch(void){return note_call_count==4&&note_call_kinds[0]==0&&note_call_kinds[1]==1&&note_call_kinds[2]==2&&note_call_kinds[3]==3;}
+static void note_selection_checks(void){
+ observer_image_bias=0;component_note_call=note_call_fixture;
+ uint32_t grid=ptr(note_grid_fixture),holder=ptr(note_holder_fixture),receiver=ptr(note_receiver_fixture);
+ memset(note_grid_fixture,0,sizeof note_grid_fixture);memset(note_holder_fixture,0,sizeof note_holder_fixture);memset(note_receiver_fixture,0,sizeof note_receiver_fixture);
+ put(grid,NOTE_GRID_VTABLE);put(grid+0x68,2);put(grid+0x20c,holder);put(holder,NOTE_HOLDER_VTABLE);
+ put(grid+0x28,ptr(note_children_fixture));put(grid+0x16c,ptr(note_selected_fixture));
+ /* Children in UI order, deliberately not time order: selecting a note changes
+  * UI order, so the walk must never depend on it. Two notes share one start. */
+ note_item_fixture(0,300,60);note_item_fixture(1,100,64);note_item_fixture(2,200,67);note_item_fixture(3,200,62);
+ for(unsigned i=0;i<4;i++)note_children_fixture[i]=ptr(note_items_fixture[i]);
+ put(grid+0x30,4);put(grid+0x174,0);
+ put(receiver,wheel_focus_vtables[2]);put(receiver+WHEEL_FOCUSED_OFFSET,grid);put(FOCUS_SLOT_RVA,receiver);
+ const uint32_t earliest=ptr(note_items_fixture[1]),lower=ptr(note_items_fixture[3]),higher=ptr(note_items_fixture[2]),latest=ptr(note_items_fixture[0]);
+ /* Order is start time, then pitch: 100, 200 at 62, 200 at 67, 300. */
+ require(note_run(1)==1&&note_selected_item==earliest,"the first step from no selection selects the earliest note");
+ require(note_one_batch(),"one batch brackets exactly one clear and one select, and there is no reveal without a viewport");
+ require(note_run(1)==1&&note_selected_item==lower,"of two notes with one start, the lower pitch comes first");
+ require(note_run(1)==1&&note_selected_item==higher,"then the higher");
+ require(note_run(1)==1&&note_selected_item==latest,"then the latest");
+ require(word(grid+0x174)==1&&(word(latest+0x80)&0x800u)&&!(word(higher+0x80)&0x800u),"exactly one note carries the selection");
+ require(!note_run(1)&&!note_call_count,"past the last note nothing moves and no native call is made");
+ require(note_run(-3)==-3&&note_selected_item==earliest&&note_one_batch(),"three steps back in one request is one batch that lands three notes back");
+ require(!note_run(-1)&&!note_call_count,"past the first note nothing moves either");
+ require(note_run(9)==3&&note_selected_item==latest&&note_one_batch(),"a request larger than the notes ahead clamps at the last note and reports only the moves it made");
+ for(unsigned i=0;i<4;i++){unsigned char *raw=(unsigned char*)note_items_fixture[i];
+  require(!memcmp(raw+0x78,raw+0xb0,8)&&!memcmp(raw+0x88,raw+0xc0,37),"selection leaves every note's start and payload untouched");}
+ /* Nothing is navigated unless the app's own focus is a visible Grid, and
+  * nothing happens off the thread that owns the observer's command work. */
+ put(grid+0x68,0);require(!note_run(-1)&&!note_call_count,"a hidden Grid is never navigated");put(grid+0x68,2);
+ put(receiver+WHEEL_FOCUSED_OFFSET,0);require(!note_run(-1)&&!note_call_count,"nothing is navigated while the focus controller has nothing focused");put(receiver+WHEEL_FOCUSED_OFFSET,grid);
+ put(grid,NOTE_GRID_VTABLE+4);require(!note_run(-1)&&!note_call_count,"a focused component that is not a Grid is never navigated");put(grid,NOTE_GRID_VTABLE);
+ put(grid+0x32c,1);require(!note_run(-1)&&!note_call_count,"an active Grid gesture is left alone");put(grid+0x32c,0);
+ uint32_t owner=command_owner;command_owner=owner+1;require(!note_run(-1)&&!note_call_count,"no selection off the thread that owns the observer's command work");command_owner=owner;
+ require(note_run(-1)==-1&&note_selected_item==higher,"and it resumes once the Grid is back in reach");
+ put(FOCUS_SLOT_RVA,0);component_note_call=NULL;
+ puts("PASS note selection walks the focused Grid by start then pitch, clamps at both ends and reports only the moves it made, brackets one clear and one select in one batch, leaves note data untouched, and refuses a hidden, unfocused, non-Grid or gesturing target and any other thread (native batch, clear, select and reveal substituted)");
+}
+#ifndef NATIVE_WHEEL_PROBE
+/* Execute the actual generated gate and original BLX. Only the selection
+ * effects, native rotation body and final stack epilogue are substituted. */
+__attribute__((naked)) static void native_note_rotation_fixture(void){
+ __asm__ volatile("push {r0,r1}\n movw r0,#:lower16:dispatch_count\n movt r0,#:upper16:dispatch_count\n ldr r1,[r0]\n add r1,r1,#1\n str r1,[r0]\n pop {r0,r1}\n bx lr");
+}
+static unsigned native_note_close;
+static void native_note_effect(unsigned kind,uint32_t grid,uint32_t item){
+ require(atomic_load(&command_in_hook)==1,"native selection uses the existing command owner's flight");
+ if(kind==0&&native_note_close){command_close();require(!command_quiescent(),"close cannot finish inside selection");}
+ note_call_fixture(kind,grid,item);
+}
+static void native_note_seed(unsigned n){
+ uint32_t grid=ptr(note_grid_fixture),holder=ptr(note_holder_fixture),receiver=ptr(note_receiver_fixture);
+ memset(note_grid_fixture,0,sizeof note_grid_fixture);memset(note_holder_fixture,0,sizeof note_holder_fixture);memset(note_receiver_fixture,0,sizeof note_receiver_fixture);
+ put(grid,NOTE_GRID_VTABLE);put(grid+0x68,2);put(grid+0x20c,holder);put(holder,NOTE_HOLDER_VTABLE);
+ put(grid+0x28,ptr(note_children_fixture));put(grid+0x30,n);put(grid+0x16c,ptr(note_selected_fixture));
+ put(receiver,wheel_focus_vtables[0]);put(receiver+WHEEL_FOCUSED_OFFSET,grid);put(FOCUS_SLOT_RVA,receiver);
+ for(unsigned i=0;i<n;i++){note_item_fixture(i,i*100,60);note_children_fixture[i]=ptr(note_items_fixture[i]);}
+ component_note_call=native_note_effect;native_note_close=0;
+}
+static void native_note_exercise(Context in,int consumed){
+ Context expected=in,actual;expected.r[0]=in.r[5];expected.r[3]=consumed?ptr(note_wheel_consumed):word(in.r[3]+0x20);expected.lr=0x331ea44;
+ dispatch_count=0;note_call_count=0;note_selected_item=0;
+ exercise(&in,(void*)0x331ea38,&actual);
+ require(!memcmp(&actual,&expected,sizeof(actual))&&captured_sp==saved_sp,"native wheel gate preserves every register/flag and stack word except consumed r3 and the original BLX link");
+ require(dispatch_count==(consumed?0u:1u)&&route==1,"stock rotation runs exactly once only on unconsumed input; original continuation reached");
+}
+static void native_note_checks(void){
+ initial(1);memset(command_state,0,sizeof(*command_state));command_initialize();observer_running=1;observer_image_bias=0;ready=1;
+ unsigned site=0;while(site<PATCH_COUNT&&anchor[site]!=0x331ea38)site++;
+ require(site<PATCH_COUNT&&hook_ids[site]==M_NATIVE_WHEEL&&capture_after_pair[site],"panel wheel is the qualified post-pair production hook");
+ require(guarded_bytes(0x331e6f4,0x490)&&guarded_bytes(0x331e37c,0x1b8)&&guarded_bytes(0x10dfe2c,0x278),"callback construction, modifier getter and full native callback guarded");
+ require(word(ptr(note_wheel_consumed))==0xe12fff1e,"consumed callee is exactly a preserving ARM BX LR");
+ uint32_t *entry=(uint32_t*)0x331ea38;memcpy(entry,expected[site],8);entry[2]=0xe12fff33;
+ uint32_t *tail=entry+3;jump(&tail,ptr(capture_a));__builtin___clear_cache((char*)entry,(char*)tail);
+ uint32_t *rotation=(uint32_t*)(uintptr_t)WHEEL_ROTATE_RVA;jump(&rotation,ptr(native_note_rotation_fixture));__builtin___clear_cache((char*)(uintptr_t)WHEEL_ROTATE_RVA,(char*)rotation);
+ static uint32_t table[9];table[8]=WHEEL_ROTATE_RVA;
+ Context in=context();in.r[3]=ptr(table);in.r[5]=ptr(note_receiver_fixture);in.r[1]=1;in.r[2]=0;
+ native_note_seed(260);native_note_exercise(in,0);require(!note_call_count,"original panel continuation calls no selection");
+ unsigned char *stub=mmap(NULL,4096,PROT_READ|PROT_WRITE|PROT_EXEC,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);require(stub!=MAP_FAILED,"native selection gate fixture");
+ size_t bytes=build_stub(stub,site,0);__builtin___clear_cache((char*)stub,(char*)stub+bytes);
+ uint32_t *patched=entry;jump(&patched,ptr(stub));__builtin___clear_cache((char*)entry,(char*)entry+8);
+ native_note_exercise(in,0);require(!note_call_count,"plain wheel preserves stock handling");
+ in.r[2]=1;native_note_exercise(in,1);require(note_one_batch()&&note_selected_item==ptr(note_items_fixture[0]),"physical Shift step composes with shared selection owner");
+ in.r[1]=127;native_note_exercise(in,1);require(note_one_batch()&&note_selected_item==ptr(note_items_fixture[127]),"native +127 is preserved, not clamped to four");
+ in.r[1]=1;native_note_exercise(in,1);require(note_selected_item==ptr(note_items_fixture[128]),"next independent event advances once");
+ in.r[1]=(uint32_t)-128;native_note_exercise(in,1);require(note_one_batch()&&note_selected_item==ptr(note_items_fixture[0]),"native -128 is preserved in one final selection batch");
+ for(unsigned i=0;i<128;i++){in.r[1]=1;native_note_exercise(in,1);require(note_selected_item==ptr(note_items_fixture[i+1]),"every consecutive positive burst event selects its next note");}
+ for(unsigned i=0;i<128;i++){in.r[1]=(uint32_t)-1;native_note_exercise(in,1);require(note_selected_item==ptr(note_items_fixture[127-i]),"every consecutive negative burst event selects its previous note");}
+ native_note_exercise(in,1);require(!note_call_count,"first endpoint consumes without stock editing");
+ in.r[1]=0;native_note_exercise(in,1);require(!note_call_count,"zero represented count is a consumed no-op");
+ for(unsigned i=0;i<260;i++){unsigned char *raw=(unsigned char*)note_items_fixture[i];require(!memcmp(raw+0x78,raw+0xb0,8)&&!memcmp(raw+0x88,raw+0xc0,37),"full burst and bound cases preserve every fixture note payload");}
+ component_note_call=note_call_fixture;require(note_run(127)==4&&note_selected_item==ptr(note_items_fixture[4]),"X-Touch retains its four-step clamp independently of native range");component_note_call=native_note_effect;
+ native_note_seed(0);in.r[1]=1;native_note_exercise(in,1);require(!note_call_count,"empty Grid consumes without native editing");
+ native_note_seed(2);put(ptr(note_grid_fixture)+0x32c,1);native_note_exercise(in,1);require(!note_call_count,"active Grid gesture consumes without selecting or editing");put(ptr(note_grid_fixture)+0x32c,0);
+ put(ptr(note_items_fixture[0])+0x100,1);native_note_exercise(in,1);require(!note_call_count,"active note gesture also stays consumed");put(ptr(note_items_fixture[0])+0x100,0);
+ in.r[1]=127;native_note_exercise(in,1);require(note_selected_item==ptr(note_items_fixture[1]),"overshoot clamps to last note");native_note_exercise(in,1);require(!note_call_count,"last endpoint consumes without stock editing");
+ in.r[1]=1;in.r[2]=0;native_note_exercise(in,0);require(!note_call_count,"Shift release returns stock behavior");
+ in.r[2]=2;native_note_exercise(in,0);require(!note_call_count,"unknown modifier retains stock behavior");in.r[2]=1;
+ table[8]=ptr(native_note_rotation_fixture);native_note_exercise(in,0);require(!note_call_count,"unexpected native callee remains unchanged");table[8]=WHEEL_ROTATE_RVA;
+ in.r[1]=128;native_note_exercise(in,0);in.r[1]=(uint32_t)-129;native_note_exercise(in,0);in.r[1]=1;
+ put(ptr(note_grid_fixture),NOTE_GRID_VTABLE+4);native_note_exercise(in,0);require(!note_call_count,"non-Grid Shift retains stock behavior");put(ptr(note_grid_fixture),NOTE_GRID_VTABLE);
+ put(ptr(note_grid_fixture)+0x68,0);native_note_exercise(in,0);put(ptr(note_grid_fixture)+0x68,2);
+ put(FOCUS_SLOT_RVA,0);native_note_exercise(in,0);put(FOCUS_SLOT_RVA,ptr(note_receiver_fixture));
+ observer_running=0;native_note_exercise(in,0);observer_running=1;
+ /* A foreign owner must not dereference its register, even if aligned. */
+ void *unreadable=mmap(NULL,4096,PROT_NONE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);require(unreadable!=MAP_FAILED,"foreign unreadable receiver");
+ uint32_t saved_receiver=in.r[5];in.r[5]=ptr(unreadable);command_owner=token()+1;native_note_exercise(in,0);command_owner=token();in.r[5]=saved_receiver;munmap(unreadable,4096);
+ atomic_store(&command_in_hook,1);native_note_exercise(in,0);require(atomic_load(&command_in_hook)==1,"unrelated nested entry cannot release outer flight");atomic_store(&command_in_hook,0);
+ native_note_seed(2);native_note_close=1;native_note_exercise(in,1);require(!atomic_load(&command_in_hook)&&!atomic_load(&observer_running),"selection exits its existing flight after concurrent close");
+ require(!atomic_load(&command_state->error)&&!atomic_load(&command_state->trace_error)&&!atomic_load(&command_violation)&&!atomic_load(&command_state->published),"native input creates no mailbox request or spurious runtime fault");
+ /* Also execute the original reference-release loop, with only its owning
+  * objects and subsequent stack epilogue substituted. It must decrement once. */
+ observer_running=1;native_note_seed(2);
+ const unsigned char *callback=guarded_bytes(0x331e6f4,0x490);
+ memcpy(entry+3,callback+(0x331ea44-0x331e6f4),0x20);tail=(uint32_t*)0x331ea64;jump(&tail,ptr(capture_a));
+ static uint32_t reference[2],payload[1];payload[0]=ptr(reference);in.r[4]=ptr(payload);
+ memcpy(entry,expected[site],8);__builtin___clear_cache((char*)entry,(char*)tail);
+ Context before_cleanup,after_cleanup;reference[1]=7;dispatch_count=0;exercise(&in,entry,&before_cleanup);
+ require(reference[1]==6&&dispatch_count==1,"original BLX and reference decrement each execute once");
+ patched=entry;jump(&patched,ptr(stub));__builtin___clear_cache((char*)entry,(char*)tail);
+ reference[1]=7;dispatch_count=0;note_call_count=0;exercise(&in,entry,&after_cleanup);
+ require(reference[1]==6&&!dispatch_count&&note_one_batch()&&!memcmp(&before_cleanup,&after_cleanup,sizeof(Context))&&captured_sp==saved_sp,"consumed selection retains exact native DMB/LDREX/STREX cleanup and continuation once");
+ observer_running=0;
+ munmap(stub,4096);put(FOCUS_SLOT_RVA,0);component_note_call=NULL;native_note_close=0;atomic_store(&command_state->external_stop,0);
+ puts("PASS built-in Shift+wheel composed ARM gate/BLX: full signed-byte counts, 256 separate burst events, both endpoints/empty/active-gesture consumption, unrelated stock continuation, shared lifetime, X-Touch clamp and unchanged fixture note data (native objects, selection effects, rotation body and final stack epilogue substituted)");
+}
+#endif
 static void focus_press_checks(void){
  /* No new hook site: the press entry is called, never patched. */
  for(unsigned i=0;i<PATCH_COUNT;i++)require(anchor[i]!=PRESS_ENTRY_RVA,"the controller press entry hosts no patch site");
@@ -2954,7 +3107,13 @@ static void type_source_checks(void){
  }
  free(fixture);free(command_state);fixture=NULL;command_state=NULL;puts("PASS Type source hooks and inventory; native history/object bodies substituted, no native popup acceptance claim");
 }
+#ifdef NATIVE_WHEEL_PROBE
+#include "native-wheel-probe-test.inc"
+#endif
 int main(int argc,char **argv){
+#ifdef NATIVE_WHEEL_PROBE
+ if(argc==2&&!strcmp(argv[1],"--wheel-probe")){alarm(30);exercise_adjust=4096;replay_checks();native_wheel_probe_checks();return 0;}
+#endif
  if(argc==2&&!strcmp(argv[1],"--replay")){alarm(20);exercise_adjust=4096;replay_checks();return 0;}
  if(argc==2&&!strcmp(argv[1],"--create-source")){alarm(20);create_source_checks();return 0;}
  if(argc==2&&!strcmp(argv[1],"--type-source")){alarm(20);type_source_checks();return 0;}
@@ -2964,7 +3123,11 @@ int main(int argc,char **argv){
  void *v=mmap((void*)0x6930000,4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED,-1,0);require(v!=(void*)-1,"fixture Drum vtable page");put(0x6930c28,0x250ba74);put(0x6930c78,0x1375c68);
  key_statics_reserve();
  fixture=command_file(argv[1],sizeof(MirrorState));command_state=command_file(argv[2],sizeof(CommandState));require(fixture!=MAP_FAILED&&command_state!=MAP_FAILED,"exclusive actual shared output files");
- pointer_device_checks();wheel_data_checks();focus_press_checks();processor_lifecycle_checks();repair_checks();external_close_checks();new_project_checks();heartbeat_checks();drain_scan_checks();snapshot_clear_checks();channel_checks();channel_reclaim_checks();channel_seqlock_checks();jog_checks();master_checks();recording_checks();general_checks();send_destination_checks();bus_membership_checks();meter_interest_checks();registration_overlap_checks();mode_acceptance_checks();io_audio_checks();io_monitor_dispatch_checks();io_sync_dispatch_checks();io_completion_checks();
+ pointer_device_checks();wheel_data_checks();note_selection_checks();
+#ifndef NATIVE_WHEEL_PROBE
+ native_note_checks();
+#endif
+ focus_press_checks();processor_lifecycle_checks();repair_checks();external_close_checks();new_project_checks();heartbeat_checks();drain_scan_checks();snapshot_clear_checks();channel_checks();channel_reclaim_checks();channel_seqlock_checks();jog_checks();master_checks();recording_checks();general_checks();send_destination_checks();bus_membership_checks();meter_interest_checks();registration_overlap_checks();mode_acceptance_checks();io_audio_checks();io_monitor_dispatch_checks();io_sync_dispatch_checks();io_completion_checks();
  initial(1);command_state->magic=COMMAND_MAGIC;command_state->version=COMMAND_VERSION;command_state->bytes=sizeof(*command_state);command_state->capacity=COMMAND_SLOTS;command_state->pid=getpid();uint64_t start=command_process_start(getpid());command_state->start_lo=start;command_state->start_hi=start>>32;command_state->origin_sec=fixture->origin_sec;command_state->origin_nsec=fixture->origin_nsec;command_state->seconds=WINDOW_SECONDS;atomic_store(&command_state->alive,1);
  command_initialize();observer_running=1;observer_image_bias=0;component_dispatch=fake_dispatch;
  seed_fixture(0,0,0x3f000000,1);load_fixture();

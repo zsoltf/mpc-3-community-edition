@@ -1,22 +1,30 @@
-https://github.com/user-attachments/assets/d2c28bb4-6c1e-4adf-b646-ca75fded7a5c
-
 # MPC 3 Community Edition
 
-A community build of the MPC 3.9.1 firmware that adds X-Touch control and USB
-mouse support to standalone MPCs. You build the image in your browser from
-Akai's official update file. Nothing is uploaded, and no firmware is hosted
-here.
+A community build of the MPC 3.9.1 firmware that adds X-Touch control, USB
+mouse support and built-in note selection to standalone MPCs. You build the
+image in your browser from Akai's official update file. Nothing is uploaded,
+and no firmware is hosted here.
 
 **[Build your image](https://zsoltf.github.io/mpc-3-community-edition/)**
 · **[X-Touch guide](https://zsoltf.github.io/mpc-3-community-edition/guide.html)**
 
+https://github.com/user-attachments/assets/d2c28bb4-6c1e-4adf-b646-ca75fded7a5c
+
 ## Features
 
-- **X-Touch control.** Mixer, sends, drum pad mix, plug-ins, Q-Links and
-  transport. Motor faders, track names, colors and meters follow the MPC. The
-  jog wheel doubles as the MPC data wheel.
-- **USB mouse.** Pointer, click, drag to select, and the scroll wheel as the
-  data wheel. No right-click yet.
+- **Mackie Control (MCU) integration.** Currently for the full-size Behringer
+  X-Touch only. Drives the mixer, sends, drum pad mix, inserts, Q-Links and
+  transport. Motor faders, track names, colors and meters follow the MPC's
+  own state. The jog wheel doubles as the MPC data wheel (the Scrub button
+  toggles it), the cursor cluster does data steps and Tab/Shift+Tab focus
+  navigation, and the footswitches are Play and Record.
+- **USB mouse support.** A cursor after boot or on hot-plug, clicking,
+  drag-to-select, and the scroll wheel acting as the data wheel for the
+  focused control. Right-click and long-tap gestures are not implemented yet.
+- **Built-in note selection.** In the Grid, hold MPC Shift and turn the MPC
+  data wheel to select the previous or next note.
+- **Debug build.** An optional no-SSH image keeps one current debug report on
+  a marked USB drive.
 
 ## Roadmap
 
@@ -32,25 +40,37 @@ here.
 
 - MPC Live II on firmware 3.9.1. Other Gen1 models are untested. Gen2 and
   Force are not supported.
-- Full-size Behringer X-Touch in MC mode over USB. Other controllers are not
-  supported yet.
+- Full-size Behringer X-Touch in MC mode over USB for controller features.
+  A USB mouse and the MPC Shift+wheel feature work without an X-Touch.
 - The official `MPC-3.9.1-Gen1-update.img` from Akai.
 
 ## Install
 
 1. Open the [Image Builder](https://zsoltf.github.io/mpc-3-community-edition/)
-   and choose the official firmware file. Add an SSH key only if you want
-   remote access.
+   and choose the official firmware file. Add an SSH key if you want remote
+   access or file transfer.
 2. Save the image to a USB drive and run the MPC's firmware update.
-3. In **Preferences > MIDI/Sync**, turn off Track, Global and Control for the
-   `X-TOUCH_INT` input.
-4. Plug in the X-Touch and load a project. It connects on its own.
+3. If you use an X-Touch, turn off Track, Global and Control for its
+   `X-TOUCH_INT` input in **Preferences > MIDI/Sync**.
+4. Plug in the controls you use and load a project. The X-Touch connects on
+   its own; a USB mouse can be used by itself.
+
+After installing, Preferences > Info identifies the image as `MPC CE v0.2.5`
+for installation checks and support.
 
 Your settings and projects are kept. Back up your projects first, and keep the
 official firmware so you can go back.
 
-This is an experimental pre-release. Known limits are in the
-[release notes](docs/releases/v0.2.4.md).
+See the [v0.2.5 release notes](docs/releases/v0.2.5.md) for changes and limits.
+
+## Files over SSH
+
+An image built with your SSH key can also copy files. Connect with `sftp`,
+`scp` or an app such as Cyberduck, WinSCP or FileZilla: user `root`, your
+private key, and the address shown in the MPC's Wi-Fi settings. Your USB drive
+is `/media/MPC`, named after its label, and the internal storage is
+`/media/az01-internal-sd`. Copied files show up in the Browser right away.
+Expect 1-2 MB/s over Wi-Fi, and don't replace a file a loaded project is using.
 
 ## Links
 

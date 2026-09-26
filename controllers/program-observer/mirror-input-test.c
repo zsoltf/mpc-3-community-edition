@@ -412,7 +412,10 @@ static void jog_policy_checks(void){
 }
 /* One data-wheel flight's three producer events: dispatch, the step the observer
  * says it actually passed to the app's focus controller, and return. */
-static void wheel_evidence(CommandState *c,unsigned request,int delivered,uint32_t tick){
+/* The producer's dispatch/step/return receipt for one counted-focus request.
+ * Every event carries the request's own operation, as wheel-capture.inc emits
+ * it, because the bridge settles a flight only when both fields match. */
+static void counted_focus_evidence(CommandState *c,unsigned request,int delivered,uint32_t tick,unsigned operation){
  unsigned at=command_find(c,request);need(at<COMMAND_SLOTS,"data-wheel fixture slot identity");
  CommandSlot *slot=c->slots+at;CommandRequest r;need(command_request_read(slot,request,&r),"data-wheel fixture request");
  CommandLane *l=slot->lanes+1;
@@ -420,13 +423,14 @@ static void wheel_evidence(CommandState *c,unsigned request,int delivered,uint32
  atomic_store(&l->token,123);
  const unsigned kinds[3]={CE_DISPATCH,CE_WHEEL_STEP,CE_RETURN};
  for(unsigned n=0;n<3;n++){
-  CommandEvent e={.kind=kinds[n],.request=request,.tick=tick+n,.token=123,.controller=JOG_DATA,.bits=n==1?(uint32_t)(int32_t)delivered:r.bits,.revision=r.epoch,.reserved=JOG_DATA};
+  CommandEvent e={.kind=kinds[n],.request=request,.tick=tick+n,.token=123,.controller=operation,.bits=n==1?(uint32_t)(int32_t)delivered:r.bits,.revision=r.epoch,.reserved=operation};
   unsigned k=atomic_load(&l->published);command_event_store(l->events+k,&e);atomic_store(&l->published,k+1);
  }
  atomic_store(&c->consumed,atomic_load(&c->consumed)+1);
  atomic_store(&slot->dispatched,request);atomic_store(&slot->returned,request);atomic_store(&slot->processed,request);
  atomic_store_explicit(&slot->done,request,memory_order_release);atomic_store_explicit(&slot->sealed,request,memory_order_release);
 }
+static void wheel_evidence(CommandState *c,unsigned request,int delivered,uint32_t tick){counted_focus_evidence(c,request,delivered,tick,JOG_DATA);}
 #if X_TOUCH_BLOCKING_ENABLED
 /* One press flight's three producer events: dispatch, the observer's boolean
  * call receipt, and return. */
@@ -631,16 +635,14 @@ static void data_wheel_checks(void){
  raw_input(codec,shift_down,address,&in,&b,&s,111);raw_input(codec,forward,address,&in,&b,&s,111);
  need(in.jog_count==2&&in.jog_events[(in.jog_head+1)%INPUT_JOG_EVENTS].operation==JOG_PULSE&&!in.wheel_delta,"Shift still selects pulses in scrub mode");
  input_jog_discard(&in);
- /* Data-wheel mode: every detent is one step, opposite detents cancel, and
-  * Shift is ignored for the wheel because nothing here feeds the app's coarse
-  * flag. Shift keeps the rest of its roles, so it stays held here. */
- raw_data_wheel=1;in.jog_shift=1;
+ /* Data-wheel mode without Shift: every detent is one data-wheel step and
+  * opposite detents cancel. Shift + wheel in this mode is note selection. */
+ raw_data_wheel=1;in.jog_shift=0;
  raw_input(codec,forward,address,&in,&b,&s,120);raw_input(codec,forward,address,&in,&b,&s,121);
  need(in.wheel_delta==2&&!in.jog_count,"data-wheel mode accumulates detents and queues no transport jog");
  raw_input(codec,back,address,&in,&b,&s,122);
  need(in.wheel_delta==1,"opposite detents cancel in the data-wheel accumulator");
- need(!in.jog_count,"Shift is ignored for the wheel in data-wheel mode");
- in.jog_shift=0;
+ need(!in.jog_count,"the data wheel never queues a transport jog in data-wheel mode");
  /* One request per pump, one alive at a time, and nothing for an empty
   * accumulator. */
  input_pump(&in,&b,&s,130);
@@ -687,6 +689,46 @@ static void data_wheel_checks(void){
  need(command_request_read(c->slots+command_find(c,2),2,&r)&&(int32_t)r.bits==WHEEL_MAX_STEPS&&in.wheel_delta==10-2*WHEEL_MAX_STEPS,"the next request carries the next four");
  wheel_evidence(c,2,WHEEL_MAX_STEPS,311);s.heartbeat=320;input_pump(&in,&b,&s,320);reclaim_fixture(c,2);input_pump(&in,&b,&s,321);
  need(command_request_read(c->slots+command_find(c,3),3,&r)&&(int32_t)r.bits==10-2*WHEEL_MAX_STEPS&&!in.wheel_delta,"and the last request carries the remaining two, so nothing is dropped");
+ /* Shift + jog in data-wheel mode is note selection: the same counted-focus
+  * accumulator and receipt as the data wheel, under its own operation. */
+ reset_fixture(c,&in,&b,&s,2);raw_data_wheel=1;in.jog_shift=1;
+ raw_input(codec,forward,address,&in,&b,&s,500);raw_input(codec,forward,address,&in,&b,&s,501);
+ need(in.wheel_delta==2&&in.wheel_operation==NOTE_SELECT&&!in.jog_count,"Shift + jog banks note steps and queues no transport jog");
+ input_pump(&in,&b,&s,502);
+ need(in.submitted==1&&command_request_read(c->slots,1,&r)&&r.reserved==NOTE_SELECT&&(int32_t)r.bits==2&&!in.wheel_delta,"one note-selection request carries the signed count");
+ need(!r.project_owner&&!r.track_owner&&!r.program_owner&&!r.global_owner&&!r.field_incarnation&&!r.pad_owner&&r.epoch==s.epoch,"the note-selection request names no Track, Program, Project or pad target");
+ counted_focus_evidence(c,1,2,502,NOTE_SELECT);s.heartbeat=510;input_pump(&in,&b,&s,510);
+ need(!in.error&&in.settled==1,"the note-selection receipt settles the request");
+ /* At the first or last note the observer moves nothing. That is a completed
+  * request, not a failure, or every turn past an end would fault the lane. */
+ reclaim_fixture(c,1);raw_input(codec,forward,address,&in,&b,&s,511);input_pump(&in,&b,&s,511);
+ counted_focus_evidence(c,2,0,511,NOTE_SELECT);s.heartbeat=520;input_pump(&in,&b,&s,520);
+ need(!in.error&&in.settled==2,"a clamped selection that moves nothing still settles");
+ /* A receipt must name the operation it answers. Data-wheel evidence cannot
+  * settle a note-selection flight. */
+ reclaim_fixture(c,2);raw_input(codec,forward,address,&in,&b,&s,521);input_pump(&in,&b,&s,521);
+ wheel_evidence(c,3,1,521);s.heartbeat=530;input_pump(&in,&b,&s,530);
+ need(in.error==C_TRACE_AMBIGUOUS&&in.settled==2,"data-wheel evidence is refused for a note-selection request");
+ /* Letting go of Shift mid-turn must never deliver banked note steps as value
+  * changes, and pressing it again must never turn value steps into selection. */
+ reset_fixture(c,&in,&b,&s,2);raw_data_wheel=1;in.jog_shift=1;
+ raw_input(codec,forward,address,&in,&b,&s,540);
+ need(in.wheel_operation==NOTE_SELECT&&in.wheel_delta==1,"a note step banks under Shift");
+ in.jog_shift=0;raw_input(codec,forward,address,&in,&b,&s,541);
+ need(in.wheel_operation==JOG_DATA&&in.wheel_delta==1,"releasing Shift discards the banked note step instead of converting it");
+ in.jog_shift=1;raw_input(codec,back,address,&in,&b,&s,542);
+ need(in.wheel_operation==NOTE_SELECT&&in.wheel_delta==-1,"pressing Shift again discards the banked data-wheel step");
+ input_jog_discard(&in);
+ need(in.wheel_operation==JOG_DATA&&!in.wheel_delta,"disconnect returns the accumulator to the data wheel");
+ /* A project reload drops the old project's banked step, never a Shift that
+  * is still physically held through the load. */
+ reset_fixture(c,&in,&b,&s,2);raw_data_wheel=1;in.jog_shift=1;
+ raw_input(codec,forward,address,&in,&b,&s,550);
+ need(in.wheel_operation==NOTE_SELECT&&in.wheel_delta==1,"the first detent after a load selects");
+ s.epoch=3;raw_input(codec,forward,address,&in,&b,&s,551);
+ need(in.jog_shift&&in.jog_epoch==3&&in.wheel_operation==NOTE_SELECT&&in.wheel_delta==1,"a reload discards the banked step but keeps the held Shift, so the turn keeps selecting");
+ raw_input(codec,forward,address,&in,&b,&s,552);
+ need(in.wheel_operation==NOTE_SELECT&&in.wheel_delta==2&&!in.jog_count,"and later detents in the same hold still select notes");
  /* The cursor cluster belongs to whichever mode is selected, never to both. */
  reset_fixture(c,&in,&b,&s,2);s.editor_owner=77;s.zoom_owner=88;raw_data_wheel=1;
  Surface cursor={.source=3,.full=address};

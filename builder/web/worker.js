@@ -11,6 +11,6 @@ onmessage = event => {
       postMessage({type: 'error', message: 'The image engine is still loading. Try again in a moment.'});
       return;
     }
-    self.mpclearnBuild(new Uint8Array(event.data.image), new Uint8Array(event.data.ownerKey));
+    self.mpclearnBuild(new Uint8Array(event.data.image), new Uint8Array(event.data.ownerKey), !!event.data.diagnostics);
   }
 };

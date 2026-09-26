@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include "mpc-identity.h"
 #ifdef COMMAND_CLIENT
 #include "sha256.h"
 #endif
@@ -22,12 +23,12 @@ static int command_same_file(const struct stat *a,const struct stat *b){return a
 static int command_process_file(unsigned pid,int full_hash){
  char path[64],target[128];snprintf(path,sizeof(path),"/proc/%u/exe",pid);ssize_t n=readlink(path,target,sizeof(target)-1);if(n<0)return 0;target[n]=0;if(strcmp(target,"/usr/bin/MPC"))return 0;
  int fd=open(path,O_RDONLY|O_CLOEXEC);if(fd<0)return 0;struct stat before,after,installed,live;
- int ok=!fstat(fd,&before)&&S_ISREG(before.st_mode)&&before.st_size==112222004&&!stat("/usr/bin/MPC",&installed)&&S_ISREG(installed.st_mode)&&command_same_file(&before,&installed);
+ int ok=!fstat(fd,&before)&&S_ISREG(before.st_mode)&&before.st_size==MPC_EXECUTABLE_SIZE&&!stat("/usr/bin/MPC",&installed)&&S_ISREG(installed.st_mode)&&command_same_file(&before,&installed);
  if(ok&&full_hash){
   Sha sha;sha_init(&sha);unsigned char bytes[65536],sum[32];size_t total=0;
-  while(ok){ssize_t got=read(fd,bytes,sizeof(bytes));if(got<0){ok=0;break;}if(!got)break;total+=(size_t)got;if(total>112222004){ok=0;break;}sha_add(&sha,bytes,(size_t)got);}
+  while(ok){ssize_t got=read(fd,bytes,sizeof(bytes));if(got<0){ok=0;break;}if(!got)break;total+=(size_t)got;if(total>MPC_EXECUTABLE_SIZE){ok=0;break;}sha_add(&sha,bytes,(size_t)got);}
   sha_end(&sha,sum);char hex[65];for(unsigned i=0;i<32;i++)snprintf(hex+2*i,3,"%02x",sum[i]);
-  ok=ok&&total==112222004&&!strcmp(hex,"bc054a3f3ba02c2d33ac9a515a4a8638964da779223502286d6a64b517bf1426");
+  ok=ok&&total==MPC_EXECUTABLE_SIZE&&!strcmp(hex,MPC_EXECUTABLE_SHA256);
  }
  ok=ok&&!fstat(fd,&after)&&command_same_file(&before,&after)&&!stat(path,&live)&&S_ISREG(live.st_mode)&&command_same_file(&before,&live)&&!stat("/usr/bin/MPC",&installed)&&S_ISREG(installed.st_mode)&&command_same_file(&before,&installed);
  n=readlink(path,target,sizeof(target)-1);if(n<0)ok=0;else{target[n]=0;if(strcmp(target,"/usr/bin/MPC"))ok=0;}

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Exact ELF/raw ARM coordinate checks and model-mode detour recipes."""
-import hashlib,struct,sys
+import hashlib,json,struct,sys
 from pathlib import Path
 raw=Path(sys.argv[1]).read_bytes()
-if hashlib.sha256(raw).hexdigest()!='bc054a3f3ba02c2d33ac9a515a4a8638964da779223502286d6a64b517bf1426':raise SystemExit('wrong MPC ELF')
+identity=json.loads((Path(__file__).resolve().parents[2]/'firmware/mpc-ce.json').read_text())
+if len(raw)!=identity['size'] or hashlib.sha256(raw).hexdigest()!=identity['output_sha256']:raise SystemExit('wrong MPC CE ELF')
 if raw[:7]!=b'\x7fELF\x01\x01\x01' or struct.unpack_from('<HH',raw,16)!=(3,40):raise SystemExit('wrong ABI')
 phoff=struct.unpack_from('<I',raw,28)[0];ents,count=struct.unpack_from('<HH',raw,42)
 loads=[struct.unpack_from('<8I',raw,phoff+i*ents) for i in range(count)]
@@ -34,8 +35,9 @@ sites=[
  (0x25178d4,'003094e55bf07ff5'),(0x2517900,'253400e3f0426de1')]
 mode=sys.argv[3] if len(sys.argv)>3 else ''
 ui_witness=mode=='--ui-witness'
-command=mode=='--command'
-mirror=mode in ('--mirror','--ui-witness','--command')
+wheel_probe=mode=='--command-wheel-probe'
+command=mode=='--command' or wheel_probe
+mirror=mode in ('--mirror','--ui-witness','--command','--command-wheel-probe')
 if mirror:
  selected=list(range(22))+[22,27,28,29,34,35,36,37,38]
  selected += [43,44,45]
@@ -151,6 +153,8 @@ if mirror:
   sites += [(0xa0a0d0,'f237d7e1000053e3'),(0xa0d9f0,'f237d4e1000053e3'),
    (0xa09c90,'f237d7e1000053e3'),(0xa0d5e4,'f237d4e1000053e3')]
   selected += [298,299,300,301]
+  sites += [(0x331ea38,'0500a0e1203093e5')]
+  selected += [302]
  sites=[sites[i] for i in selected]
 for a,h in sites:
  if at(a,8).hex()!=h:raise SystemExit(f'raw recipe changed at {a:x}')
@@ -158,6 +162,7 @@ if command:
  # The new create and pointer pairs must not replace any native retry/branch
  # destination with their inline jump literal. Scan direct B/BL in the whole RX image.
  interiors={0xe45848,0xe45b30,0xba6888,0xbd20e4,0xa0a0d4,0xa0d9f4,0xa09c94,0xa0d5e8}
+ interiors.update((0x331ea38,0x331ea3c))
  for typ,off,va,pa,size,mem,flags,align in loads:
   if typ!=1 or not flags&1:continue
   for offset in range(0,size-3,4):
@@ -165,7 +170,7 @@ if command:
    if w&0x0e000000!=0x0a000000:continue
    d=w&0xffffff
    if d&0x800000:d-=1<<24
-   if va+offset+8+4*d in interiors:raise SystemExit('branch enters create patch interior')
+   if va+offset+8+4*d in interiors:raise SystemExit('branch enters protected patch word')
 # Calls and store provenance; include successful Browser branch and source stores.
 guards=[(0x25178b8,0x48),(0x25175cc,0xa8),(0x2517900,0x50),(0x2517a7c,0x58),(0x250bb6c,0x70),(0x25176a4,0x40),(0x236d848,0x10),(0x236d944,0x28),(0x264fc58,0x80),(0x1bda7e8,0x24),(0x1bda9d8,0x28),
  (0x2651ce0,0x34),(0x2651f30,0x20),(0x2652158,0x20),(0x2651b7c,0x38),(0xe46700,0x24),(0x25641c8,0x24),(0x264eb8c,0x24),(0xe36604,0x64),(0x17b7fb4,0x2c),(0x17b80f8,16),(0x25f1274,0x2c),
@@ -173,6 +178,16 @@ guards=[(0x25178b8,0x48),(0x25175cc,0xa8),(0x2517900,0x50),(0x2517a7c,0x58),(0x2
  (0x25832f4,0x19c),(0x25836b4,0xfc),(0x2581890,0x44),
  (0x255f900,0x10),(0x255fad4,12),(0x2564788,24),
  (0xe5af48,0x88),(0xe298bc,0x84),(0xe5afa8,0x30),(0xe29928,0x20),(0xe4af44,0x18),(0xe524b0,0x18),(0xe5fc4c,0x2c)]
+if command:
+ guards += [(0x331e37c,0x1b8),(0x10dfe2c,0x278)]
+ def probe_word(a):return struct.unpack('<I',at(a,4))[0]
+ # Exact callback construction, concrete modifier getter and host dispatch.
+ assert 0x331e420+8+probe_word(0x331e524)==0x331e9ac
+ assert probe_word(0x68e1ef0+0x10)==0x10dff30
+ assert at(0x10dff30,12).hex()=='403090e5840dd3e51eff2fe1'
+ assert at(0x331ea2c,24).hex()=='003095e50c20d4e5d810d4e10500a0e1203093e533ff2fe1'
+ assert probe_word(0x331e3cc)==0xe5922010 and probe_word(0x331e438)==0xe5cd8014
+ print('PASS native wheel callback/getter/count/modifier/callee provenance and both patch words have no incoming direct ARM branch')
 if command:
  guards += [(0x14dd984,0x18c),(0x14de2d8,0x188),(0x14dfc04,0x64),(0x14e3a50,0x2dc)]
 if mirror:
@@ -209,6 +224,14 @@ if command:guards += [(0xba6658,0x128),(0xba6780,0x308)]
 # functions holding the drain loops: the flush sites live inside them and the
 # hook trusts the loop structure around them, so both are verified whole.
 if command:guards += [(0xbd1e2c,0x3d4),(0xbd2200,0x188),(0x35c28f4,0xe8),(0x2b64174,0x10),(0xb74904,0x54),(0xa09c24,0xab4),(0xa0d50c,0xa78)]
+# Grid selection native entries and callback used by the exact live note type.
+if command:guards += [(0x2e95f8c,0x250),(0x2e962d4,0x268),(0x2e99764,0x220),
+ (0x2e9ad64,0x92c),(0x2a72264,0x84),(0x35f7234,0xbc)]
+if command:
+ if struct.unpack('<2I',at(0x69c67f0+0xd4,8))!=(0x2e962d4,0x2e95f8c):
+  raise SystemExit('Grid clear/select vtable changed')
+ if struct.unpack('<I',at(0x69c6b4c+0xc4,4))[0]!=0x2a72264:
+  raise SystemExit('Grid note selection callback changed')
 # The data wheel's push. 35c2648 is UIFocusController vtable slot 5, the
 # controller-side press entry, called (never patched) by the JOG_PRESS lane
 # exactly as 35c28f4 is called by the data-wheel lane; one complete .ARM.exidx
@@ -313,6 +336,7 @@ for a,_ in sites:
  found=[x for x in starts if x<=a]
  if not found:raise SystemExit('no unwind range')
  start=max(found);end=min(x for x in starts if x>start)
+ if command and a==0x331ea38 and (start,end)!=(0x331e6f4,0x331eb84):raise SystemExit('wheel callback unwind boundary changed')
  print(f'anchor={a:08x} unwind=[{start:08x},{end:08x}) bytes={at(a,8).hex()}')
 lines=['/* Generated from exact raw ARM ELF; regenerate with model-prepare.py. */',
  'static const uint32_t anchor[PATCH_COUNT]={'+','.join(hex(a) for a,h in sites)+'};',
@@ -326,7 +350,7 @@ for a,_ in sites:
   if w&0xffff0000==0xe59f0000:row.append(struct.unpack('<I',at(a+offset+8+(w&4095),4))[0])
   else:row.append(0)
  reloc.append(row)
-lines+=['static const unsigned char capture_after_pair[PATCH_COUNT]={'+','.join('1' if a in (0x1e75f48,0x24713cc,0x236f204,0x236f210,0x236f21c,0x236fc74,0x236fc80,0x236fc8c,0x236f274,0x236f280,0x236f294,0x236fce0,0x236fcf0,0x236fd0c,0x16051a4,0x16051b0,0x16051c0,0x2373a8c,0x2373a9c,0x2373aa8,0x2471e84,0x24712cc,0x2471f60,0x2471fa4,0x2471420,0x11fabd0,0xf57e0c,0x245e8bc,0x1351008,0x245e63c,0x245e650,0x245ee98,0x1462ed0,0x245ec18,0x245ec2c,0x1e8cc2c,0x1e8cca0,0x26522e4,0x2652328,0x265236c,0x26523b0,0xeeee58,0xe4fb9c,0x1462cec,0x128f750,0x12c5aec,0x1c3752c,0x1c37708,0x23669d0,0x2366b44,0x1bea98c,0x1c2f644,0x28cb31c,0x264fccc,0x1bda804,0x1bda9f4,0x2651d04,0x2652160,0x25178d4,0x236f628,0x236f3d8,0x236fe14,0x26527dc,0x257b858,0x254c9c0,0x23755ac,0x2374f88,0x23755ec,0x2375288,0x236f444,0x236fe98,0x135a760,0x1c371fc,0x238f964,0x1c3b740) else '0' for a,h in sites)+'};','static const uint32_t relocated[PATCH_COUNT][2]={'+','.join('{'+','.join(hex(x) for x in row)+'}' for row in reloc)+'};']
+lines+=['static const unsigned char capture_after_pair[PATCH_COUNT]={'+','.join('1' if (command and a==0x331ea38) or a in (0x1e75f48,0x24713cc,0x236f204,0x236f210,0x236f21c,0x236fc74,0x236fc80,0x236fc8c,0x236f274,0x236f280,0x236f294,0x236fce0,0x236fcf0,0x236fd0c,0x16051a4,0x16051b0,0x16051c0,0x2373a8c,0x2373a9c,0x2373aa8,0x2471e84,0x24712cc,0x2471f60,0x2471fa4,0x2471420,0x11fabd0,0xf57e0c,0x245e8bc,0x1351008,0x245e63c,0x245e650,0x245ee98,0x1462ed0,0x245ec18,0x245ec2c,0x1e8cc2c,0x1e8cca0,0x26522e4,0x2652328,0x265236c,0x26523b0,0xeeee58,0xe4fb9c,0x1462cec,0x128f750,0x12c5aec,0x1c3752c,0x1c37708,0x23669d0,0x2366b44,0x1bea98c,0x1c2f644,0x28cb31c,0x264fccc,0x1bda804,0x1bda9f4,0x2651d04,0x2652160,0x25178d4,0x236f628,0x236f3d8,0x236fe14,0x26527dc,0x257b858,0x254c9c0,0x23755ac,0x2374f88,0x23755ec,0x2375288,0x236f444,0x236fe98,0x135a760,0x1c371fc,0x238f964,0x1c3b740) else '0' for a,h in sites)+'};','static const uint32_t relocated[PATCH_COUNT][2]={'+','.join('{'+','.join(hex(x) for x in row)+'}' for row in reloc)+'};']
 branches=[]
 for a,_ in sites:
  row=[]

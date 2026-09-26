@@ -102,7 +102,7 @@ loads or the controller reconnects.
 
 | Control | Scrub mode (LED on) | Data-wheel mode (LED off) |
 | --- | --- | --- |
-| Jog wheel | Move by beats. Shift+jog moves by ticks. | The MPC data wheel. One click is one step on whatever is selected. |
+| Jog wheel | Move by beats. Shift+jog moves by ticks. | The MPC data wheel. One click is one step on whatever is selected. In the Grid, Shift+jog selects the previous or next note. |
 | Up / Down | Cursor up / down. | One step up / down, like the MPC's plus and minus. |
 | Left / Right | Cursor left / right. | Previous / next control. |
 | Center (Zoom) | Switch the arrows between cursor and zoom. | No action. |

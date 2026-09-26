@@ -61,18 +61,28 @@ func TestNormalizeOwnerPublicKey(t *testing.T) {
 }
 
 func TestPatchVariantSelection(t *testing.T) {
-	disabled, _, placeholder, err := loadPatch(false)
+	disabled, _, placeholder, err := loadPatch(recipeNoSSH)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if disabled.SSHEnabled || disabled.KeyOffset != -1 || len(placeholder) != 0 {
 		t.Fatal("default patch does not explicitly disable SSH")
 	}
-	enabled, _, placeholder, err := loadPatch(true)
+	enabled, _, placeholder, err := loadPatch(recipeSSH)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !enabled.SSHEnabled || enabled.KeyOffset < 0 || len(placeholder) != 81 {
 		t.Fatal("owner-key patch does not expose its verified 81-byte key slot")
+	}
+	diagnostics, _, placeholder, err := loadPatch(recipeDiagnostics)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diagnostics.SSHEnabled || diagnostics.KeyOffset != -1 || len(placeholder) != 0 || diagnostics.PatchedSHA256 == disabled.PatchedSHA256 {
+		t.Fatal("diagnostic patch is not a distinct no-SSH recipe")
+	}
+	if _, err := selectRecipe([]byte("key"), true); err == nil {
+		t.Fatal("diagnostic recipe accepted an SSH key")
 	}
 }

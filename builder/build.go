@@ -15,20 +15,24 @@ type buildResult struct {
 	ImagePath   string
 	ImageSHA256 string
 	SSHEnabled  bool
+	Diagnostics bool
 }
 
-func buildImage(inputPath, outputPath string, ownerPublicKey []byte, progress func(int, string)) (buildResult, error) {
+func buildImage(inputPath, outputPath string, ownerPublicKey []byte, diagnostics bool, progress func(int, string)) (buildResult, error) {
 	progress(2, "Checking embedded MCU patch...")
-	sshEnabled := len(ownerPublicKey) != 0
+	recipe, err := selectRecipe(ownerPublicKey, diagnostics)
+	if err != nil {
+		return buildResult{}, err
+	}
+	sshEnabled := recipe == recipeSSH
 	var authorized []byte
-	var err error
 	if sshEnabled {
 		authorized, err = normalizeOwnerPublicKey(ownerPublicKey)
 		if err != nil {
 			return buildResult{}, err
 		}
 	}
-	manifest, patch, placeholder, err := loadPatch(sshEnabled)
+	manifest, patch, placeholder, err := loadPatch(recipe)
 	if err != nil {
 		return buildResult{}, err
 	}
@@ -112,5 +116,5 @@ func buildImage(inputPath, outputPath string, ownerPublicKey []byte, progress fu
 	if hex.EncodeToString(destinationDigest) != imageSHA {
 		return buildResult{}, errors.New("saved image checksum changed during the final move")
 	}
-	return buildResult{ImagePath: outputPath, ImageSHA256: imageSHA, SSHEnabled: sshEnabled}, nil
+	return buildResult{ImagePath: outputPath, ImageSHA256: imageSHA, SSHEnabled: sshEnabled, Diagnostics: diagnostics}, nil
 }

@@ -23,4 +23,5 @@ arm-linux-gnueabihf-gcc -std=c11 -O2 -Wall -Wextra -Werror -marm -mfpu=neon /src
 arm-linux-gnueabihf-gcc -std=c11 -O2 -Wall -Wextra -Werror -marm -mfpu=neon -DVOLUME_MIRROR -DMIRROR_COMMAND -I/src/package/command /src/processor-component.c -o /out/processor-component -pthread -lm
 file /out/command-observer.so /out/command-client /out/command-component
 arm-linux-gnueabihf-readelf -l /out/command-observer.so | sed -n "/TLS/p"
+if arm-linux-gnueabihf-nm /out/command-observer.so | grep -q native_wheel_probe;then echo "Passive recorder leaked into product observer" >&2;exit 1;fi
 '

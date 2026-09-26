@@ -11,20 +11,24 @@ type memoryBuildResult struct {
 	Image       []byte
 	ImageSHA256 string
 	SSHEnabled  bool
+	Diagnostics bool
 }
 
-func buildImageMemory(input, ownerPublicKey []byte, progress func(int, string)) (memoryBuildResult, error) {
+func buildImageMemory(input, ownerPublicKey []byte, diagnostics bool, progress func(int, string)) (memoryBuildResult, error) {
 	progress(2, "Checking embedded MCU patch...")
-	sshEnabled := len(ownerPublicKey) != 0
+	recipe, err := selectRecipe(ownerPublicKey, diagnostics)
+	if err != nil {
+		return memoryBuildResult{}, err
+	}
+	sshEnabled := recipe == recipeSSH
 	var authorized []byte
-	var err error
 	if sshEnabled {
 		authorized, err = normalizeOwnerPublicKey(ownerPublicKey)
 		if err != nil {
 			return memoryBuildResult{}, err
 		}
 	}
-	manifest, patch, placeholder, err := loadPatch(sshEnabled)
+	manifest, patch, placeholder, err := loadPatch(recipe)
 	if err != nil {
 		return memoryBuildResult{}, err
 	}
@@ -70,6 +74,6 @@ func buildImageMemory(input, ownerPublicKey []byte, progress func(int, string)) 
 		return memoryBuildResult{}, fmt.Errorf("verify finished image: %w", err)
 	}
 	return memoryBuildResult{
-		Image: image, ImageSHA256: imageSHA, SSHEnabled: sshEnabled,
+		Image: image, ImageSHA256: imageSHA, SSHEnabled: sshEnabled, Diagnostics: diagnostics,
 	}, nil
 }

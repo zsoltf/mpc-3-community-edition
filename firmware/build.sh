@@ -2,7 +2,8 @@
 # Container entrypoint. Inputs mounted read-only at /inputs and /payload.
 set -eu
 cd /work
-output=${MPC_IMAGE_OUTPUT:-artifacts/MPC-3.9.1-Gen1-CE-v0.2.4-PERSONAL-SSH-update.img}
+output=${MPC_IMAGE_OUTPUT:-artifacts/MPC-3.9.1-Gen1-CE-v0.2.5-PERSONAL-SSH-update.img}
+ce_mpc=${MPC_CE_EXECUTABLE:-build/v0_2_5/MPC}
 [ ! -e "$output" ] || { echo "Output already exists: $output" >&2; exit 1; }
 mkdir -p build artifacts
 python3 - <<'PY'
@@ -13,6 +14,7 @@ ssh-keygen -l -f /inputs/owner.pub > build/owner-key-fingerprint.txt
 python3 scripts/patch_rootfs.py build/rootfs.original.ext build/rootfs.ssh.ext /inputs/owner.pub
 cp build/rootfs.ssh.ext build/rootfs.custom.ext
 python3 firmware/patch.py build/rootfs.custom.ext /payload build/mcu-files.json
+python3 firmware/patch-mpc-root.py build/rootfs.custom.ext "$ce_mpc" build/mpc-ce-files.json
 e2fsck -fn build/rootfs.custom.ext
 gcc -O2 -Wno-deprecated-declarations -o build/mpcimg2 upstream/mpcimg2.c -llzma -lcrypto
 gcc -O2 -Wno-deprecated-declarations -o build/fs_inventory scripts/fs_inventory.c -lext2fs -lcom_err -lcrypto
@@ -29,5 +31,5 @@ build/fs_inventory build/rootfs.original.ext > build/original.inventory
 build/fs_inventory build/rootfs.ssh.ext > build/ssh.inventory
 build/fs_inventory build/rootfs.final.ext > build/mcu.inventory
 python3 scripts/verify_delta.py build/original.inventory build/ssh.inventory > build/ssh-delta.txt
-python3 firmware/verify.py build/ssh.inventory build/mcu.inventory build/mcu-files.json build/rootfs.final.ext
+python3 firmware/verify.py build/ssh.inventory build/mcu.inventory build/mcu-files.json build/rootfs.final.ext build/mpc-ce-files.json
 sha256sum "$output" > "$output.sha256"

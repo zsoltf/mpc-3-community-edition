@@ -10,9 +10,12 @@ def inventory(path):
         if name in out: raise ValueError('duplicate path')
         out[name] = fields
     return out
+if len(sys.argv) not in (5, 6):
+    raise SystemExit("usage: verify.py OLD NEW ADDED ROOTFS [MPC_DELTA]")
 old, new = map(inventory, sys.argv[1:3])
 expected = json.loads(pathlib.Path(sys.argv[3]).read_text())
 rootfs = sys.argv[4]
+mpc = json.loads(pathlib.Path(sys.argv[5]).read_text()) if len(sys.argv) == 6 else None
 base = '/usr/share/mpclearn/mcu/'
 # Shipped modes, stated here independently of patch.py: the image runs these
 # files in place, so a wrong mode is a runtime that cannot start.
@@ -37,7 +40,14 @@ for name in old:
     if name in parents:
         assert before[0].startswith('mode:4')
         before[4] = 'links:'+str(int(before[4].split(':')[1])+parents[name])
-    assert before == after, ('unexpected stock change',name)
+    if mpc and name == mpc['path']:
+        before_fields = dict(item.split(':',1) for item in before)
+        after_fields = dict(item.split(':',1) for item in after)
+        assert before_fields.pop('sha256') == mpc['input_sha256']
+        assert after_fields.pop('sha256') == mpc['output_sha256']
+        assert before_fields == after_fields, ('MPC metadata changed', before_fields, after_fields)
+    else:
+        assert before == after, ('unexpected stock change',name)
 with tempfile.TemporaryDirectory() as temp:
     for name, spec in expected.items():
         fields = dict(x.split(':',1) for x in new[name].split())
@@ -55,4 +65,12 @@ with tempfile.TemporaryDirectory() as temp:
             subprocess.run(['debugfs','-R',f'dump {name} {output}',rootfs],check=True,capture_output=True)
             assert hashlib.sha256(output.read_bytes()).hexdigest()==spec['sha256'],name
         if spec['type'] != 'directory': assert fields['links']=='1'
-print('PASS: exact MCU payload bytes/owners and shipped modes (executables 0700, payload folder 0700); only added paths and parent links changed; stock MPC and all other stock content unchanged')
+    if mpc:
+        output = pathlib.Path(temp)/'MPC'
+        subprocess.run(['debugfs','-R',f"dump {mpc['path']} {output}",rootfs],check=True,capture_output=True)
+        data = output.read_bytes()
+        assert len(data) == mpc['size']
+        assert hashlib.sha256(data).hexdigest() == mpc['output_sha256']
+        assert data[mpc['offset']:mpc['offset']+len(bytes.fromhex(mpc['after_hex']))] == bytes.fromhex(mpc['after_hex'])
+suffix = '; exact admitted CE label delta and all other stock content unchanged' if mpc else '; stock MPC and all other stock content unchanged'
+print('PASS: exact MCU payload bytes/owners and shipped modes (executables 0700, payload folder 0700); only added paths and parent links changed'+suffix)
