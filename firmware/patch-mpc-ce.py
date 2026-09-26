@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create the exact MPC 3.9.1 CE v0.2.5 executable from the pristine ELF."""
+"""Create the exact MPC 3.9.1 CE v0.2.6 executable from the pristine ELF."""
 import hashlib
 import json
 import os

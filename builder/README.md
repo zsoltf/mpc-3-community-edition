@@ -1,8 +1,9 @@
 # Browser MCU image creator
 
-This static browser app creates a personal MPC3.9.1 Gen1 CE v0.2.5 image with
+This static browser app creates a personal MPC3.9.1 Gen1 CE v0.2.6 image with
 X-Touch control, USB mouse support and built-in Shift+wheel note selection.
-The optional Debug build saves a current report to a marked USB drive. Firmware
+The optional Debug build creates a folder and keeps a current report on one
+writable USB drive. Firmware
 and keys stay in the browser; the app does not connect to or flash an MPC.
 
 `web/guide.html` is the printable setup and controller reference. Its mappings
@@ -12,8 +13,8 @@ are maintained alongside `docs/xtouch-cheatsheet.md`. The build publishes
 SSH is disabled unless the user selects their own Ed25519 OpenSSH `.pub` file.
 Private keys are not needed.
 
-The Debug build keeps SSH off and writes a current report only to a USB drive
-with an `MPCLEARN-DIAGNOSTICS` folder at its root.
+The Debug build keeps SSH off. Leave one writable USB drive connected when it
+boots; it creates `MPCLEARN-DIAGNOSTICS/report.txt` automatically.
 
 ## Build the static site
 

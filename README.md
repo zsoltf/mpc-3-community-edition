@@ -23,8 +23,9 @@ https://github.com/user-attachments/assets/d2c28bb4-6c1e-4adf-b646-ca75fded7a5c
   focused control. Right-click and long-tap gestures are not implemented yet.
 - **Built-in note selection.** In the Grid, hold MPC Shift and turn the MPC
   data wheel to select the previous or next note.
-- **Debug build.** An optional no-SSH image keeps one current debug report on
-  a marked USB drive.
+- **Debug build.** An optional no-SSH image creates
+  `MPCLEARN-DIAGNOSTICS/report.txt` on one connected writable USB drive and
+  keeps the report current.
 
 ## Roadmap
 
@@ -55,13 +56,13 @@ https://github.com/user-attachments/assets/d2c28bb4-6c1e-4adf-b646-ca75fded7a5c
 4. Plug in the controls you use and load a project. The X-Touch connects on
    its own; a USB mouse can be used by itself.
 
-After installing, Preferences > Info identifies the image as `MPC CE v0.2.5`
+After installing, Preferences > Info identifies the image as `MPC CE v0.2.6`
 for installation checks and support.
 
 Your settings and projects are kept. Back up your projects first, and keep the
 official firmware so you can go back.
 
-See the [v0.2.5 release notes](docs/releases/v0.2.5.md) for changes and limits.
+See the [v0.2.6 release notes](docs/releases/v0.2.6.md) for changes and limits.
 
 ## Files over SSH
 

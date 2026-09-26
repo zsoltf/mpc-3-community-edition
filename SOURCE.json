@@ -1,14 +1,12 @@
 {
-  "release": "v0.2.5",
-  "image_revision": "v0_2_5",
+  "release": "v0.2.6",
+  "image_revision": "v0_2_6",
   "firmware": "3.9.1 Gen1",
   "runtime_format": "CMD31/MMV17",
   "runtime_checksums": "firmware/runtime.sha256",
   "runtime_location": "/usr/share/mpclearn/mcu",
   "qualified_hardware": "MPC Live II + full X-Touch MC/USB",
-  "image_flash_tested": true,
+  "image_flash_tested": false,
   "debug_image_flash_tested": false,
-  "accepted_standard_image_sha256": "217472adc8baf656adfe8ba5a9da5d506b497246bea0c38b420062b4f1032a3f",
-  "accepted_standard_rootfs_sha256": "c7e38f1e239f435016cf2da10aab33f6d70b0972836042713907d7f2a0bdd4d2",
   "status": "release"
 }

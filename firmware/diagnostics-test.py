@@ -63,9 +63,9 @@ class Fixture:
                           self.scratch.parent, self.session, self.sys_block,
                           self.drm / "1"]:
             directory.mkdir(parents=True, exist_ok=True)
-        self.mpc.write_bytes((REPO / "build/v0_2_5/MPC").read_bytes())
+        self.mpc.write_bytes((REPO / "build/v0_2_6/MPC").read_bytes())
         self.observer.write_bytes(
-            (REPO / "artifacts/mcu-v0_2_5/command-observer.so").read_bytes())
+            (REPO / "artifacts/mcu-v0_2_6/command-observer.so").read_bytes())
         self.settings.write_bytes(b"fixture settings are not read")
         self.systemctl.write_text("""#!/bin/sh
 case "$3" in
@@ -114,7 +114,7 @@ connector[39]: HDMI-A-1
             define("SETTINGS_PATH", self.settings), define("SESSION_DIR", self.session),
             define("SYSTEMCTL_PATH", self.systemctl),
             define("DRM_DEBUG_ROOT", self.drm),
-            define("PAYLOAD_DIR", REPO / "artifacts/mcu-v0_2_5"),
+            define("PAYLOAD_DIR", REPO / "artifacts/mcu-v0_2_6"),
             str(SOURCE), "-o", str(self.binary),
         ]
         if report_cap:
@@ -134,9 +134,11 @@ connector[39]: HDMI-A-1
         target.mkdir(parents=True, exist_ok=True)
         link.symlink_to(target)
 
-    def usb(self, name="USB", writable=True, mount_id=40):
+    def usb(self, name="USB", writable=True, mount_id=40, marked=True):
         root = self.media / name
-        (root / MARKER).mkdir(parents=True, exist_ok=True)
+        root.mkdir(parents=True, exist_ok=True)
+        if marked:
+            (root / MARKER).mkdir(exist_ok=True)
         return (root, writable, mount_id)
 
     def mounts(self, entries):
@@ -250,6 +252,128 @@ def run_checks():
         idle_after = report.stat()
         assert (idle.st_ino, idle.st_mtime_ns) == (idle_after.st_ino, idle_after.st_mtime_ns)
         assert report.stat().st_size <= 256 * 1024
+        stop(p)
+
+    # One blank writable USB is admitted by creating the owned folder once.
+    with tempfile.TemporaryDirectory(prefix="mpclearn-auto-folder-") as td:
+        f = Fixture(td)
+        usb = f.usb(marked=False)
+        marker = usb[0] / MARKER
+        report = marker / "report.txt"
+        f.mounts([usb])
+        p = f.start()
+        text = wait_text(report, lambda s: "result=current" in s)
+        assert marker.is_dir()
+        base_report_checks(text)
+        stop(p)
+
+    # A sole blank USB may arrive after startup; discovery before it is read-only.
+    with tempfile.TemporaryDirectory(prefix="mpclearn-late-folder-") as td:
+        f = Fixture(td)
+        p = f.start()
+        wait_text(f.scratch, lambda s: "absent_seen=yes" in s)
+        usb = f.usb(marked=False)
+        marker = usb[0] / MARKER
+        assert not marker.exists()
+        f.mounts([usb])
+        text = wait_text(marker / "report.txt", lambda s: "result=current" in s)
+        base_report_checks(text)
+        stop(p)
+
+    # A unique existing marker wins over an unmarked second USB.
+    with tempfile.TemporaryDirectory(prefix="mpclearn-marked-choice-") as td:
+        f = Fixture(td)
+        marked = f.usb("MARKED", mount_id=40)
+        blank = f.usb("BLANK", mount_id=41, marked=False)
+        f.mounts([marked, blank])
+        p = f.start()
+        text = wait_text(marked[0] / MARKER / "report.txt",
+                         lambda s: "result=current" in s)
+        base_report_checks(text)
+        assert not (blank[0] / MARKER).exists()
+        stop(p)
+
+    # Multiple blank drives remain untouched until the mount choice is unique.
+    with tempfile.TemporaryDirectory(prefix="mpclearn-blank-ambiguity-") as td:
+        f = Fixture(td)
+        first = f.usb("USB1", mount_id=40, marked=False)
+        second = f.usb("USB2", mount_id=41, marked=False)
+        f.mounts([first, second])
+        p = f.start()
+        wait_text(f.scratch, lambda s: "ambiguity_seen=yes" in s)
+        assert not (first[0] / MARKER).exists()
+        assert not (second[0] / MARKER).exists()
+        f.mounts([second])
+        wait_text(second[0] / MARKER / "report.txt",
+                  lambda s: "result=current" in s)
+        assert not (first[0] / MARKER).exists()
+        stop(p)
+
+    # Non-USB, internal and read-only mounts never receive the owned folder.
+    for kind in ("nonusb", "internal", "readonly"):
+        with tempfile.TemporaryDirectory(prefix=f"mpclearn-ineligible-{kind}-") as td:
+            f = Fixture(td)
+            if kind == "internal":
+                root = f.media / "az01-internal"
+                root.mkdir()
+                usb = (root, True, 40)
+            else:
+                usb = f.usb(marked=False, writable=kind != "readonly")
+            if kind == "nonusb":
+                f.block_transport(False)
+            f.mounts([usb])
+            p = f.start()
+            wait_text(f.scratch, lambda s: "absent_seen=yes" in s)
+            time.sleep(0.25)
+            assert not (usb[0] / MARKER).exists()
+            stop(p)
+
+    # Marker file/symlink collisions and mkdir failure leave unrelated paths intact.
+    for kind in ("file", "symlink", "mkdir"):
+        with tempfile.TemporaryDirectory(prefix=f"mpclearn-create-fail-{kind}-") as td:
+            f = Fixture(td)
+            usb = f.usb(marked=False)
+            marker = usb[0] / MARKER
+            sentinel = f.base / "outside-sentinel"
+            sentinel.write_text("keep")
+            if kind == "file":
+                marker.write_text("keep marker file")
+            elif kind == "symlink":
+                marker.symlink_to(sentinel)
+            f.mounts([usb])
+            extra = {"MPCLEARN_TEST_MKDIR_FAIL": "1"} if kind == "mkdir" else {}
+            p = f.start(**extra)
+            wait_text(f.scratch, lambda s: "invalidated=yes" in s)
+            if kind == "file":
+                assert marker.is_file() and marker.read_text() == "keep marker file"
+            elif kind == "symlink":
+                assert marker.is_symlink() and marker.readlink() == sentinel
+            else:
+                assert not marker.exists()
+            assert sentinel.read_text() == "keep"
+            replacement = f.usb("USB2", mount_id=41, marked=False)
+            f.mounts([replacement])
+            time.sleep(0.4)
+            assert not (replacement[0] / MARKER).exists()
+            stop(p)
+
+    # Removing an automatically created marker invalidates export without recreate/switch.
+    with tempfile.TemporaryDirectory(prefix="mpclearn-auto-invalidate-") as td:
+        f = Fixture(td)
+        first = f.usb("USB1", mount_id=40, marked=False)
+        marker = first[0] / MARKER
+        f.mounts([first])
+        p = f.start()
+        wait_text(marker / "report.txt", lambda s: "result=current" in s)
+        old = first[0] / (MARKER + "-removed")
+        marker.rename(old)
+        wait_text(f.scratch, lambda s: "invalidated=yes" in s)
+        second = f.usb("USB2", mount_id=41, marked=False)
+        f.mounts([second])
+        time.sleep(0.4)
+        assert not marker.exists()
+        assert not (second[0] / MARKER).exists()
+        assert (old / "report.txt").is_file()
         stop(p)
 
     # Ambiguity before admission may resolve; invalidation after pinning never re-admits.
@@ -370,7 +494,7 @@ def run_checks():
         assert "truncated=yes" in text and "collector_running_at_write=yes" in text
         stop(p)
 
-    print("PASS: persistent current snapshots, prompt/delayed/pinned USB export, idle suppression, one-per-second coalescing, atomic failure stages, bounded output, saturating input counts, >8 current-preserving epochs, same-executable single hash, changed-executable re-verification, cursor parsing, cached systemd/command/DRM facts, and DRM trailing-section isolation")
+    print("PASS: persistent current snapshots, automatic sole-USB folder creation, late USB, marked-choice and blank-drive ambiguity, ineligible/collision/create-failure refusal, no recreate/switch after invalidation, prompt/delayed/pinned USB export, idle suppression, one-per-second coalescing, atomic failure stages, bounded output, saturating input counts, >8 current-preserving epochs, same-executable single hash, changed-executable re-verification, cursor parsing, cached systemd/command/DRM facts, and DRM trailing-section isolation")
 
 
 if __name__ == "__main__":

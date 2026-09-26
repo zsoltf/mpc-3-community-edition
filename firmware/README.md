@@ -1,6 +1,6 @@
 # MCU image and release
 
-Release identity: `v0.2.5`, CMD31/MMV17, run in place from
+Release identity: `v0.2.6`, CMD31/MMV17, run in place from
 `/usr/share/mpclearn/mcu`. It supports MPC Live II firmware 3.9.1 and the
 full-size Behringer X-Touch in MC mode over USB. Do not infer other MPC or MCU
 hardware compatibility from the Gen1 image header.
@@ -47,12 +47,12 @@ docker run --rm --network none -v "$PWD:/work" -w /work mpclearn-build:local sh 
 python3 scripts/image_format.py inputs/MPC-3.9.1-Gen1-update.img build/rootfs.original.ext
 debugfs -R "dump /usr/bin/MPC /work/build/MPC" build/rootfs.original.ext
 '
-python3 firmware/patch-mpc-ce.py build/MPC build/v0_2_5/MPC
+python3 firmware/patch-mpc-ce.py build/MPC build/v0_2_6/MPC
 ./controllers/program-observer/mirror-input-build.sh \
-  "$PWD/build/v0_2_5/MPC" /usr/share/mpclearn/mcu manual
+  "$PWD/build/v0_2_6/MPC" /usr/share/mpclearn/mcu manual
 # After the component and native qualification gates, maintainers build the
 # local release roots, images and three browser recipes together:
-sh firmware/build-v0.2.5.sh
+sh firmware/build-v0.2.6.sh
 ```
 
 `package.py` accepts only the qualified observer and matched nine-file package.
@@ -93,7 +93,7 @@ systemd unit and its `multi-user.target.wants` link. Maintainers generate it
 without rebuilding the released runtime:
 
 ```sh
-sh firmware/build-diagnostic-root.sh
+sh firmware/build-diagnostic-root.sh build/v0_2_6
 ```
 
 `diagnostics-verify.py` compares every pre-existing filesystem inventory entry
@@ -142,4 +142,4 @@ prevent raw MCU messages from playing instrument notes or bending pitch. Leave
 other MIDI ports configured as usual. The image preserves user settings.
 Global MIDI Learn and the optional Mini/Launch Control mappings remain a
 separate feature; the MCU image does not install a learned profile.
-See the [release notes](../docs/releases/v0.2.5.md) for known limits.
+See the [release notes](../docs/releases/v0.2.6.md) for known limits.

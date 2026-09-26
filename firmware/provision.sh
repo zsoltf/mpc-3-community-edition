@@ -5,8 +5,8 @@
 set -eu
 payload=/usr/share/mpclearn/mcu
 home=/data/mpclearn
-# This names the matched candidate payload; it does not claim a source commit.
-revision=v0_2_5-candidate
+# This names the matched release payload; it does not claim a source commit.
+revision=v0_2_6
 owned_dir(){ [ -d "$1" ] && [ ! -L "$1" ] && [ "$(stat -c %u "$1")" = 0 ] && [ "$(stat -c %a "$1")" = 700 ]; }
 present(){ [ -e "$1" ] || [ -L "$1" ]; }
 umask 077

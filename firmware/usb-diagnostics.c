@@ -125,7 +125,7 @@ static void sha_end(Sha *s,unsigned char out[32]){uint64_t bits=s->bytes*8;unsig
 typedef struct { char data[REPORT_CAP]; size_t used; bool truncated; } Report;
 typedef struct {
  int id,parent; unsigned major,minor; char root[256],point[512],options[256],fstype[64],source[256];
- dev_t dev; ino_t marker_ino; int marker_fd; bool valid;
+ dev_t dev; ino_t root_ino,marker_ino; int root_fd,marker_fd; bool valid;
 } Destination;
 typedef struct {
  int fd; char node[32],name[128]; dev_t dev; ino_t ino; unsigned connections;
@@ -191,7 +191,7 @@ static int read_mounts(Destination out[MAX_MOUNTS]){
  char path[256];snprintf(path,sizeof(path),"%s/self/mountinfo",PROC_ROOT);FILE *f=fopen(path,"re");if(!f)return -1;char *line=NULL;size_t cap=0;int count=0;
  while(count<MAX_MOUNTS&&getline(&line,&cap,f)>0){
   char *save=NULL,*tok=strtok_r(line," ",&save);char *fields[6];int nf=0;while(tok&&nf<6){fields[nf++]=tok;tok=strtok_r(NULL," ",&save);}if(nf<6)continue;
-  Destination d={.marker_fd=-1};char *end=NULL;long id=strtol(fields[0],&end,10);if(*end||id<=0)continue;d.id=(int)id;long par=strtol(fields[1],&end,10);if(*end||par<0)continue;d.parent=(int)par;
+  Destination d={.root_fd=-1,.marker_fd=-1};char *end=NULL;long id=strtol(fields[0],&end,10);if(*end||id<=0)continue;d.id=(int)id;long par=strtol(fields[1],&end,10);if(*end||par<0)continue;d.parent=(int)par;
   if(sscanf(fields[2],"%u:%u",&d.major,&d.minor)!=2||!unescape_mount(fields[3],d.root,sizeof(d.root))||!unescape_mount(fields[4],d.point,sizeof(d.point)))continue;
   snprintf(d.options,sizeof(d.options),"%s",fields[5]);
   char *dash=NULL;while(tok){if(!strcmp(tok,"-")){dash=tok;break;}tok=strtok_r(NULL," ",&save);}if(!dash)continue;char *fs=strtok_r(NULL," ",&save),*source=strtok_r(NULL," ",&save);if(!fs||!source)continue;snprintf(d.fstype,sizeof(d.fstype),"%s",fs);if(!unescape_mount(source,d.source,sizeof(d.source)))continue;
@@ -205,21 +205,47 @@ static bool usb_block_device(unsigned maj,unsigned min){
  for(char *p=resolved;*p;){while(*p=='/')p++;char *end=strchr(p,'/');size_t n=end?(size_t)(end-p):strlen(p);if(n>3&&!strncmp(p,"usb",3)){bool digits=true;for(size_t i=3;i<n;i++)if(!isdigit((unsigned char)p[i]))digits=false;if(digits)return true;}if(!end)break;p=end;}
  return false;
 }
-static int eligible_destinations(Destination candidates[MAX_MOUNTS]){
+static bool marker_identity(Destination *m,int marker){
+ struct stat rs,ms;struct statvfs sv;
+ if(fstat(m->root_fd,&rs)||fstat(marker,&ms)||!S_ISDIR(rs.st_mode)||!S_ISDIR(ms.st_mode)||rs.st_dev!=m->dev||rs.st_ino!=m->root_ino||ms.st_dev!=m->dev||fstatvfs(marker,&sv)||(sv.f_flag&ST_RDONLY)||faccessat(marker,".",W_OK,AT_EACCESS))return false;
+ m->marker_fd=marker;m->marker_ino=ms.st_ino;m->valid=true;return true;
+}
+/* Discovery opens and classifies mounts, but never creates the marker. */
+static int discover_destinations(Destination candidates[MAX_MOUNTS]){
  Destination mounts[MAX_MOUNTS];int n=read_mounts(mounts);if(n<0)return -1;int found=0;
  for(int i=0;i<n;i++){
   Destination *m=&mounts[i];if(!under_media(m->point)||!option_rw(m->options)||strcmp(m->root,"/")||!usb_block_device(m->major,m->minor))continue;
-  int rootfd=open(m->point,O_RDONLY|O_DIRECTORY|O_CLOEXEC|O_NOFOLLOW);if(rootfd<0)continue;struct stat rs,ms;struct statvfs sv;
-  int marker=openat(rootfd,MARKER,O_RDONLY|O_DIRECTORY|O_CLOEXEC|O_NOFOLLOW);bool ok=marker>=0&&!fstat(rootfd,&rs)&&!fstat(marker,&ms)&&rs.st_dev==ms.st_dev&&major(rs.st_dev)==m->major&&minor(rs.st_dev)==m->minor&&!fstatvfs(marker,&sv)&&!(sv.f_flag&ST_RDONLY)&&faccessat(marker,".",W_OK,AT_EACCESS)==0;
-  close(rootfd);if(!ok){if(marker>=0)close(marker);continue;}m->dev=ms.st_dev;m->marker_ino=ms.st_ino;m->marker_fd=marker;m->valid=true;
-  if(found<MAX_MOUNTS)candidates[found++]=*m;else close(marker);
+  int rootfd=open(m->point,O_RDONLY|O_DIRECTORY|O_CLOEXEC|O_NOFOLLOW);if(rootfd<0)continue;struct stat rs;struct statvfs sv;
+  bool ok=!fstat(rootfd,&rs)&&S_ISDIR(rs.st_mode)&&major(rs.st_dev)==m->major&&minor(rs.st_dev)==m->minor&&!fstatvfs(rootfd,&sv)&&!(sv.f_flag&ST_RDONLY)&&faccessat(rootfd,".",W_OK,AT_EACCESS)==0;
+  if(!ok){close(rootfd);continue;}m->dev=rs.st_dev;m->root_ino=rs.st_ino;m->root_fd=rootfd;
+  int marker=openat(rootfd,MARKER,O_RDONLY|O_DIRECTORY|O_CLOEXEC|O_NOFOLLOW);if(marker>=0&&!marker_identity(m,marker))close(marker);
+  if(found<MAX_MOUNTS)candidates[found++]=*m;else{if(m->marker_fd>=0)close(m->marker_fd);close(m->root_fd);}
  }
  return found;
 }
-static bool destination_same(const Destination *a,const Destination *b){return a->id==b->id&&a->parent==b->parent&&a->major==b->major&&a->minor==b->minor&&a->dev==b->dev&&a->marker_ino==b->marker_ino&&!strcmp(a->root,b->root)&&!strcmp(a->point,b->point)&&!strcmp(a->fstype,b->fstype)&&!strcmp(a->source,b->source);}
-static void close_candidates(Destination *c,int n,int keep){for(int i=0;i<n;i++)if(i!=keep&&c[i].marker_fd>=0)close(c[i].marker_fd);}
+static bool destination_same(const Destination *a,const Destination *b){return a->id==b->id&&a->parent==b->parent&&a->major==b->major&&a->minor==b->minor&&a->dev==b->dev&&a->root_ino==b->root_ino&&a->marker_ino==b->marker_ino&&!strcmp(a->root,b->root)&&!strcmp(a->point,b->point)&&!strcmp(a->fstype,b->fstype)&&!strcmp(a->source,b->source);}
+static void close_destination(Destination *d){if(d->marker_fd>=0)close(d->marker_fd);if(d->root_fd>=0)close(d->root_fd);d->marker_fd=d->root_fd=-1;}
+static void close_candidates(Destination *c,int n,int keep){for(int i=0;i<n;i++)if(i!=keep)close_destination(&c[i]);}
+static bool create_marker(Destination *d){
+#ifdef DIAGNOSTICS_TEST
+ if(getenv("MPCLEARN_TEST_MKDIR_FAIL")){errno=EIO;return false;}
+#endif
+ if(d->valid||d->root_fd<0||mkdirat(d->root_fd,MARKER,0700))return false;
+ int marker=openat(d->root_fd,MARKER,O_RDONLY|O_DIRECTORY|O_CLOEXEC|O_NOFOLLOW);if(marker<0)return false;
+ if(!marker_identity(d,marker)){close(marker);return false;}if(fsync(d->root_fd)){close(marker);d->marker_fd=-1;d->marker_ino=0;d->valid=false;return false;}return true;
+}
+enum{ADMISSION_FAILED=-1,ADMISSION_NONE=0,ADMISSION_READY=1,ADMISSION_AMBIGUOUS=2};
+static int admit_destination(Destination *out){
+ Destination c[MAX_MOUNTS];int n=discover_destinations(c);if(n<=0)return ADMISSION_NONE;int marked=0,chosen=-1;
+ for(int i=0;i<n;i++)if(c[i].valid){marked++;chosen=i;}
+ if(marked>1){close_candidates(c,n,-1);return ADMISSION_AMBIGUOUS;}
+ if(marked==1){*out=c[chosen];close_candidates(c,n,chosen);return ADMISSION_READY;}
+ if(n>1){close_candidates(c,n,-1);return ADMISSION_AMBIGUOUS;}
+ if(!create_marker(&c[0])){close_candidates(c,n,-1);return ADMISSION_FAILED;}
+ *out=c[0];return ADMISSION_READY;
+}
 static bool destination_current(const Destination *d){
- Destination c[MAX_MOUNTS];int n=eligible_destinations(c);if(n!=1){if(n>0)close_candidates(c,n,-1);return false;}bool same=destination_same(d,&c[0]);close(c[0].marker_fd);struct stat st;if(fstat(d->marker_fd,&st)||st.st_dev!=d->dev||st.st_ino!=d->marker_ino)same=false;return same;
+ Destination c[MAX_MOUNTS];int n=discover_destinations(c),marked=0,chosen=-1;if(n<0)return false;for(int i=0;i<n;i++)if(c[i].valid){marked++;chosen=i;}bool same=marked==1&&destination_same(d,&c[chosen]);close_candidates(c,n,-1);struct stat rs,ms;if(fstat(d->root_fd,&rs)||rs.st_dev!=d->dev||rs.st_ino!=d->root_ino||fstat(d->marker_fd,&ms)||ms.st_dev!=d->dev||ms.st_ino!=d->marker_ino)same=false;return same;
 }
 static bool clear_previous_report(const Destination *d){
  if(!destination_current(d))return false;
@@ -430,12 +456,12 @@ static void build_report(Collector *c,Report *r,uint64_t now){
 }
 
 int main(void){
- signal(SIGINT,stop_signal);signal(SIGTERM,stop_signal);umask(077);Collector c={0};c.begun=mono_ms();c.capture_id=c.begun^(uint64_t)getpid();c.dest.marker_fd=-1;c.export_valid=true;for(int i=0;i<MAX_EXE_CACHE;i++)c.verifications[i].fd=-1;
+ signal(SIGINT,stop_signal);signal(SIGTERM,stop_signal);umask(077);Collector c={0};c.begun=mono_ms();c.capture_id=c.begun^(uint64_t)getpid();c.dest.root_fd=c.dest.marker_fd=-1;c.export_valid=true;for(int i=0;i<MAX_EXE_CACHE;i++)c.verifications[i].fd=-1;
  snprintf(c.payload_status,sizeof(c.payload_status),"%s",verify_release_payload());c.observer_hash=hash_file(OBSERVER_PATH,c.observer_sha);c.observer_exact=c.observer_hash&&!strcmp(c.observer_sha,EXPECTED_OBSERVER_SHA);fast_facts(c.fast_facts);c.next_status_refresh=c.begun+SCAN_INTERVAL_MS;c.next_drm_refresh=c.begun+2*SCAN_INTERVAL_MS;
  bool dirty=true;uint64_t dirty_since=c.begun,next_scan=c.begun,last_snapshot=0,last_external=0;bool status_supported=false;
  while(!stopping){uint64_t now=mono_ms(),elapsed=now-c.begun;
   if(now>=next_scan){next_scan=now+SCAN_INTERVAL_MS;
-   if(!c.admitted&&!c.export_invalidated){Destination candidates[MAX_MOUNTS];int n=eligible_destinations(candidates);if(n==1){c.dest=candidates[0];c.admitted=true;close_candidates(candidates,n,0);if(!clear_previous_report(&c.dest)){c.export_valid=false;c.export_invalidated=true;}mark_dirty(&dirty,&dirty_since,now);}else{if(n==0&&!c.ever_absent){c.ever_absent=true;mark_dirty(&dirty,&dirty_since,now);}if(n>1&&!c.ever_ambiguous){c.ever_ambiguous=true;mark_dirty(&dirty,&dirty_since,now);}if(n>0)close_candidates(candidates,n,-1);}}
+   if(!c.admitted&&!c.export_invalidated){Destination next={.root_fd=-1,.marker_fd=-1};int admission=admit_destination(&next);if(admission==ADMISSION_READY){c.dest=next;c.admitted=true;if(!clear_previous_report(&c.dest)){c.export_valid=false;c.export_invalidated=true;}mark_dirty(&dirty,&dirty_since,now);}else{if((admission==ADMISSION_NONE||admission==ADMISSION_FAILED)&&!c.ever_absent){c.ever_absent=true;mark_dirty(&dirty,&dirty_since,now);}if(admission==ADMISSION_AMBIGUOUS&&!c.ever_ambiguous){c.ever_ambiguous=true;mark_dirty(&dirty,&dirty_since,now);}if(admission==ADMISSION_FAILED){c.export_valid=false;c.export_invalidated=true;mark_dirty(&dirty,&dirty_since,now);}}}
    else if(c.admitted&&c.export_valid&&!destination_current(&c.dest)){c.export_valid=false;c.export_invalidated=true;mark_dirty(&dirty,&dirty_since,now);}
    bool input_changed=false;c.input_count=discover_inputs(c.inputs,c.input_count,&input_changed);if(input_changed)mark_dirty(&dirty,&dirty_since,now);
    if(refresh_epoch(&c,elapsed,now))mark_dirty(&dirty,&dirty_since,now);
@@ -451,6 +477,6 @@ int main(void){
  }
  for(int i=0;i<c.input_count;i++)close_input(&c.inputs[i]);
  for(int i=0;i<MAX_EXE_CACHE;i++)if(c.verifications[i].used&&c.verifications[i].fd>=0)close(c.verifications[i].fd);
- if(c.admitted&&c.dest.marker_fd>=0)close(c.dest.marker_fd);
+ if(c.admitted)close_destination(&c.dest);
  return 0;
 }

@@ -126,6 +126,8 @@
     .diagnostic-help summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
     .diagnostic-help ol { margin: 10px 0 0; padding-left: 22px; }
     .diagnostic-help li { margin: 5px 0; }
+    .install-list { margin: 8px 0 0; padding-left: 20px; color: var(--ink-2); font-size: 14.5px; max-width: 72ch; }
+    .install-list li { margin: 5px 0; }
     @media (max-width: 640px) { .page { padding-top: 28px; } ol.procedure > li { grid-template-columns: 1fr; gap: 8px; padding: 18px 16px; } .choices { display: grid; } }
 
     /* Notes */
@@ -150,7 +152,7 @@
 <body>
 <header class="top">
   <div class="wrap">
-    <a class="brand" href="./"><span class="mark"><i></i></span><span class="full">MPC 3 Community Edition</span><span class="short">MPC 3 CE</span> <span class="tag">v0.2.5</span></a>
+    <a class="brand" href="./"><span class="mark"><i></i></span><span class="full">MPC 3 Community Edition</span><span class="short">MPC 3 CE</span> <span class="tag">v0.2.6</span></a>
     <nav aria-label="Site">
       <a href="guide.html">X-Touch guide</a>
       <a href="https://github.com/zsoltf/mpc-3-community-edition/releases" rel="noopener noreferrer">Releases</a>
@@ -184,7 +186,7 @@
               <fieldset class="image-types">
                 <legend>Image type</legend>
                 <div class="choices">
-                  <label class="choice"><input type="radio" name="imageType" value="standard" checked><span><b>Standard CE v0.2.5</b></span></label>
+                  <label class="choice"><input type="radio" name="imageType" value="standard" checked><span><b>Standard CE v0.2.6</b></span></label>
                   <label class="choice"><input type="radio" name="imageType" value="diagnostics"><span><b>Debug build</b> - current USB report, SSH off.</span></label>
                 </div>
               </fieldset>
@@ -215,19 +217,29 @@
               <div id="result">
                 <strong id="resultTitle">Standard CE image ready</strong>
                 <div class="row"><a id="imageDownload" class="btn primary">Save image</a></div>
-                <p>Keep only this generated CE <code>-update.img</code> at the top of the update USB. Remove the original Akai image and any <code>(1)</code> from the filename.</p>
                 <p id="sshResult"></p>
                 <details id="diagnosticResult" class="diagnostic-help" hidden>
                   <summary>How to use the debug build</summary>
                   <ol>
-                    <li>Before boot, create <code>MPCLEARN-DIAGNOSTICS</code> at the USB root and remove any old <code>report.txt</code> inside it.</li>
-                    <li>Leave the drive connected, boot the debug build, then reproduce the problem. The report updates as evidence arrives.</li>
+                    <li>Leave one writable USB drive connected when you boot the Debug build. It creates <code>MPCLEARN-DIAGNOSTICS/report.txt</code> automatically.</li>
+                    <li>Reproduce the problem. The report updates as evidence arrives.</li>
                     <li>Retrieve <code>MPCLEARN-DIAGNOSTICS/report.txt</code> after reproducing the problem.</li>
                     <li>Reflash the standard CE or official image afterward. Use the same step if the report is unavailable.</li>
                   </ol>
                 </details>
                 <p>SHA-256<code id="imageSHA"></code></p>
               </div>
+            </div>
+          </li>
+          <li id="step4">
+            <div>
+              <h3>Install on your MPC</h3>
+              <ol class="install-list">
+                <li>Copy the generated CE <code>-update.img</code> to the USB drive, outside any folders. Keep only the intended update image there, and remove a duplicate <code>(1)</code> so its name ends in <code>-update.img</code>.</li>
+                <li>Safely eject the USB drive and connect it to the MPC. Save your work, back up important projects, and connect the power adapter.</li>
+                <li>Open <b>Menu &gt; Preferences &gt; Info &gt; Update &gt; USB Drive Update</b>, choose the image, and confirm <b>Update</b> or reinstall. Let the MPC restart without turning off its power.</li>
+                <li>After restart, check that <b>Preferences &gt; Info</b> shows <em>MPC CE v0.2.6</em>. See Akai's <a href="https://support.akaipro.com/en/support/solutions/articles/69000816160-akai-pro-mpc-firmware-update-walkthrough" rel="noopener noreferrer">firmware update walkthrough</a> for the stock update screens.</li>
+              </ol>
             </div>
           </li>
         </ol>
@@ -244,10 +256,8 @@
           <li><b>Full-size Behringer X-Touch</b> for controller features. A USB mouse can be used by itself.</li>
         </ul></div>
         <div class="note"><h4>Before you flash</h4><ul>
-          <li><b>Back up your projects.</b></li>
           <li>Your settings and projects are kept.</li>
-          <li>After installing, Preferences &gt; Info identifies <em>MPC CE v0.2.5</em>.</li>
-          <li><a href="https://github.com/zsoltf/mpc-3-community-edition/releases" rel="noopener noreferrer">What's new in v0.2.5</a></li>
+          <li><a href="https://github.com/zsoltf/mpc-3-community-edition/releases" rel="noopener noreferrer">What's new in v0.2.6</a></li>
         </ul></div>
       </div>
     </div>
@@ -265,8 +275,8 @@
   </div>
 </footer>
 <script>
-const standardImageName = 'MPC-3.9.1-Gen1-CE-v0.2.5-update.img';
-const diagnosticImageName = 'MPC-3.9.1-Gen1-CE-v0.2.5-DEBUG-update.img';
+const standardImageName = 'MPC-3.9.1-Gen1-CE-v0.2.6-update.img';
+const diagnosticImageName = 'MPC-3.9.1-Gen1-CE-v0.2.6-DEBUG-update.img';
 
 document.querySelector('#themeToggle').onclick = () => {
   const root = document.documentElement;

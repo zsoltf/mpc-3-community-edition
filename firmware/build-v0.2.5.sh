@@ -3,6 +3,8 @@
 set -eu
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 cd "$repo"
+echo "v0.2.5 is frozen; use firmware/build-v0.2.6.sh for the active release" >&2
+exit 2
 out=build/v0_2_5
 payload=artifacts/mcu-v0_2_5
 log(){ printf '== %s [%s]\n' "$*" "$(date +%H:%M:%S)"; }
