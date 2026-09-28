@@ -6,6 +6,8 @@ The optional Debug build creates a folder and keeps a current report on one
 writable USB drive. Firmware
 and keys stay in the browser; the app does not connect to or flash an MPC.
 
+`web/index.html` is the landing page with interactive feature demos;
+`web/builder.html` is the image builder itself.
 `web/guide.html` is the printable setup and controller reference. Its mappings
 are maintained alongside `docs/xtouch-cheatsheet.md`. The build publishes
 `web/xtouch-cheatsheet.md`; keep the controller mappings in both copies consistent.

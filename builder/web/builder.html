@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Image builder - MPC 3 Community Edition</title>
+  <meta name="description" content="MPC 3 Community Edition: a community build of the MPC 3.9.1 Gen1 firmware with Mackie Control and USB mouse support. Build the image in your browser from Akai's official update file.">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script>try{const t=localStorage.getItem('theme');if(t==='dark'||t==='light')document.documentElement.dataset.theme=t;}catch(e){}</script>
+  <style>
+    h1, h2, h3, h4 { text-wrap: balance; }
+    p, li, .lead, .note { text-wrap: pretty; }
+    :root {
+      color-scheme: light;
+      --bg: #f6f6f4; --surface: #ffffff; --ink: #111315; --ink-2: #4a4f55; --ink-3: #7c828a;
+      --line: #e3e4e1; --line-2: #eeefec; --accent: #d6362a; --accent-soft: #fdeceb; --accent-ink: #7a1f17;
+      --ok: #1f7a4d; --ok-soft: #e6f4ec; --ok-line: #cfe6d8;
+      --btn-hover: #fbfbfa; --btn-line-hover: #c9cbc6; --primary: #111315; --primary-ink: #ffffff; --primary-hover: #000000;
+      --header: rgba(246,246,244,.85);
+      --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      --radius: 12px; --radius-s: 8px;
+      --shadow: 0 1px 2px rgba(17,19,21,.04), 0 8px 24px -12px rgba(17,19,21,.12);
+    }
+    @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #121315; --surface: #1b1d20; --ink: #f1f1ef; --ink-2: #b4b8bd; --ink-3: #7f858c;
+      --line: #2a2d31; --line-2: #24272b; --accent: #ef5a4e; --accent-soft: #3a1e1b; --accent-ink: #ffb3ab;
+      --ok: #5fcf8f; --ok-soft: #14291d; --ok-line: #23482f;
+      --btn-hover: #202327; --btn-line-hover: #3a3e43; --primary: #f1f1ef; --primary-ink: #121315; --primary-hover: #ffffff;
+      --header: rgba(18,19,21,.8);
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.6);
+    } }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #121315; --surface: #1b1d20; --ink: #f1f1ef; --ink-2: #b4b8bd; --ink-3: #7f858c;
+      --line: #2a2d31; --line-2: #24272b; --accent: #ef5a4e; --accent-soft: #3a1e1b; --accent-ink: #ffb3ab;
+      --ok: #5fcf8f; --ok-soft: #14291d; --ok-line: #23482f;
+      --btn-hover: #202327; --btn-line-hover: #3a3e43; --primary: #f1f1ef; --primary-ink: #121315; --primary-hover: #ffffff;
+      --header: rgba(18,19,21,.8);
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.6);
+    }
+    * { box-sizing: border-box; }
+    html { background: var(--bg); scroll-behavior: smooth; }
+    body { margin: 0; font-family: var(--sans); font-size: 16px; line-height: 1.55; color: var(--ink); background: var(--bg); -webkit-font-smoothing: antialiased; }
+    a { color: inherit; }
+    a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+    code { font-family: var(--mono); font-size: .86em; background: var(--line-2); padding: 2px 6px; border-radius: 6px; }
+    [hidden] { display: none !important; }
+    input[type=file] { display: none !important; }
+    .wrap { width: min(1040px, 100% - 40px); margin-inline: auto; }
+    @media (max-width: 640px) { .wrap { width: calc(100% - 32px); } }
+
+    /* Header */
+    .top { position: sticky; top: 0; z-index: 10; background: var(--header); backdrop-filter: saturate(160%) blur(10px); -webkit-backdrop-filter: saturate(160%) blur(10px); border-bottom: 1px solid var(--line); }
+    .top .wrap { display: flex; align-items: center; justify-content: space-between; gap: 16px; height: 60px; }
+    .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; font-weight: 600; letter-spacing: -.01em; white-space: nowrap; }
+    .brand .mark { width: 26px; height: 26px; border-radius: 7px; background: var(--primary); display: grid; place-items: center; }
+    .brand .mark i { display: block; width: 10px; height: 10px; border-radius: 2px; background: var(--accent); }
+    .brand .tag { font-family: var(--mono); font-size: 12px; font-weight: 500; color: var(--ink-3); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; }
+    .brand .short { display: none; }
+    .top nav { display: flex; align-items: center; gap: 20px; font-size: 14px; font-weight: 500; }
+    .top nav a { text-decoration: none; color: var(--ink-2); white-space: nowrap; }
+    .top nav a:hover { color: var(--ink); }
+    .top nav .btn { padding: 8px 14px; }
+    .theme { width: 36px; height: 36px; padding: 0; justify-content: center; border-color: transparent; background: transparent; color: var(--ink-2); }
+    .theme:hover { background: var(--line-2); border-color: transparent; }
+    .theme svg { width: 18px; height: 18px; }
+    .theme .sun { display: none; }
+    :root[data-theme="dark"] .theme .sun { display: block; }
+    :root[data-theme="dark"] .theme .moon { display: none; }
+    @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .theme .sun { display: block; } :root:not([data-theme="light"]) .theme .moon { display: none; } }
+    @media (max-width: 640px) { .top nav { gap: 14px; } .top nav a { font-size: 13px; } .brand .full { display: none; } .brand .short { display: inline; } .brand .tag { display: none; } }
+
+    /* Buttons */
+    .btn, button { appearance: none; font: inherit; font-size: 14px; font-weight: 500; line-height: 1.2; border: 1px solid var(--line); border-radius: var(--radius-s); padding: 10px 16px; background: var(--surface); color: var(--ink); cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 8px; transition: background .15s, border-color .15s, color .15s; }
+    .btn:hover, button:hover { border-color: var(--btn-line-hover); background: var(--btn-hover); }
+    .btn.primary, button.primary { background: var(--primary); border-color: var(--primary); color: var(--primary-ink); }
+    .btn.primary:hover, button.primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
+    button:disabled { opacity: .4; cursor: default; }
+    button:disabled:hover { background: var(--surface); border-color: var(--line); }
+    button.quiet { border-color: transparent; background: transparent; color: var(--ink-2); padding-inline: 8px; }
+    button.quiet:hover { color: var(--accent); background: transparent; }
+
+    /* Page */
+    .page { padding: 40px 0 8px; }
+    .page h1 { font-size: clamp(26px, 3.4vw, 34px); font-weight: 700; letter-spacing: -.025em; line-height: 1.15; margin: 0 0 8px; }
+    .page .lead { margin: 0; color: var(--ink-2); font-size: 16px; max-width: 70ch; }
+    @media (min-width: 641px) { .lead-build { display: block; } }
+    .page .lead a { color: var(--ink); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+    .page .lead a:hover { color: var(--accent); }
+
+    /* Builder */
+    .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); margin-top: 22px; overflow: hidden; }
+    ol.procedure { list-style: none; counter-reset: step; margin: 0; padding: 0; }
+    ol.procedure > li { counter-increment: step; display: grid; grid-template-columns: 40px 1fr; gap: 16px; padding: 20px 24px; border-top: 1px solid var(--line); }
+    ol.procedure > li:first-child { border-top: 0; }
+    ol.procedure > li::before { content: counter(step); width: 30px; height: 30px; border-radius: 50%; background: var(--primary); color: var(--primary-ink); font-family: var(--mono); font-size: 13px; font-weight: 500; display: grid; place-items: center; margin-top: 1px; }
+    ol.procedure h3 { font-size: 16px; font-weight: 600; margin: 3px 0 4px; letter-spacing: -.01em; }
+    ol.procedure h3 small { font-weight: 500; color: var(--ink-3); font-size: 12px; margin-left: 8px; font-family: var(--mono); }
+    ol.procedure p { margin: 0 0 12px; color: var(--ink-2); font-size: 14.5px; max-width: 70ch; }
+    .row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+    .image-types { border: 0; margin: 16px 0 0; padding: 0; }
+    .image-types legend { margin-bottom: 6px; padding: 0; font-size: 13px; font-weight: 600; color: var(--ink-2); }
+    .choices { display: flex; flex-wrap: wrap; gap: 8px; }
+    .choice { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-s); cursor: pointer; }
+    .choice:has(input:checked) { border-color: var(--ink-3); background: var(--line-2); }
+    .choice input { margin-top: 4px; accent-color: var(--accent); }
+    .choice span { color: var(--ink-2); font-size: 14px; }
+    .choice b { color: var(--ink); }
+    .status { font-family: var(--mono); font-size: 13px; color: var(--ink-3); overflow-wrap: anywhere; }
+    .status.set { color: var(--ink); }
+    .progress { display: none; margin-top: 14px; max-width: 560px; }
+    progress { width: 100%; height: 6px; border-radius: 999px; overflow: hidden; accent-color: var(--accent); }
+    #message { margin: 8px 0 0; color: var(--ink-2); font-size: 14px; }
+    #error { display: none; margin-top: 14px; padding: 12px 14px; border-radius: var(--radius-s); background: var(--accent-soft); color: var(--accent-ink); white-space: pre-wrap; font-size: 14px; }
+    #result { display: none; margin-top: 14px; padding: 16px 18px; border: 1px solid var(--ok-line); background: var(--ok-soft); border-radius: var(--radius); font-size: 14px; }
+    #result strong { display: block; margin-bottom: 12px; color: var(--ok); }
+    #result p { margin: 10px 0 0; overflow-wrap: anywhere; color: var(--ink-2); }
+    #result #imageSHA { display: block; margin-top: 4px; background: none; padding: 0; font-size: 12px; color: var(--ink); }
+    .diagnostic-help { margin-top: 12px; color: var(--ink-2); }
+    .diagnostic-help summary { color: var(--ink); cursor: pointer; font-weight: 600; }
+    .diagnostic-help summary:hover { color: var(--accent); }
+    .diagnostic-help summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+    .diagnostic-help ol { margin: 10px 0 0; padding-left: 22px; }
+    .diagnostic-help li { margin: 5px 0; }
+    .install-list { margin: 8px 0 0; padding-left: 20px; color: var(--ink-2); font-size: 14.5px; max-width: 72ch; }
+    .install-list li { margin: 5px 0; }
+    .install-list code { overflow-wrap: anywhere; }
+    @media (max-width: 640px) { .page { padding-top: 28px; } ol.procedure > li { grid-template-columns: 1fr; gap: 8px; padding: 18px 16px; } .choices { display: grid; } }
+
+    /* Notes */
+    .notes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 16px; }
+    .note { padding: 16px 18px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); font-size: 13.5px; color: var(--ink-2); }
+    .note h4 { margin: 0 0 8px; font-size: 12px; font-family: var(--mono); font-weight: 500; color: var(--ink-3); letter-spacing: .04em; text-transform: uppercase; }
+    .note b { color: var(--ink); font-weight: 600; }
+    .note ul { margin: 0; padding-left: 18px; }
+    .note li { margin: 3px 0; }
+    .note a { color: var(--ink); }
+    .note a:hover { color: var(--accent); }
+    @media (max-width: 760px) { .notes { grid-template-columns: 1fr; } }
+
+    footer { margin-top: 32px; padding: 28px 0 40px; border-top: 1px solid var(--line); font-size: 13px; color: var(--ink-3); }
+    footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px 24px; }
+    footer nav { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+    footer nav a { color: var(--ink-2); text-decoration: none; }
+    footer nav a:hover { color: var(--accent); }
+    footer p { margin: 0; max-width: 60ch; }
+  </style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./"><span class="mark"><i></i></span><span class="full">MPC 3 Community Edition</span><span class="short">MPC 3 CE</span> <span class="tag">v0.2.6</span></a>
+    <nav aria-label="Site">
+      <a href="guide.html">X-Touch guide</a>
+      <a href="https://github.com/zsoltf/mpc-3-community-edition/releases" rel="noopener noreferrer">Releases</a>
+      <a href="https://github.com/zsoltf/mpc-3-community-edition" rel="noopener noreferrer">GitHub</a>
+      <button class="theme" type="button" id="themeToggle" aria-label="Switch color theme" title="Switch color theme">
+        <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+        <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      </button>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="page" id="builder">
+    <div class="wrap">
+      <h1>Build your MPC 3 Community Edition image</h1>
+      <p class="lead">Adds X-Touch control, USB mouse support and Shift+wheel note selection to MPC 3.9.1. <span class="lead-build">The image is built in your browser from Akai's official file. Nothing is uploaded.</span></p>
+
+      <div class="panel">
+        <ol class="procedure">
+          <li id="step1">
+            <div>
+              <h3>Official firmware</h3>
+              <p>Choose <code>MPC-3.9.1-Gen1-update.img</code> from Akai. Other files are refused.</p>
+              <div class="row">
+                <button id="select" type="button">Choose firmware file</button>
+                <a class="btn" href="https://cdn.inmusicbrands.com/Software/MPC/MVSU391APC/MPC-3.9.1-Gen1-update.img" rel="noreferrer">Download from Akai</a>
+                <span id="file" class="status">No file chosen</span>
+              </div>
+              <input id="picker" type="file" accept=".img,application/octet-stream">
+              <fieldset class="image-types">
+                <legend>Image type</legend>
+                <div class="choices">
+                  <label class="choice"><input type="radio" name="imageType" value="standard" checked><span><b>Standard CE v0.2.6</b></span></label>
+                  <label class="choice"><input type="radio" name="imageType" value="diagnostics"><span><b>Debug build</b> - current USB report, SSH off.</span></label>
+                </div>
+              </fieldset>
+            </div>
+          </li>
+          <li id="step2">
+            <div>
+              <h3>SSH key<small>optional</small></h3>
+              <p>Add an Ed25519 <code>.pub</code> key if you want SSH access, which also lets you copy files to and from the MPC. Without one, SSH stays off.</p>
+              <div class="row">
+                <button id="selectKey" type="button">Add public key</button>
+                <button id="clearKey" type="button" class="quiet" hidden>Remove key</button>
+                <span id="sshStatus" class="status">SSH disabled</span>
+              </div>
+              <input id="keyPicker" type="file" accept=".pub,text/plain">
+            </div>
+          </li>
+          <li id="step3">
+            <div>
+              <h3>Create the image</h3>
+              <p>Takes a few minutes and about 2.5 GB of free memory. Keep this tab open until it finishes.</p>
+              <div class="row"><button id="create" type="button" class="primary" disabled>Create image</button></div>
+              <section id="progress" class="progress" aria-live="polite">
+                <progress id="bar" max="100" value="0"></progress>
+                <p id="message">Loading the image engine</p>
+              </section>
+              <div id="error" role="alert"></div>
+              <div id="result">
+                <strong id="resultTitle">Standard CE image ready</strong>
+                <div class="row"><a id="imageDownload" class="btn primary">Save image</a></div>
+                <p id="sshResult"></p>
+                <details id="diagnosticResult" class="diagnostic-help" hidden>
+                  <summary>How to use the debug build</summary>
+                  <ol>
+                    <li>Leave one writable USB drive connected when you boot the Debug build. It creates <code>MPCLEARN-DIAGNOSTICS/report.txt</code> automatically.</li>
+                    <li>Reproduce the problem. The report updates as evidence arrives.</li>
+                    <li>Retrieve <code>MPCLEARN-DIAGNOSTICS/report.txt</code> after reproducing the problem.</li>
+                    <li>Reflash the standard CE or official image afterward. Use the same step if the report is unavailable.</li>
+                  </ol>
+                </details>
+                <p>SHA-256<code id="imageSHA"></code></p>
+              </div>
+            </div>
+          </li>
+          <li id="step4">
+            <div>
+              <h3>Install on your MPC</h3>
+              <ol class="install-list">
+                <li>Copy <code id="installImageName">MPC-3.9.1-Gen1-CE-v0.2.6-update.img</code> to the USB drive, outside any folders. Keep only this update image there. If your browser added <code>(1)</code>, remove it to match this filename.</li>
+                <li>Safely eject the USB drive and connect it to the MPC. Save your work, back up important projects, and connect the power adapter.</li>
+                <li>Open <b>Menu &gt; Preferences &gt; Info &gt; Update &gt; USB Drive Update</b>, choose the image, and confirm <b>Update</b> or reinstall. Let the MPC restart without turning off its power.</li>
+                <li>After restart, check that <b>Preferences &gt; Info</b> shows <em>MPC CE v0.2.6</em>. See Akai's <a href="https://support.akaipro.com/en/support/solutions/articles/69000816160-akai-pro-mpc-firmware-update-walkthrough" rel="noopener noreferrer">firmware update walkthrough</a> for the stock update screens.</li>
+              </ol>
+            </div>
+          </li>
+        </ol>
+      </div>
+
+      <div class="notes">
+        <div class="note"><h4>What you get</h4><ul>
+          <li><b>X-Touch control:</b> mixer, sends, plug-ins, Q-Links, transport, motor faders, meters and the jog wheel. <a href="guide.html">Guide</a></li>
+          <li><b>USB mouse:</b> pointer, click, drag and scroll.</li>
+          <li><b>Built-in note selection:</b> hold MPC Shift and turn the MPC data wheel in the Grid.</li>
+        </ul></div>
+        <div class="note"><h4>Requirements</h4><ul>
+          <li><b>MPC Live II</b> on firmware 3.9.1. Other Gen1 MPCs are untested.</li>
+          <li><b>Full-size Behringer X-Touch</b> for controller features. A USB mouse can be used by itself.</li>
+        </ul></div>
+        <div class="note"><h4>Before you flash</h4><ul>
+          <li>Your settings and projects are kept.</li>
+          <li><a href="https://github.com/zsoltf/mpc-3-community-edition/releases" rel="noopener noreferrer">What's new in v0.2.6</a></li>
+        </ul></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <nav aria-label="Community">
+      <a href="https://github.com/zsoltf/mpc-3-community-edition/releases" rel="noopener noreferrer">Releases</a>
+      <a href="https://github.com/zsoltf/mpc-3-community-edition/issues" rel="noopener noreferrer">Report a result or bug</a>
+      <a href="https://github.com/zsoltf/mpc-3-community-edition" rel="noopener noreferrer">GitHub</a>
+    </nav>
+    <p>Built on research from <a href="https://github.com/TheKikGen/MPC-LiveXplore" rel="noopener noreferrer">MPC-LiveXplore</a>. Unofficial, and not affiliated with Akai, inMusic or Behringer. Please don't share the images you build.</p>
+  </div>
+</footer>
+<script>
+const standardImageName = 'MPC-3.9.1-Gen1-CE-v0.2.6-update.img';
+const diagnosticImageName = 'MPC-3.9.1-Gen1-CE-v0.2.6-DEBUG-update.img';
+
+document.querySelector('#themeToggle').onclick = () => {
+  const root = document.documentElement;
+  const dark = root.dataset.theme === 'dark' || (!root.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches);
+  root.dataset.theme = dark ? 'light' : 'dark';
+  try { localStorage.setItem('theme', root.dataset.theme); } catch (e) {}
+};
+
+const picker = document.querySelector('#picker');
+const keyPicker = document.querySelector('#keyPicker');
+const select = document.querySelector('#select');
+const selectKey = document.querySelector('#selectKey');
+const clearKey = document.querySelector('#clearKey');
+const create = document.querySelector('#create');
+const file = document.querySelector('#file');
+const sshStatus = document.querySelector('#sshStatus');
+const sshStep = document.querySelector('#step2');
+const sshResult = document.querySelector('#sshResult');
+const imageTypes = [...document.querySelectorAll('input[name=imageType]')];
+const progress = document.querySelector('#progress');
+const bar = document.querySelector('#bar');
+const message = document.querySelector('#message');
+const errorBox = document.querySelector('#error');
+const result = document.querySelector('#result');
+const resultTitle = document.querySelector('#resultTitle');
+let selectedFile = null;
+let selectedKey = null;
+let workerReady = false;
+let downloads = [];
+const worker = new Worker('worker.js');
+
+worker.onmessage = event => {
+  const data = event.data;
+  if (data.type === 'ready') {
+    workerReady = true;
+    create.disabled = !selectedFile;
+    message.textContent = 'Image engine ready';
+  } else if (data.type === 'progress') {
+    bar.value = data.progress;
+    message.textContent = data.message;
+  } else if (data.type === 'error') {
+    showError(data.message);
+    finishBusy();
+  } else if (data.type === 'complete') {
+    setDownload('imageDownload', data.image, data.diagnostics ? diagnosticImageName : standardImageName, 'application/octet-stream');
+    resultTitle.textContent = data.diagnostics ? 'Debug build ready' : 'Standard CE image ready';
+    document.querySelector('#imageSHA').textContent = data.imageSHA256;
+    sshResult.textContent = data.sshEnabled
+      ? 'SSH enabled for the selected public key only.'
+      : 'SSH disabled in this image.';
+    sshResult.hidden = data.diagnostics;
+    document.querySelector('#diagnosticResult').hidden = !data.diagnostics;
+    bar.value = 100;
+    message.textContent = 'Image ready';
+    result.style.display = 'block';
+    finishBusy();
+  }
+};
+worker.onerror = event => {
+  showError('The image engine stopped: ' + (event.message || 'unknown browser error'));
+  finishBusy();
+};
+
+select.onclick = () => picker.click();
+picker.onchange = () => {
+  invalidateResult();
+  selectedFile = picker.files[0] || null;
+  file.textContent = selectedFile ? selectedFile.name + ' (' + formatBytes(selectedFile.size) + ')' : 'No file chosen';
+  file.classList.toggle('set', !!selectedFile);
+  create.disabled = !(selectedFile && workerReady);
+  showError('');
+};
+selectKey.onclick = () => keyPicker.click();
+keyPicker.onchange = () => {
+  invalidateResult();
+  selectedKey = keyPicker.files[0] || null;
+  if (selectedKey && (selectedKey.size === 0 || selectedKey.size > 16384)) {
+    selectedKey = null;
+    keyPicker.value = '';
+    showError('The public key must be a nonempty OpenSSH .pub file (16 KB maximum).');
+  } else {
+    showError('');
+  }
+  setKeyStatus();
+};
+clearKey.onclick = () => { invalidateResult(); selectedKey = null; keyPicker.value = ''; setKeyStatus(); };
+imageTypes.forEach(input => input.onchange = () => {
+  document.querySelector('#installImageName').textContent = diagnosticsSelected() ? diagnosticImageName : standardImageName;
+  invalidateResult();
+  if (diagnosticsSelected()) { selectedKey = null; keyPicker.value = ''; }
+  setKeyStatus();
+});
+function diagnosticsSelected() { return imageTypes.find(input => input.checked).value === 'diagnostics'; }
+function setKeyStatus() {
+  const diagnostic = diagnosticsSelected();
+  sshStep.hidden = diagnostic;
+  selectKey.disabled = diagnostic;
+  sshStatus.textContent = diagnostic ? 'SSH disabled for diagnostics' : (selectedKey ? 'SSH enabled for ' + selectedKey.name : 'SSH disabled');
+  sshStatus.classList.toggle('set', !!selectedKey);
+  clearKey.hidden = !selectedKey || diagnostic;
+}
+setKeyStatus();
+create.onclick = async () => {
+  if (!selectedFile || !workerReady) return;
+  clearDownloads();
+  showError('');
+  result.style.display = 'none';
+  progress.style.display = 'block';
+  select.disabled = selectKey.disabled = clearKey.disabled = create.disabled = true;
+  imageTypes.forEach(input => input.disabled = true);
+  bar.value = 1;
+  message.textContent = 'Reading the selected image';
+  try {
+    const image = await selectedFile.arrayBuffer();
+    const ownerKey = selectedKey ? await selectedKey.arrayBuffer() : new ArrayBuffer(0);
+    worker.postMessage({type: 'build', image, ownerKey, diagnostics: diagnosticsSelected()}, [image, ownerKey]);
+  } catch (error) {
+    showError('Could not read the selected image: ' + error.message);
+    finishBusy();
+  }
+};
+function setDownload(id, bytes, name, type) {
+  const url = URL.createObjectURL(new Blob([bytes], {type}));
+  downloads.push(url);
+  const link = document.querySelector('#' + id);
+  link.href = url;
+  link.download = name;
+}
+function clearDownloads() { downloads.forEach(URL.revokeObjectURL); downloads = []; }
+function invalidateResult() { clearDownloads(); result.style.display = 'none'; document.querySelector('#imageSHA').textContent = ''; }
+function finishBusy() { select.disabled = clearKey.disabled = false; imageTypes.forEach(input => input.disabled = false); selectKey.disabled = diagnosticsSelected(); create.disabled = !(selectedFile && workerReady); }
+function showError(text) { errorBox.textContent = text; errorBox.style.display = text ? 'block' : 'none'; }
+function formatBytes(value) { return (value / (1024 * 1024)).toFixed(1) + ' MB'; }
+</script>
+</body>
+</html>

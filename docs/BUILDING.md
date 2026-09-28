@@ -1,7 +1,7 @@
 # Build from source
 
 The website and native MCU runtime have separate builds. End users need only
-[the browser builder](https://zsoltf.github.io/mpc-3-community-edition/).
+[the browser builder](https://zsoltf.github.io/mpc-3-community-edition/builder.html).
 
 ## Website
 
@@ -14,9 +14,11 @@ go test ./...
 python3 -m http.server 8765 --bind 127.0.0.1 --directory dist
 ```
 
-Open http://127.0.0.1:8765/. Deploy only `builder/dist/`. The checked-in patch
-recipes already contain the matched runtime; building the website does not
-require firmware, SSH keys, Docker or rebuilding the native runtime.
+Open http://127.0.0.1:8765/ for the landing page and
+http://127.0.0.1:8765/builder.html for the image builder. Deploy only
+`builder/dist/`. The checked-in patch recipes already contain the matched
+runtime; building the website does not require firmware, SSH keys, Docker or
+rebuilding the native runtime.
 
 ## Native MCU runtime
 

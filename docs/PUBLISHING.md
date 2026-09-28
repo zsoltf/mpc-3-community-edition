@@ -46,8 +46,9 @@ uploaded. The site will be:
 
 `https://zsoltf.github.io/mpc-3-community-edition/`
 
-Check the builder, guide, repository links and official Akai download link on
-the deployed page. Deployment has not been observed until this workflow runs.
+Check the landing page, builder, guide, repository links and official Akai
+download link on the deployed site. Deployment has not been observed until
+this workflow runs.
 
 Reference: [GitHub Pages custom workflows](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages).
 
@@ -71,8 +72,9 @@ testing expands hardware coverage.
 
 Prepare another clean snapshot from private development, review the changes in
 this release checkout and push only the intended public files. Keep runtime,
-patch recipes, guide version and release notes consistent. Never merge the
-private Git history into the public repository.
+patch recipes, release notes and the version label in `builder/web/index.html`,
+`builder.html` and `guide.html` consistent. Never merge the private Git
+history into the public repository.
 
 Exclude development-only `AGENTS.md`, `LEARNINGS.md` and `PLAN.md` from the
 public snapshot. Keep useful performance measurements and contributor-facing

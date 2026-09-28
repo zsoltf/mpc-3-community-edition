@@ -5,7 +5,8 @@ mouse support and built-in note selection to standalone MPCs. You build the
 image in your browser from Akai's official update file. Nothing is uploaded,
 and no firmware is hosted here.
 
-**[Build your image](https://zsoltf.github.io/mpc-3-community-edition/)**
+**[Website](https://zsoltf.github.io/mpc-3-community-edition/)**
+· **[Build your image](https://zsoltf.github.io/mpc-3-community-edition/builder.html)**
 · **[X-Touch guide](https://zsoltf.github.io/mpc-3-community-edition/guide.html)**
 
 https://github.com/user-attachments/assets/d2c28bb4-6c1e-4adf-b646-ca75fded7a5c
@@ -47,7 +48,7 @@ https://github.com/user-attachments/assets/d2c28bb4-6c1e-4adf-b646-ca75fded7a5c
 
 ## Install
 
-1. Open the [Image Builder](https://zsoltf.github.io/mpc-3-community-edition/)
+1. Open the [Image Builder](https://zsoltf.github.io/mpc-3-community-edition/builder.html)
    and choose the official firmware file. Add an SSH key if you want remote
    access or file transfer.
 2. Save the image to a USB drive and run the MPC's firmware update.
