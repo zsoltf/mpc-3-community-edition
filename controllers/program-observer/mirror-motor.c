@@ -7,9 +7,13 @@
 #include <signal.h>
 #include <stdarg.h>
 #include <sys/socket.h>
+#include <sys/mman.h>
+#include <sys/syscall.h>
 #include <sys/un.h>
 #include "mirror-motor-core.h"
 #include "mirror-fresh.h"
+#include "mcu-profile.h"
+#include "hui-codec.h"
 /* The centre-button focus-press (Enter), Replace Duplicate Sequence and Save
  * call blocking application entry points from the input drain, which can stall
  * the bridge on items that open a modal or run a threaded rendezvous. They stay
@@ -30,6 +34,7 @@
 #include "sha256.h"
 #include "mpc-identity.h"
 static volatile sig_atomic_t stopping;
+static McuEndpoint controller={.profile=&mcu_profile_xtouch,.client="X-Touch",.port="X-TOUCH_INT",.physical_only=1};
 #ifdef MIRROR_INPUT
 #include <sys/file.h>
 #include "../stop-route.h"
@@ -46,6 +51,8 @@ static void bridge_log(const char *format,...){
 static MirrorInput input;
 #include "motor-follow.h"
 #include "surface-preferences.h"
+#include "mcu-controller-preferences.h"
+#include "native-preferences.h"
 static MotorFollowing following={.enabled=1};
 static const char *preferences_path,*stop_adapter_exe;
 static uint32_t preference_notice_until;
@@ -54,22 +61,47 @@ static uint32_t page_notice_until;static unsigned requested_page;
 static uint32_t effect_notice_until,effect_notice_epoch,effect_notice_generation,effect_notice_serial,effect_notice_slot=EFFECT_LIST,effect_notice_page;
 static uint32_t mode_notice_until,mode_notice_controller,mode_notice_generation,mode_notice_epoch;static unsigned mode_notice_id;
 static unsigned inherited_holds;
-static unsigned servo_disabled=1; /* X-Touch native A/B: no raw echo by default. */
+static unsigned servo_disabled=1; /* Profile policy; X-Touch default remains off. */
+typedef struct {const char *profile,*client,*port,*preferences;unsigned physical_only,selection_options,profile_set;} ControllerOptions;
+static McuControllerPreference saved_controller;
+static int controller_option(ControllerOptions *options,const char *arg){
+ if(!strncmp(arg,"--profile=",10)){options->profile=arg+10;options->selection_options++;options->profile_set=1;return 1;}
+ if(!strncmp(arg,"--endpoint-client=",18)){options->client=arg+18;options->selection_options++;return 1;}
+ if(!strncmp(arg,"--endpoint-port=",16)){options->port=arg+16;options->selection_options++;return 1;}
+ if(!strcmp(arg,"--endpoint-type=kernel")){options->physical_only=1;options->selection_options++;return 1;}
+ if(!strcmp(arg,"--endpoint-type=any")){options->physical_only=0;options->selection_options++;return 1;}
+ if(!strncmp(arg,"--controller-preferences=",25)&&arg[25]=='/'){options->preferences=arg+25;return 1;}
+ return 0;
+}
+static int controller_resolve(const ControllerOptions *options,McuEndpoint *endpoint){
+ if(options->preferences){
+  if(options->selection_options||!mcu_controller_preferences_read(options->preferences,&saved_controller))return 0;
+  *endpoint=saved_controller.endpoint;return 1;
+ }
+ const McuProfile *profile=mcu_profile_named(options->profile);if(!profile)return 0;
+ *endpoint=(McuEndpoint){.profile=profile,.client=options->client?options->client:profile->default_client,.port=options->port?options->port:profile->default_port,.physical_only=options->physical_only};
+ if(profile->default_client&&(options->client||options->port||!options->physical_only))return 0;
+ return mcu_endpoint_valid(endpoint);
+}
 static int servo_arguments(int argc,char **argv){
+ int servo_override=-1;ControllerOptions options={.profile="xtouch",.physical_only=1};
  servo_disabled=1;bridge_verbose=0;
  while(argc>=4){
   const char *arg=argv[argc-1];
   if(!strncmp(arg,"--stop-adapter-exe=",19)&&arg[19]=='/')stop_adapter_exe=arg+19;
-  else if(!strcmp(arg,"--servo=off"))servo_disabled=1;
-  else if(!strcmp(arg,"--servo=on"))servo_disabled=0;
+  else if(!strcmp(arg,"--servo=off"))servo_override=1;
+  else if(!strcmp(arg,"--servo=on"))servo_override=0;
+  else if(controller_option(&options,arg)){}
   else if(!strcmp(arg,"--verbose"))bridge_verbose=1;
   else if(!strcmp(arg,"--motors=on"))following.enabled=1;
   else if(!strcmp(arg,"--motors=off"))following.enabled=0;
   else if(!strncmp(arg,"--preferences=",14)&&arg[14]=='/')preferences_path=arg+14;
   else if(!strncmp(arg,"--held-mask=",12)){char *end;unsigned long mask=strtoul(arg+12,&end,10);if(!arg[12]||*end||mask>511)return -1;inherited_holds=(unsigned)mask;}
   else break;
-  argc--;
+ argc--;
  }
+ if(!controller_resolve(&options,&controller))return -1;
+ servo_disabled=!mcu_has(&controller,MCU_CAP_STRIP_MOTOR)||(servo_override>=0?(unsigned)servo_override:!controller.profile->raw_fader_echo);
  return argc;
 }
 static int input_fd=-1;
@@ -111,26 +143,146 @@ static int process_file(unsigned pid,struct stat *identity,int hash){
  close(fd);return ok;
 }
 static int address_equal(snd_seq_addr_t a,snd_seq_addr_t b){return a.client==b.client&&a.port==b.port;}
-static int discover(snd_seq_t *seq,snd_seq_addr_t *out){
+static int discover(snd_seq_t *seq,const McuEndpoint *endpoint,snd_seq_addr_t *out){
  snd_seq_client_info_t *ci;snd_seq_port_info_t *pi;snd_seq_client_info_alloca(&ci);snd_seq_port_info_alloca(&pi);snd_seq_client_info_set_client(ci,-1);int n=0,rc;
  while((rc=snd_seq_query_next_client(seq,ci))>=0){
-  if(strcmp(snd_seq_client_info_get_name(ci),"X-Touch"))continue;
-  if(snd_seq_client_info_get_type(ci)!=SND_SEQ_KERNEL_CLIENT)return 0;
+  if(strcmp(snd_seq_client_info_get_name(ci),endpoint->client))continue;
+  if(endpoint->physical_only&&snd_seq_client_info_get_type(ci)!=SND_SEQ_KERNEL_CLIENT)continue;
   snd_seq_port_info_set_client(pi,snd_seq_client_info_get_client(ci));snd_seq_port_info_set_port(pi,-1);int pr;
   while((pr=snd_seq_query_next_port(seq,pi))>=0){
-   if(strcmp(snd_seq_port_info_get_name(pi),"X-TOUCH_INT"))continue;
    unsigned need=SND_SEQ_PORT_CAP_READ|SND_SEQ_PORT_CAP_SUBS_READ|SND_SEQ_PORT_CAP_WRITE;
-   if((snd_seq_port_info_get_capability(pi)&need)!=need)return 0;
+   unsigned caps=snd_seq_port_info_get_capability(pi),abstract=0;
+   if(caps&SND_SEQ_PORT_CAP_READ)abstract|=MCU_ENDPOINT_READ;
+   if(caps&SND_SEQ_PORT_CAP_SUBS_READ)abstract|=MCU_ENDPOINT_SUBS_READ;
+   if(caps&SND_SEQ_PORT_CAP_WRITE)abstract|=MCU_ENDPOINT_WRITE;
+   if(!mcu_endpoint_match(endpoint,snd_seq_client_info_get_name(ci),snd_seq_client_info_get_type(ci)==SND_SEQ_KERNEL_CLIENT,snd_seq_port_info_get_name(pi),abstract))continue;
+   if((caps&need)!=need)continue;
    *out=*snd_seq_port_info_get_addr(pi);n++;
   }if(pr!=-ENOENT)return 0;
  }return rc==-ENOENT&&n==1;
 }
+
+#ifdef MIRROR_INPUT
+static void list_text(const char *text){
+ putchar('"');for(const unsigned char *p=(const unsigned char*)text;*p;p++){if(*p=='"'||*p=='\\')putchar('\\');if(*p>=32&&*p<127)putchar(*p);else printf("\\x%02x",*p);}putchar('"');
+}
+static int list_midi_endpoints(void){
+ snd_seq_t *seq=NULL;if(snd_seq_open(&seq,"default",SND_SEQ_OPEN_DUPLEX,SND_SEQ_NONBLOCK)<0){fputs("MIDI endpoint listing unavailable\n",stderr);return 1;}
+ snd_seq_client_info_t *ci;snd_seq_port_info_t *pi;snd_seq_client_info_alloca(&ci);snd_seq_port_info_alloca(&pi);snd_seq_client_info_set_client(ci,-1);int rc;
+ while((rc=snd_seq_query_next_client(seq,ci))>=0){
+  int client=snd_seq_client_info_get_client(ci);snd_seq_port_info_set_client(pi,client);snd_seq_port_info_set_port(pi,-1);int pr;
+  while((pr=snd_seq_query_next_port(seq,pi))>=0){
+   unsigned caps=snd_seq_port_info_get_capability(pi);
+   if(!(caps&(SND_SEQ_PORT_CAP_READ|SND_SEQ_PORT_CAP_WRITE)))continue;
+   printf("address=%d:%d type=%s capabilities=%s%s%s%s client=",client,snd_seq_port_info_get_port(pi),snd_seq_client_info_get_type(ci)==SND_SEQ_KERNEL_CLIENT?"kernel":"user",caps&SND_SEQ_PORT_CAP_READ?"read,":"",caps&SND_SEQ_PORT_CAP_SUBS_READ?"subs-read,":"",caps&SND_SEQ_PORT_CAP_WRITE?"write,":"",caps&SND_SEQ_PORT_CAP_SUBS_WRITE?"subs-write":"");
+   list_text(snd_seq_client_info_get_name(ci));fputs(" port=",stdout);list_text(snd_seq_port_info_get_name(pi));putchar('\n');
+  }
+  if(pr!=-ENOENT){snd_seq_close(seq);return 1;}
+ }
+ snd_seq_close(seq);return rc==-ENOENT?0:1;
+}
+
+enum {NATIVE_APPLY_NONE=10,NATIVE_APPLY_INVALID=11,NATIVE_APPLY_UNAVAILABLE=12,NATIVE_APPLY_AMBIGUOUS=13,NATIVE_APPLY_WRITE=14};
+
+static int native_state_open(const char *path,NativePreferencesState **mapped){
+ if(!path||path[0]!='/')return -1;
+ int fd=open(path,O_RDWR|O_CLOEXEC|O_NOFOLLOW|O_NONBLOCK);if(fd<0)return -1;
+ struct stat st={0};int ok=!fstat(fd,&st)&&S_ISREG(st.st_mode)&&st.st_uid==geteuid()&&(st.st_mode&0777)==0600&&st.st_size==NATIVE_PREFERENCES_BYTES;
+ void *page=ok?mmap(NULL,NATIVE_PREFERENCES_BYTES,PROT_READ|PROT_WRITE,MAP_SHARED,fd,0):MAP_FAILED;close(fd);
+ if(page==MAP_FAILED)return -1;
+ NativePreferencesState *s=page;
+ if(s->magic!=NATIVE_PREFERENCES_MAGIC||s->version!=NATIVE_PREFERENCES_VERSION||s->bytes!=sizeof(*s)){munmap(page,NATIVE_PREFERENCES_BYTES);return -1;}
+ *mapped=s;return 0;
+}
+static void native_state_endpoint(NativePreferencesState *s,const McuEndpoint *endpoint){
+ size_t client=endpoint&&endpoint->client?strlen(endpoint->client):0,port=endpoint&&endpoint->port?strlen(endpoint->port):0;
+ if(client>NATIVE_PREFERENCES_ENDPOINT_MAX)client=NATIVE_PREFERENCES_ENDPOINT_MAX;
+ if(port>NATIVE_PREFERENCES_ENDPOINT_MAX)port=NATIVE_PREFERENCES_ENDPOINT_MAX;
+ __atomic_add_fetch(&s->result_revision,1u,__ATOMIC_RELEASE);
+ memset(s->endpoint_client,0,sizeof(s->endpoint_client));memset(s->endpoint_port,0,sizeof(s->endpoint_port));
+ if(client)memcpy(s->endpoint_client,endpoint->client,client);
+ if(port)memcpy(s->endpoint_port,endpoint->port,port);
+ s->endpoint_client_length=(uint32_t)client;s->endpoint_port_length=(uint32_t)port;
+ __atomic_add_fetch(&s->result_revision,1u,__ATOMIC_RELEASE);
+}
+static void native_state_status(NativePreferencesState *s,unsigned status,unsigned detail,unsigned complete){
+ __atomic_store_n(&s->result_detail,detail,__ATOMIC_RELAXED);__atomic_store_n(&s->status,status,__ATOMIC_RELEASE);
+ if(complete)__atomic_store_n(&s->completed_sequence,__atomic_load_n(&s->claimed_sequence,__ATOMIC_RELAXED),__ATOMIC_RELEASE);
+}
+/* The System sequencer and MPC's built-in DIN/private ports are always present;
+ * neither is a newly attached external control surface. A native Generic click
+ * can select only one remaining kernel endpoint with both input and output. */
+static int generic_external_candidate(const char *client,int kernel,const char *port,unsigned caps){
+ unsigned need=SND_SEQ_PORT_CAP_READ|SND_SEQ_PORT_CAP_SUBS_READ|SND_SEQ_PORT_CAP_WRITE;
+ return kernel&&client&&port&&*client&&*port&&strcmp(client,"System")&&strcmp(client,"MPC Live II")&&(caps&need)==need;
+}
+/* 1 unique, 0 absent, -1 ambiguous, -2 enumeration/name failure. */
+static int generic_external_unique(snd_seq_t *seq,McuControllerPreference *selection){
+ snd_seq_client_info_t *ci;snd_seq_port_info_t *pi;snd_seq_client_info_alloca(&ci);snd_seq_port_info_alloca(&pi);snd_seq_client_info_set_client(ci,-1);
+ int rc,count=0;memset(selection,0,sizeof(*selection));
+ while((rc=snd_seq_query_next_client(seq,ci))>=0){
+  const char *client=snd_seq_client_info_get_name(ci);int kernel=snd_seq_client_info_get_type(ci)==SND_SEQ_KERNEL_CLIENT;
+  if(!kernel||!strcmp(client,"System")||!strcmp(client,"MPC Live II"))continue;
+  snd_seq_port_info_set_client(pi,snd_seq_client_info_get_client(ci));snd_seq_port_info_set_port(pi,-1);int pr;
+  while((pr=snd_seq_query_next_port(seq,pi))>=0){
+   const char *port=snd_seq_port_info_get_name(pi);unsigned caps=snd_seq_port_info_get_capability(pi);
+   if(!generic_external_candidate(client,kernel,port,caps))continue;
+   size_t cn=strlen(client),pn=strlen(port);if(cn>MCU_CONTROLLER_NAME_MAX||pn>MCU_CONTROLLER_NAME_MAX)return -2;
+   if(++count>1)continue;
+   memcpy(selection->client,client,cn+1);memcpy(selection->port,port,pn+1);
+   selection->endpoint=(McuEndpoint){.profile=&mcu_profile_generic,.client=selection->client,.port=selection->port,.physical_only=1};
+  }
+  if(pr!=-ENOENT)return -2;
+ }
+ if(rc!=-ENOENT)return -2;
+ return count==1?1:count?-1:0;
+}
+static int native_preferences_watch(const char *path){
+ NativePreferencesState *s;if(native_state_open(path,&s))return 1;
+ pid_t owner=getppid();uint64_t owner_start=start_time((unsigned)owner);uint32_t seen=__atomic_load_n(&s->completed_sequence,__ATOMIC_ACQUIRE);
+ if(owner<=1||!owner_start){munmap(s,sizeof(*s));return 1;}
+ for(;;){
+  uint32_t requested=__atomic_load_n(&s->request_sequence,__ATOMIC_ACQUIRE);
+  if(requested!=seen){if(getppid()!=owner||start_time((unsigned)owner)!=owner_start||kill(owner,SIGUSR2)){munmap(s,sizeof(*s));return 1;}seen=requested;}
+  long result=syscall(SYS_futex,&s->request_sequence,0,requested,NULL,NULL,0);
+  if(result<0&&errno!=EAGAIN&&errno!=EINTR){munmap(s,sizeof(*s));return 1;}
+ }
+}
+static int native_preferences_sync(const char *state_path,const char *preference_path,const char *active_name){
+ NativePreferencesState *s;McuControllerPreference selection;if(native_state_open(state_path,&s))return 1;
+ if(!mcu_controller_preferences_read(preference_path,&selection)){munmap(s,sizeof(*s));return 1;}
+ unsigned saved=mcu_controller_profile_id(selection.endpoint.profile),active=saved;
+ if(strcmp(active_name,"saved")){const McuProfile *profile=mcu_profile_named(active_name);active=mcu_controller_profile_id(profile);if(!active){munmap(s,sizeof(*s));return 1;}}
+ s->saved_profile=saved;s->active_profile=active;native_state_endpoint(s,&selection.endpoint);native_state_status(s,NATIVE_PREFERENCES_ACTIVE,0,0);munmap(s,sizeof(*s));return 0;
+}
+static int native_preferences_apply(const char *state_path,const char *preference_path){
+ NativePreferencesState *s;if(native_state_open(state_path,&s))return NATIVE_APPLY_INVALID;
+ uint32_t requested=__atomic_load_n(&s->request_sequence,__ATOMIC_ACQUIRE),claimed=__atomic_load_n(&s->claimed_sequence,__ATOMIC_RELAXED);
+ if(!requested||requested==claimed){munmap(s,sizeof(*s));return NATIVE_APPLY_NONE;}
+ uint32_t profile=__atomic_load_n(&s->request_profile,__ATOMIC_RELAXED);__atomic_store_n(&s->claimed_sequence,requested,__ATOMIC_RELEASE);native_state_status(s,NATIVE_PREFERENCES_APPLYING,0,0);
+ McuControllerPreference selection;memset(&selection,0,sizeof(selection));int result=0;
+ if(profile==NATIVE_CONTROLLER_XTOUCH||profile==NATIVE_CONTROLLER_XTOUCH_MINI){
+  const McuProfile *p=mcu_controller_profile(profile);selection.endpoint=(McuEndpoint){.profile=p,.client=p->default_client,.port=p->default_port,.physical_only=1};
+ }else if(profile==NATIVE_CONTROLLER_GENERIC){
+  snd_seq_t *seq=NULL;if(snd_seq_open(&seq,"default",SND_SEQ_OPEN_DUPLEX,SND_SEQ_NONBLOCK)<0)result=NATIVE_APPLY_UNAVAILABLE;
+  else {int found=generic_external_unique(seq,&selection);snd_seq_close(seq);if(found==0)result=NATIVE_APPLY_UNAVAILABLE;else if(found==-1)result=NATIVE_APPLY_AMBIGUOUS;else if(found<0)result=NATIVE_APPLY_INVALID;}
+ }else result=NATIVE_APPLY_INVALID;
+ if(result){unsigned status=result==NATIVE_APPLY_UNAVAILABLE?NATIVE_PREFERENCES_UNAVAILABLE:result==NATIVE_APPLY_AMBIGUOUS?NATIVE_PREFERENCES_AMBIGUOUS:NATIVE_PREFERENCES_INVALID;native_state_status(s,status,0,1);munmap(s,sizeof(*s));return result;}
+ if(!mcu_controller_preferences_write(preference_path,&selection.endpoint)){native_state_status(s,NATIVE_PREFERENCES_WRITE_FAILED,errno,1);munmap(s,sizeof(*s));return NATIVE_APPLY_WRITE;}
+ s->saved_profile=profile;native_state_endpoint(s,&selection.endpoint);munmap(s,sizeof(*s));return 0;
+}
+static int native_preferences_finish(const char *state_path,int active){
+ NativePreferencesState *s;if(native_state_open(state_path,&s))return 1;
+ if(active){s->active_profile=s->saved_profile;native_state_status(s,NATIVE_PREFERENCES_ACTIVE,0,1);}else native_state_status(s,NATIVE_PREFERENCES_RESTART_FAILED,0,1);
+ munmap(s,sizeof(*s));return 0;
+}
+#endif
 /* Only the discovered physical surface enters policy. Optional input accepts
  * channel pitch-bend; transport and arbitrary MIDI never become commands. */
 static int surface_event(const snd_seq_event_t *event,snd_seq_addr_t full,unsigned *kind,unsigned *channel,int *value){
  if(!address_equal(event->source,full))return 0;
 #ifdef MIRROR_INPUT
- if(event->type==SND_SEQ_EVENT_CONTROLLER&&event->data.control.channel==0&&event->data.control.param==60){
+ if(mcu_has(&controller,MCU_CAP_JOG)&&event->type==SND_SEQ_EVENT_CONTROLLER&&event->data.control.channel==0&&event->data.control.param==60){
   int raw=event->data.control.value;if(raw<0||raw>127)return -1;*kind=8;*channel=0;*value=(raw&64)?-(raw&63):(raw&63);return *value!=0;
  }
  if(event->type==SND_SEQ_EVENT_CONTROLLER&&event->data.control.channel==0&&event->data.control.param>=0x10&&event->data.control.param<0x18){
@@ -139,7 +291,10 @@ static int surface_event(const snd_seq_event_t *event,snd_seq_addr_t full,unsign
  if(event->type==SND_SEQ_EVENT_PITCHBEND){
   if(event->data.control.channel>MIRROR_BANK)return 0;
   if(event->data.control.value< -8192||event->data.control.value>8191)return -1;
-  *kind=event->data.control.channel==MIRROR_BANK?10:3;*channel=event->data.control.channel;*value=event->data.control.value+8192;return 1;
+  unsigned position=(unsigned)(event->data.control.value+8192);*channel=event->data.control.channel;
+  if(*channel==MIRROR_BANK){if(!mcu_has(&controller,MCU_CAP_MASTER_INPUT))return 0;if(!mcu_master_input_position(&controller,position,&position))return -1;*kind=10;}
+  else{if(!mcu_has(&controller,MCU_CAP_STRIP_FADER))return 0;*kind=3;}
+  *value=(int)position;return 1;
  }
 #endif
  if((event->type!=SND_SEQ_EVENT_NOTEON&&event->type!=SND_SEQ_EVENT_NOTEOFF)||event->data.note.channel!=0)return 0;
@@ -148,14 +303,14 @@ static int surface_event(const snd_seq_event_t *event,snd_seq_addr_t full,unsign
  /* Footswitch 1 is Play and footswitch 2 is Record, for hands-free looping:
   * they enter as the transport Play relay and the Record toggle themselves. */
  if(note==102)note=94;else if(note==103)note=95;
- if(note==93||note==94){*kind=12;*channel=note;*value=down;return 1;}
- if(note==70||note==91||note==92){*kind=9;*channel=note;*value=down;return 1;}
- if(note==112){*kind=7;*channel=8;*value=down;return 1;}
- if(note>=104&&note<=111){*kind=1;*channel=note-104;*value=down;return 1;}
+ if(mcu_has(&controller,MCU_CAP_GLOBAL)&&(note==93||note==94)){*kind=12;*channel=note;*value=down;return 1;}
+ if((mcu_has(&controller,MCU_CAP_JOG)&&note==70)||(mcu_has(&controller,MCU_CAP_GLOBAL)&&(note==91||note==92))){*kind=9;*channel=note;*value=down;return 1;}
+ if(mcu_has(&controller,MCU_CAP_MASTER_INPUT)&&mcu_has(&controller,MCU_CAP_TOUCH)&&note==112){*kind=7;*channel=8;*value=down;return 1;}
+ if(mcu_has(&controller,MCU_CAP_TOUCH)&&note>=104&&note<=111){*kind=1;*channel=note-104;*value=down;return 1;}
  if(note>=46&&note<=49){*kind=2;*channel=note-46;*value=down;return 1;}
 #ifdef MIRROR_INPUT
- if((note>=54&&note<=61)||note==95||note==86||note==89||note==52||note==74||note==75||note==79||note==80||note==81||note==82||note==83||note==85||(note>=96&&note<=101)){*kind=11;*channel=note;*value=down;return 1;}
- if(note==40||note==41||note==42||note==43||note==44||note==45||note==50||note==51||(note>=62&&note<=69)){*kind=6;*channel=note;*value=down;return 1;}
+ if((mcu_has(&controller,MCU_CAP_GLOBAL)&&((note>=54&&note<=61)||note==95||note==86||note==89||note==52||note==74||note==75||note==79||note==80||note==81||note==82||note==83||note==85))||(mcu_has(&controller,MCU_CAP_JOG)&&note>=96&&note<=101)){*kind=11;*channel=note;*value=down;return 1;}
+ if(mcu_has(&controller,MCU_CAP_GLOBAL)&&(note==40||note==41||note==42||note==43||note==44||note==45||note==50||note==51||(note>=62&&note<=69))){*kind=6;*channel=note;*value=down;return 1;}
  if(note<40){*kind=5;*channel=note;*value=down;return 1;}
 #endif
  return 0;
@@ -164,9 +319,17 @@ static int lost_events(snd_seq_t *seq){snd_seq_client_info_t *info;snd_seq_clien
 #ifdef MIRROR_INPUT
 #include "channel-wire.h"
 #endif
+typedef struct {
+ MotorIdentity identity;
+ uint32_t source_revision,source_bits,field_incarnation;
+ int target,physical;
+ unsigned field,source_valid,physical_valid,acquired;
+} HuiPickup;
 typedef struct {snd_seq_t *seq;snd_seq_addr_t full,ingress;int sink,source;unsigned bank_down[4],button_down[40],display_field[8],general_down[128];
 #ifdef MIRROR_INPUT
  snd_seq_addr_t stop_adapter,stop_mpc;int stop_sink;
+ HuiInput hui_input;HuiPickup hui_pickup[HUI_STRIPS];uint32_t hui_heartbeat_tick,hui_reply_tick;unsigned hui_heartbeat_valid,hui_reply_count;
+ unsigned char hui_led[HUI_STRIPS][4],hui_led_valid[HUI_STRIPS],hui_transport[3];unsigned hui_transport_valid;
  ChannelWire wire[8];unsigned char colors[8];unsigned wire_valid[8],colors_valid,next_wire,mode_valid,mode_led[128],playing_valid,playing_value,master_owner,master_incarnation,master_touch,master_tick;int master_sent;unsigned char position_text[10];unsigned position_valid,chooser_cleared;
  /* Last formatted playhead source, so an unchanged BBT skips formatting and
   * the ten-controller comparison instead of recomputing the same bytes. */
@@ -184,11 +347,72 @@ static void motor_event(snd_seq_event_t*,const Surface*,unsigned,int);
 static int parent_led_clear(Surface*);
 #endif
 #ifdef MIRROR_INPUT
+static int surface_hui_event(Surface *surface,const snd_seq_event_t *event,uint32_t now,unsigned *kind,unsigned *channel,int *value){
+ if(!address_equal(event->source,surface->full))return 0;
+ unsigned char bytes[3];
+ if(event->type==SND_SEQ_EVENT_CONTROLLER){
+  if(event->data.control.channel||event->data.control.param>127||event->data.control.value<0||event->data.control.value>127)return 0;
+  bytes[0]=0xb0;bytes[1]=(unsigned char)event->data.control.param;bytes[2]=(unsigned char)event->data.control.value;
+ }else if(event->type==SND_SEQ_EVENT_NOTEON||event->type==SND_SEQ_EVENT_NOTEOFF){
+  if(event->data.note.channel||event->data.note.note>127||event->data.note.velocity>127)return 0;
+  bytes[0]=0x90;bytes[1]=(unsigned char)event->data.note.note;bytes[2]=(unsigned char)(event->type==SND_SEQ_EVENT_NOTEON?event->data.note.velocity:0);
+ }else return 0;
+ HuiIntent intent;int decoded=hui_decode(&surface->hui_input,bytes,now,&intent);if(decoded<=0)return decoded;
+ *channel=intent.strip;*value=intent.value;
+ switch(intent.kind){
+  case HUI_INTENT_FADER:*kind=3;return 1;
+  case HUI_INTENT_TOUCH:*kind=1;return 1;
+  case HUI_INTENT_ENCODER:*kind=4;return 1;
+  case HUI_INTENT_STRIP_BUTTON:{static const unsigned group[8]={0,3,2,1,0,0,0,0};unsigned g=group[intent.control];if(intent.control==HUI_BUTTON_ARM)g=0;*kind=5;*channel=g*8+intent.strip;return 1;}
+  case HUI_INTENT_NAVIGATION:{static const unsigned nav[4]={2,0,3,1};*kind=2;*channel=nav[intent.control];return 1;}
+  case HUI_INTENT_TRANSPORT:
+   if(intent.control==HUI_TRANSPORT_STOP||intent.control==HUI_TRANSPORT_PLAY){*kind=12;*channel=intent.control==HUI_TRANSPORT_STOP?93:94;return 1;}
+   if(intent.control==HUI_TRANSPORT_RECORD){*kind=11;*channel=95;return 1;}
+   *kind=9;*channel=intent.control==HUI_TRANSPORT_REWIND?91:92;return 1;
+  case HUI_INTENT_HEARTBEAT_REPLY:*kind=13;*channel=0;return 1;
+  default:return 0;
+ }
+}
+
+static int hui_source_owned(const MirrorInput *in,const MirrorBank *bank,unsigned strip,uint32_t bits){
+ unsigned field=bank_field(bank,strip);if(field>=CF_COUNT)return 0;
+ const InputGesture *g=&in->desires[strip][field];
+ if(g->pending&&g->bits==bits&&!memcmp(&g->identity,&bank->faders[strip].identity,sizeof(g->identity)))return 1;
+ for(unsigned i=0;i<COMMAND_SLOTS;i++){const InputFlight *f=in->flights+i;if(f->flight&&f->strip==strip&&f->field==field&&f->bits==bits&&!memcmp(&f->target,&bank->faders[strip].identity,sizeof(f->target)))return 1;}
+ return 0;
+}
+
+/* Exact segment crossing is protocol scaffolding, not an XL3 tolerance choice.
+ * The first physical report establishes a baseline and never acquires alone. */
+static void hui_pickup_sync_one(Surface *surface,const MirrorInput *in,const MirrorBank *bank,unsigned strip,uint32_t now){
+ HuiPickup *p=surface->hui_pickup+strip;const MirrorFader *f=bank->faders+strip;unsigned field=bank_field(bank,strip);int target=bank_target(bank,strip,now);
+ if(!bank->ready||bank->chooser||f->empty||!f->available||field>=CF_COUNT||target<0){p->source_valid=p->acquired=0;return;}
+ unsigned binding=memcmp(&p->identity,&f->identity,sizeof(p->identity))||p->field!=field||p->field_incarnation!=f->field_incarnation;
+ if(binding){int physical=p->physical;unsigned physical_valid=p->physical_valid;memset(p,0,sizeof(*p));p->physical=physical;p->physical_valid=physical_valid;p->identity=f->identity;p->field=field;p->field_incarnation=f->field_incarnation;}
+ if(!p->source_valid){p->source_valid=1;p->source_revision=f->revision;p->source_bits=f->bits;p->target=target;p->acquired=0;return;}
+ if(p->source_bits!=f->bits){unsigned own=hui_source_owned(in,bank,strip,f->bits);p->source_bits=f->bits;p->target=target;if(!own)p->acquired=0;}
+ p->source_revision=f->revision;
+}
+
+static void hui_pickup_sync(Surface *surface,const MirrorInput *in,const MirrorBank *bank,uint32_t now){
+ if(controller.profile->protocol!=MCU_PROTOCOL_HUI)return;
+ for(unsigned i=0;i<HUI_STRIPS;i++)hui_pickup_sync_one(surface,in,bank,i,now);
+}
+
+static int hui_pickup_position(Surface *surface,unsigned strip,int position){
+ HuiPickup *p=surface->hui_pickup+strip;int previous=p->physical;unsigned had=p->physical_valid;p->physical=position;p->physical_valid=1;
+ if(!p->source_valid)return 0;
+ if(p->acquired)return 1;
+ if(!had||position==previous)return 0;
+ if(previous==p->target||position==p->target||(previous<p->target&&position>p->target)||(previous>p->target&&position<p->target))p->acquired=1;
+ return p->acquired;
+}
+
 /* Closed-loop servo acknowledgement follows physical input immediately. It
  * changes neither MMV4 nor request settlement and is distinct from MPC output. */
 static int surface_servo(Surface *s,MirrorBank *bank,unsigned strip,int position,uint32_t now){
  if(stopping||!following.enabled)return 1;
- if(servo_disabled){INPUT_LOG("SERVO_SKIPPED fader=%u position=%d tick=%u; X-Touch raw echo disabled\n",strip+1,position,now);return 1;}
+ if(servo_disabled){INPUT_LOG("SERVO_SKIPPED fader=%u position=%d tick=%u; %s raw echo disabled\n",strip+1,position,now,controller.profile->name);return 1;}
  snd_seq_event_t echo;motor_event(&echo,s,strip,position);
  if(snd_seq_event_output_direct(s->seq,&echo)<0)return 0;
  bank->faders[strip].last_sent=position;bank->faders[strip].last_tick=now;
@@ -370,7 +594,14 @@ static int surface_drain(Surface *s,MirrorBank *bank,const MirrorState *state,in
    continue;
   }
 #endif
-  unsigned kind,channel;int value,match=surface_event(event,s->full,&kind,&channel,&value);if(match<0)return 0;
+  unsigned kind,channel;int value,match;
+#ifdef MIRROR_INPUT
+  uint32_t wire_now=0;if(controller.profile->protocol==MCU_PROTOCOL_HUI){wire_now=source_now(state);if(wire_now==UINT32_MAX)return 0;}
+  match=controller.profile->protocol==MCU_PROTOCOL_HUI?surface_hui_event(s,event,wire_now,&kind,&channel,&value):surface_event(event,s->full,&kind,&channel,&value);
+#else
+  match=surface_event(event,s->full,&kind,&channel,&value);
+#endif
+  if(match<0)return 0;
   if(stopping)return 1;
   if(match&&!discard){
    uint32_t now=source_now(state);if(now==UINT32_MAX)return 0;
@@ -388,12 +619,13 @@ static int surface_drain(Surface *s,MirrorBank *bank,const MirrorState *state,in
    if(copied&&(now<snapshot.heartbeat||now-snapshot.heartbeat>=1000))return 0;
    if(copied)bank_apply(bank,&snapshot,now);else bank_drop(bank,now);
    input_sync(&input,bank);
+   hui_pickup_sync(s,&input,bank,now);
    if(!snapshot.ready||atomic_load(&input.commands->new_project_intent)){
     unsigned held_shift=input.jog_shift;input_discard(&input);input_jog_discard(&input);input.jog_shift=held_shift;input_master_invalidate(&input);
     if(kind==1)bank_touch(bank,channel,value,now);
     else if(kind==7){s->master_touch=value;s->master_tick=now;}
-    else if(kind==3){bank->faders[channel].physical=value;motor_follow_report(&following.motors[channel],value,now,0);}
-    else if(kind==10)motor_follow_report(&following.motors[8],value,now,0);
+    else if(kind==3){if(controller.profile->protocol==MCU_PROTOCOL_HUI)(void)hui_pickup_position(s,channel,value);else{bank->faders[channel].physical=value;motor_follow_report(&following.motors[channel],value,now,0);}}
+    else if(kind==10&&mcu_has(&controller,MCU_CAP_MASTER_MOTOR))motor_follow_report(&following.motors[8],value,now,0);
     else if(kind==9&&channel==70)input.jog_shift=value;
     else if(kind==6&&channel==50){if(value&&!s->general_down[channel]&&input.jog_shift)surface_assignment(s,&input,bank,&snapshot,channel,now);s->general_down[channel]=value;}
     else if(kind==5)s->button_down[channel]=value;
@@ -403,11 +635,11 @@ static int surface_drain(Surface *s,MirrorBank *bank,const MirrorState *state,in
    }
    if(kind==1){s->display_until[channel]=now>UINT32_MAX-2000?UINT32_MAX:now+2000;input_touch(&input,bank,&snapshot,channel,value,now);INPUT_LOG("TOUCH fader=%u %s; channel motion input=%u tick=%u\n",channel+1,value?"down":"up",input.gestures[channel].held,now);}
    else if(kind==7){s->master_touch=value;input_master_touch(&input,&snapshot,value);}
-   else if(kind==10){input_master_pitch(&input,&snapshot,value,now);motor_follow_report(&following.motors[8],value,now,input.master.pending);}
+   else if(kind==10){input_master_pitch(&input,&snapshot,value,now);if(mcu_has(&controller,MCU_CAP_MASTER_MOTOR))motor_follow_report(&following.motors[8],value,now,input.master.pending);}
    else if(kind==12)input_stop_button(&input,&snapshot,channel,value,now);
    else if(kind==8||kind==9)surface_jog(&input,&snapshot,kind,channel,value,now,s->data_wheel);
    else if(kind==11)surface_general_press(s,&input,&snapshot,channel,value,now);
-   else if(kind==3){if(!surface_pitch(s,&input,bank,&snapshot,channel,value,now))return 0;}
+   else if(kind==3){if(controller.profile->protocol!=MCU_PROTOCOL_HUI||hui_pickup_position(s,channel,value))if(!surface_pitch(s,&input,bank,&snapshot,channel,value,now))return 0;}
    else if(kind==4)surface_encoder(s,&input,bank,&snapshot,channel,value,0,now);
    else if(kind==5){if(value&&!s->button_down[channel]){
     unsigned strip=channel%8;
@@ -415,6 +647,7 @@ static int surface_drain(Surface *s,MirrorBank *bank,const MirrorState *state,in
     else{unsigned fields[4]={CF_ARM,CF_SOLO,CF_MUTE,CF_SELECTION};unsigned field=fields[channel/8];input_control(&input,bank,&snapshot,strip,field,0,1,now);s->display_field[strip]=field;s->display_until[strip]=now>UINT32_MAX-2000?UINT32_MAX:now+2000;}
    }s->button_down[channel]=value;}
    else if(kind==6){if(value&&!s->general_down[channel])surface_assignment(s,&input,bank,&snapshot,channel,now);s->general_down[channel]=value;}
+   else if(kind==13){s->hui_reply_tick=now;s->hui_reply_count++;}
    else{if(value&&!s->bank_down[channel])surface_navigation(&input,bank,&snapshot,channel,now);s->bank_down[channel]=(unsigned)value;}
 #else
    if(kind==1){bank_touch(bank,channel,value,now);INPUT_LOG("TOUCH fader=%u %s state=%d tick=%u\n",channel+1,value?"down":"up",bank->faders[channel].touch,now);}
@@ -428,12 +661,12 @@ static int surface_open(Surface *s,MirrorBank *bank,const MirrorState *state,snd
  /* Enumerate through a retained portless client. An absent controller must
   * not create/destroy ALSA clients and broadcast topology changes at4Hz. */
  snd_seq_addr_t found;
- if(!discover(discovery,&found))return 0;
+ if(!discover(discovery,&controller,&found))return 0;
 #ifdef MIRROR_INPUT
  s->stop_sink=-1;
 #endif
  if(snd_seq_open(&s->seq,"default",SND_SEQ_OPEN_DUPLEX,SND_SEQ_NONBLOCK)<0)return 0;
- if(snd_seq_set_client_name(s->seq,"mpclearn-mirror-motors")<0||!discover(s->seq,&s->full)||snd_seq_set_client_pool_input(s->seq,256)<0||snd_seq_set_client_pool_output(s->seq,16)<0)goto fail;
+ if(snd_seq_set_client_name(s->seq,"mpclearn-mirror-motors")<0||!discover(s->seq,&controller,&s->full)||snd_seq_set_client_pool_input(s->seq,256)<0||snd_seq_set_client_pool_output(s->seq,16)<0)goto fail;
  s->sink=snd_seq_create_simple_port(s->seq,"private MCU touch and bank",SND_SEQ_PORT_CAP_WRITE|SND_SEQ_PORT_CAP_NO_EXPORT,SND_SEQ_PORT_TYPE_APPLICATION);
  s->source=snd_seq_create_simple_port(s->seq,"MCU eight motor output",SND_SEQ_PORT_CAP_READ,SND_SEQ_PORT_TYPE_APPLICATION);
  if(s->sink<0||s->source<0)goto fail;
@@ -444,6 +677,7 @@ static int surface_open(Surface *s,MirrorBank *bank,const MirrorState *state,snd
 #endif
  if(!surface_drain(s,bank,state,1))goto fail;
 #ifdef MIRROR_INPUT
+ if(controller.profile->protocol==MCU_PROTOCOL_HUI)hui_input_reset(&s->hui_input);
  /* Publish takeover only after the startup discard. Until then the adapter
   * forwards ordinary Stop itself, so no routed press is intentionally dropped. */
  if(stop_adapter_exe){
@@ -456,7 +690,7 @@ static int surface_open(Surface *s,MirrorBank *bank,const MirrorState *state,snd
  for(unsigned i=0;i<8;i++)if(inherited_holds&(1u<<i))bank->faders[i].touch=MT_DOWN;
  s->master_touch=(inherited_holds>>8)&1;inherited_holds=0;
 #endif
- BRIDGE_LOG("CONNECTED X-Touch=%u:%u; automatic fresh-source sync unless touch-down observed; physical touch on connection unknown\n",s->full.client,s->full.port);return 1;
+ BRIDGE_LOG("CONNECTED profile=%s endpoint=%s/%s address=%u:%u type=%s; automatic fresh-source sync unless touch-down observed; physical touch on connection unknown\n",controller.profile->name,controller.client,controller.port,s->full.client,s->full.port,controller.physical_only?"kernel":"any");return 1;
 fail:surface_close(s,bank);return 0;
 }
 static void motor_event(snd_seq_event_t *event,const Surface *surface,unsigned channel,int position){snd_seq_ev_clear(event);snd_seq_ev_set_pitchbend(event,channel,position-8192);snd_seq_ev_set_source(event,surface->source);snd_seq_ev_set_dest(event,surface->full.client,surface->full.port);snd_seq_ev_set_direct(event);}
@@ -473,6 +707,7 @@ static unsigned meter_level(const CopiedMeter *m){
  return db>0?13:level;
 }
 static int meter_output(Surface *s,const MirrorBank *bank,const CopiedMirror *snapshot){
+ if(!mcu_has(&controller,MCU_CAP_METERS)){s->meter_valid=0;return 1;}
  if(!bank->ready&&!s->meter_valid)return 1;
  unsigned due=!s->meter_valid||snapshot->heartbeat<s->meter_tick||snapshot->heartbeat-s->meter_tick>=50;
  for(unsigned i=0;i<8;i++){
@@ -502,18 +737,23 @@ static int chooser_output(Surface *s){
  if(s->chooser_cleared)return 1;
  snd_seq_event_t e;unsigned char bytes[15],blank[7];memset(blank,' ',7);
  /* Presentation only: no source values or native input are manufactured. */
- for(unsigned note=0;note<=103;note++){snd_seq_ev_clear(&e);snd_seq_ev_set_noteon(&e,0,note,0);if(!channel_send(s,&e))return 0;}
- for(unsigned note=113;note<=114;note++){snd_seq_ev_clear(&e);snd_seq_ev_set_noteon(&e,0,note,0);if(!channel_send(s,&e))return 0;}
- for(unsigned i=0;i<10;i++){snd_seq_ev_clear(&e);snd_seq_ev_set_controller(&e,0,0x49-i,' ');if(!channel_send(s,&e))return 0;}
- for(unsigned i=0;i<8;i++){
-  for(unsigned row=0;row<2;row++){snd_seq_ev_clear(&e);snd_seq_ev_set_sysex(&e,channel_lcd(bytes,i,row,blank),bytes);if(!channel_send(s,&e))return 0;}
-  snd_seq_ev_clear(&e);snd_seq_ev_set_controller(&e,0,0x30+i,0);if(!channel_send(s,&e))return 0;
-  unsigned char off[]={0xf0,0,0,0x66,0x14,0x20,(unsigned char)i,0,0xf7};
-  snd_seq_ev_clear(&e);snd_seq_ev_set_sysex(&e,sizeof(off),off);if(!channel_send(s,&e))return 0;
-  snd_seq_ev_clear(&e);snd_seq_ev_set_chanpress(&e,0,(i<<4)|15);if(!channel_send(s,&e))return 0;
-  snd_seq_ev_clear(&e);snd_seq_ev_set_chanpress(&e,0,i<<4);if(!channel_send(s,&e))return 0;
+ for(unsigned note=0;note<40;note++){snd_seq_ev_clear(&e);snd_seq_ev_set_noteon(&e,0,note,0);if(!channel_send(s,&e))return 0;}
+ if(mcu_has(&controller,MCU_CAP_GLOBAL))for(unsigned note=40;note<=103;note++){if((note==70||(note>=96&&note<=101))&&!mcu_has(&controller,MCU_CAP_JOG))continue;snd_seq_ev_clear(&e);snd_seq_ev_set_noteon(&e,0,note,0);if(!channel_send(s,&e))return 0;}
+ if(mcu_has(&controller,MCU_CAP_TIME)){
+  for(unsigned note=113;note<=114;note++){snd_seq_ev_clear(&e);snd_seq_ev_set_noteon(&e,0,note,0);if(!channel_send(s,&e))return 0;}
+  for(unsigned i=0;i<10;i++){snd_seq_ev_clear(&e);snd_seq_ev_set_controller(&e,0,0x49-i,' ');if(!channel_send(s,&e))return 0;}
  }
- memset(s->colors,0,sizeof(s->colors));snd_seq_ev_clear(&e);snd_seq_ev_set_sysex(&e,channel_colors(bytes,s->colors),bytes);if(!channel_send(s,&e))return 0;
+ for(unsigned i=0;i<8;i++){
+  if(mcu_has(&controller,MCU_CAP_LCD))for(unsigned row=0;row<2;row++){snd_seq_ev_clear(&e);snd_seq_ev_set_sysex(&e,channel_lcd(bytes,i,row,blank),bytes);if(!channel_send(s,&e))return 0;}
+  snd_seq_ev_clear(&e);snd_seq_ev_set_controller(&e,0,0x30+i,0);if(!channel_send(s,&e))return 0;
+  if(mcu_has(&controller,MCU_CAP_METERS)){
+   unsigned char off[]={0xf0,0,0,0x66,0x14,0x20,(unsigned char)i,0,0xf7};
+   snd_seq_ev_clear(&e);snd_seq_ev_set_sysex(&e,sizeof(off),off);if(!channel_send(s,&e))return 0;
+   snd_seq_ev_clear(&e);snd_seq_ev_set_chanpress(&e,0,(i<<4)|15);if(!channel_send(s,&e))return 0;
+   snd_seq_ev_clear(&e);snd_seq_ev_set_chanpress(&e,0,i<<4);if(!channel_send(s,&e))return 0;
+  }
+ }
+ if(mcu_has(&controller,MCU_CAP_COLOR)){memset(s->colors,0,sizeof(s->colors));snd_seq_ev_clear(&e);snd_seq_ev_set_sysex(&e,channel_colors(bytes,s->colors),bytes);if(!channel_send(s,&e))return 0;}
  memset(s->wire_valid,0,sizeof(s->wire_valid));memset(s->state_valid,0,sizeof(s->state_valid));
  s->colors_valid=s->mode_valid=s->position_valid=s->playing_valid=s->meter_valid=0;s->chooser_cleared=1;return 1;
 }
@@ -523,6 +763,7 @@ static int motor_output(Surface *s,unsigned channel,const uint32_t key[16],int t
  snd_seq_event_t e;motor_event(&e,s,channel,position);if(!channel_send(s,&e))return 0;motor_follow_sent(m,position,now);return 1;
 }
 static int strip_motor_ready(MirrorBank *bank,unsigned channel,uint32_t now){
+ if(!mcu_has(&controller,MCU_CAP_STRIP_MOTOR))return 0;
  uint32_t key[16]={0};MirrorFader *f=bank->faders+channel;
  memcpy(key,&f->identity,sizeof(MotorIdentity));if(f->effect[0])memcpy(key+11,f->effect,sizeof(f->effect));else{key[11]=f->field_incarnation;key[12]=bank_field(bank,channel);key[15]=bank->chooser?2:f->empty?3:1;}
  int target=bank_target(bank,channel,now);if(target>=0)motor_follow_target(&following.motors[channel],key,target,now);
@@ -574,13 +815,52 @@ static void send_pair_text(unsigned char out[7],const CopiedMirror *snapshot,con
  }
  channel_ascii(out,text,strlen(text));
 }
+static int hui_send_wire(Surface *surface,HuiWire wire){
+ if(wire.length!=3&&wire.length!=6)return 0;
+ for(unsigned at=0;at<wire.length;at+=3){snd_seq_event_t event;snd_seq_ev_clear(&event);
+  if(wire.bytes[at]==0xb0)snd_seq_ev_set_controller(&event,0,wire.bytes[at+1],wire.bytes[at+2]);
+  else if(wire.bytes[at]==0x90)snd_seq_ev_set_noteon(&event,0,wire.bytes[at+1],wire.bytes[at+2]);
+  else return 0;
+  if(!channel_send(surface,&event))return 0;
+ }
+ return 1;
+}
+static int hui_channel_output(Surface *surface,const MirrorBank *bank,const CopiedMirror *snapshot,uint32_t now){
+ if(!surface->hui_heartbeat_valid||now<surface->hui_heartbeat_tick||now-surface->hui_heartbeat_tick>=1000){
+  if(!hui_send_wire(surface,hui_heartbeat()))return 0;
+  surface->hui_heartbeat_tick=now;surface->hui_heartbeat_valid=1;
+ }
+ if(!bank->ready&&!bank->chooser)return 1; /* unavailable source is not an empty bank */
+ static const unsigned ports[4]={HUI_BUTTON_ARM,HUI_BUTTON_SOLO,HUI_BUTTON_MUTE,HUI_BUTTON_SELECT};
+ for(unsigned strip=0;strip<HUI_STRIPS;strip++){
+  unsigned char values[4]={0};
+  if(bank->ready&&!bank->chooser){const CopiedTrack *track=bank_strip_track(snapshot,bank,strip);ChannelWire wire=channel_wire(snapshot,track,CF_VOLUME);for(unsigned i=0;i<4;i++)values[i]=wire.led[i]!=0;}
+  for(unsigned i=0;i<4;i++)if(!surface->hui_led_valid[strip]||surface->hui_led[strip][i]!=values[i]){
+   if(!hui_send_wire(surface,hui_led(strip,ports[i],values[i])))return 0;
+   surface->hui_led[strip][i]=values[i];
+  }
+  surface->hui_led_valid[strip]=1;
+ }
+ unsigned char transport[3]={0};
+ if(bank->ready&&!bank->chooser){
+  if(snapshot->playing.available){transport[0]=!snapshot->playing.bits;transport[1]=snapshot->playing.bits!=0;}
+  if(snapshot->record_mode.available&&(snapshot->record_mode.bits==3||snapshot->record_mode.bits==1))transport[2]=1;
+ }
+ static const unsigned transport_ports[3]={HUI_TRANSPORT_STOP,HUI_TRANSPORT_PLAY,HUI_TRANSPORT_RECORD};
+ for(unsigned i=0;i<3;i++)if(!surface->hui_transport_valid||surface->hui_transport[i]!=transport[i]){
+  if(!hui_send_wire(surface,hui_led(0x0e,transport_ports[i],transport[i])))return 0;
+  surface->hui_transport[i]=transport[i];
+ }
+ surface->hui_transport_valid=1;return 1;
+}
 static int channel_output(Surface *s,const MirrorBank *bank,const CopiedMirror *snapshot,uint32_t now){
+ if(controller.profile->protocol==MCU_PROTOCOL_HUI)return hui_channel_output(s,bank,snapshot,now);
  if(bank->assignment!=BA_QLINK||bank->chooser||!bank->ready){mode_notice_until=mode_notice_controller=mode_notice_generation=mode_notice_epoch=0;}
  if(bank->chooser){
   if(!s->chooser_cleared){s->master_sent=-1;s->master_tick=bank->heartbeat;}
   if(!chooser_output(s))return 0;
   uint32_t key[16]={0};key[15]=2;
-  if(!motor_output(s,8,key,0,now,!s->master_touch&&bank->heartbeat>s->master_tick&&bank->heartbeat>following.barrier))return 0;
+  if(mcu_has(&controller,MCU_CAP_MASTER_MOTOR)&&!motor_output(s,8,key,0,now,!s->master_touch&&bank->heartbeat>s->master_tick&&bank->heartbeat>following.barrier))return 0;
   return 1;
  }
  s->chooser_cleared=0;
@@ -595,7 +875,7 @@ static int channel_output(Surface *s,const MirrorBank *bank,const CopiedMirror *
   * produces the identical ten characters: skip formatting and comparing them.
   * The beats LED depends on the same availability word and is skipped with
   * them; mode_led[113]/[114] have no other writer while position_valid holds. */
- if(!s->position_valid||s->position_source!=snapshot->position_available||s->position_bar!=snapshot->bar||s->position_beat!=snapshot->beat||s->position_clock!=snapshot->clock){
+ if(mcu_has(&controller,MCU_CAP_TIME)&&(!s->position_valid||s->position_source!=snapshot->position_available||s->position_bar!=snapshot->bar||s->position_beat!=snapshot->beat||s->position_clock!=snapshot->clock)){
   unsigned char position[10];channel_position(position,snapshot);
   for(unsigned i=0;i<10;i++)if(!s->position_valid||position[i]!=s->position_text[i]){snd_seq_ev_clear(&global);snd_seq_ev_set_controller(&global,0,0x49-i,position[i]);if(!channel_send(s,&global))return 0;}
   unsigned beats=snapshot->position_available?127:0;
@@ -605,10 +885,12 @@ static int channel_output(Surface *s,const MirrorBank *bank,const CopiedMirror *
  }
  unsigned notes[]={40,41,42,43,44,50,51,62,63,64,65,66,67,68,69};
  unsigned modes[]={bank->assignment==BA_TRACK,bank->assignment==BA_SEND,bank->assignment==BA_PAN,bank->assignment==BA_EFFECT,bank->assignment==BA_QLINK,bank->flip,bank->view==BV_ALL,bank->view==BV_MIDI,bank->view==BV_INPUT||bank->assignment==BA_IO,bank->view==BV_AUDIO,bank->view==BV_INSTRUMENT,bank->view==BV_RETURN||bank->view==BV_DRUM_PADS,bank->view==BV_SUBMIX,bank->view==BV_OUTPUT,bank->view==BV_ALL};
- for(unsigned i=0;i<sizeof(notes)/sizeof(notes[0]);i++)if(!s->mode_valid||s->mode_led[notes[i]]!=modes[i]){snd_seq_ev_clear(&global);snd_seq_ev_set_noteon(&global,0,notes[i],modes[i]?127:0);if(!channel_send(s,&global))return 0;s->mode_led[notes[i]]=modes[i];}
+ if(mcu_has(&controller,MCU_CAP_GLOBAL))for(unsigned i=0;i<sizeof(notes)/sizeof(notes[0]);i++)if(!s->mode_valid||s->mode_led[notes[i]]!=modes[i]){snd_seq_ev_clear(&global);snd_seq_ev_set_noteon(&global,0,notes[i],modes[i]?127:0);if(!channel_send(s,&global))return 0;s->mode_led[notes[i]]=modes[i];}
  s->mode_valid=1;
- if(snapshot->playing.available){unsigned playing=snapshot->playing.bits;if(!s->playing_valid||s->playing_value!=playing){for(unsigned i=0;i<2;i++){snd_seq_ev_clear(&global);snd_seq_ev_set_noteon(&global,0,93+i,(i?playing:!playing)?127:0);if(!channel_send(s,&global))return 0;}s->playing_valid=1;s->playing_value=playing;}}
- else if(!s->playing_valid||s->playing_value!=2){for(unsigned i=0;i<2;i++){snd_seq_ev_clear(&global);snd_seq_ev_set_noteon(&global,0,93+i,0);if(!channel_send(s,&global))return 0;}s->playing_valid=1;s->playing_value=2;}
+ if(mcu_has(&controller,MCU_CAP_GLOBAL)){
+  if(snapshot->playing.available){unsigned playing=snapshot->playing.bits;if(!s->playing_valid||s->playing_value!=playing){for(unsigned i=0;i<2;i++){snd_seq_ev_clear(&global);snd_seq_ev_set_noteon(&global,0,93+i,(i?playing:!playing)?127:0);if(!channel_send(s,&global))return 0;}s->playing_valid=1;s->playing_value=playing;}}
+  else if(!s->playing_valid||s->playing_value!=2){for(unsigned i=0;i<2;i++){snd_seq_ev_clear(&global);snd_seq_ev_set_noteon(&global,0,93+i,0);if(!channel_send(s,&global))return 0;}s->playing_valid=1;s->playing_value=2;}
+ }
  unsigned auto_led=snapshot->automation_detail_available&&!snapshot->automation_mixed?127:1;
  unsigned record=0;
  if(snapshot->record_mode.available){
@@ -616,14 +898,16 @@ static int channel_output(Surface *s,const MirrorBank *bank,const CopiedMirror *
   else if(snapshot->record_mode.bits==1&&snapshot->playing.available)record=snapshot->playing.bits?127:1;
  }
  unsigned state_notes[8]={74,75,79,86,95,89,100,101},state_values[8]={snapshot->automation.available&&snapshot->automation.bits==1?auto_led:0,snapshot->automation.available&&snapshot->automation.bits==2?auto_led:0,snapshot->automation.available&&snapshot->automation.bits==0?auto_led:0,snapshot->loop.available&&snapshot->loop.bits?127:0,record,snapshot->click.available&&snapshot->click.bits?127:0,s->zoom_mode&&!s->data_wheel?127:0,s->data_wheel?0:127};
- for(unsigned i=0;i<8;i++)if(!s->mode_valid||s->mode_led[state_notes[i]]!=state_values[i]||!s->state_valid[i]){snd_seq_ev_clear(&global);snd_seq_ev_set_noteon(&global,0,state_notes[i],state_values[i]);if(!channel_send(s,&global))return 0;s->mode_led[state_notes[i]]=state_values[i];s->state_valid[i]=1;}
+ if(mcu_has(&controller,MCU_CAP_GLOBAL))for(unsigned i=0;i<8;i++){if(i>=6&&!mcu_has(&controller,MCU_CAP_JOG))continue;if(!s->mode_valid||s->mode_led[state_notes[i]]!=state_values[i]||!s->state_valid[i]){snd_seq_ev_clear(&global);snd_seq_ev_set_noteon(&global,0,state_notes[i],state_values[i]);if(!channel_send(s,&global))return 0;s->mode_led[state_notes[i]]=state_values[i];s->state_valid[i]=1;}}
  /* Master input/feedback belongs to the distinct rooted MpcMixer owner.
   * Pending native source settlement inhibits only its motor. */
  const CopiedField *master=&snapshot->master;
+ if(mcu_has(&controller,MCU_CAP_MASTER_MOTOR)){
  if(s->master_owner!=master->owner_incarnation||s->master_incarnation!=master->incarnation){s->master_owner=master->owner_incarnation;s->master_incarnation=master->incarnation;s->master_sent=-1;}
  if(master->available){float v;memcpy(&v,&master->bits,4);if(isfinite(v)&&v>=0&&v<=1){uint32_t key[16]={0};key[0]=snapshot->epoch;key[1]=master->owner_incarnation;key[2]=master->incarnation;key[15]=1;
   if(!motor_output(s,8,key,(int)(v*16383.0f+0.5f),now,!s->master_touch&&!input_master_blocked(&input)&&bank->heartbeat>following.barrier))return 0;
  }}else following.motors[8].bound=0;
+ }else following.motors[8].bound=0;
 
  if(bank->assignment!=BA_EFFECT){effect_notice_until=0;effect_notice_slot=EFFECT_LIST;}
  unsigned strip=s->next_wire++%8;const CopiedTrack *t=input_track(snapshot,&bank->strips[strip]);
@@ -717,11 +1001,11 @@ static int channel_output(Surface *s,const MirrorBank *bank,const CopiedMirror *
   }
  }
  ChannelWire *old=s->wire+strip;unsigned valid=s->wire_valid[strip];snd_seq_event_t e;unsigned char bytes[15];
- for(unsigned row=0;row<2;row++){unsigned char *line=row?w.value:w.name,*before=row?old->value:old->name;if(!valid||memcmp(line,before,7)){snd_seq_ev_clear(&e);snd_seq_ev_set_sysex(&e,channel_lcd(bytes,strip,row,line),bytes);if(!channel_send(s,&e))return 0;}}
+ if(mcu_has(&controller,MCU_CAP_LCD))for(unsigned row=0;row<2;row++){unsigned char *line=row?w.value:w.name,*before=row?old->value:old->name;if(!valid||memcmp(line,before,7)){snd_seq_ev_clear(&e);snd_seq_ev_set_sysex(&e,channel_lcd(bytes,strip,row,line),bytes);if(!channel_send(s,&e))return 0;}}
  for(unsigned i=0;i<4;i++)if(!valid||w.led[i]!=old->led[i]){snd_seq_ev_clear(&e);snd_seq_ev_set_noteon(&e,0,i*8+strip,w.led[i]);if(!channel_send(s,&e))return 0;}
  if(!valid||w.ring!=old->ring){snd_seq_ev_clear(&e);snd_seq_ev_set_controller(&e,0,0x30+strip,w.ring);if(!channel_send(s,&e))return 0;}
  s->colors[strip]=w.color;
- if(!s->colors_valid||!valid||w.color!=old->color){snd_seq_ev_clear(&e);snd_seq_ev_set_sysex(&e,channel_colors(bytes,s->colors),bytes);if(!channel_send(s,&e))return 0;s->colors_valid=1;}
+ if(mcu_has(&controller,MCU_CAP_COLOR)&&(!s->colors_valid||!valid||w.color!=old->color)){snd_seq_ev_clear(&e);snd_seq_ev_set_sysex(&e,channel_colors(bytes,s->colors),bytes);if(!channel_send(s,&e))return 0;s->colors_valid=1;}
  *old=w;s->wire_valid[strip]=1;return 1;
 }
 #endif
@@ -762,12 +1046,29 @@ static inline int fresh_copy(const MirrorState *state,CopiedMirror *snapshot,uin
 
 int main(int argc,char **argv){
 #ifdef MIRROR_INPUT
+ if(argc==2&&!strcmp(argv[1],"--list-midi"))return list_midi_endpoints();
+ if(argc==3&&!strcmp(argv[1],"--native-preferences-watch"))return native_preferences_watch(argv[2]);
+ if(argc==5&&!strcmp(argv[1],"--native-preferences-sync"))return native_preferences_sync(argv[2],argv[3],argv[4]);
+ if(argc==4&&!strcmp(argv[1],"--native-preferences-apply"))return native_preferences_apply(argv[2],argv[3]);
+ if(argc==4&&!strcmp(argv[1],"--native-preferences-finish"))return native_preferences_finish(argv[2],!strcmp(argv[3],"active"));
  if(argc==3&&!strcmp(argv[1],"--surface-status")){unsigned enabled;if(!surface_preferences_read(argv[2],&enabled))return 1;puts(enabled?"on":"off");return 0;}
+ if(argc==3&&!strcmp(argv[1],"--controller-status")){
+  McuControllerPreference selection;if(!mcu_controller_preferences_read(argv[2],&selection))return 1;
+  printf("profile=%s endpoint-type=%s",selection.endpoint.profile->name,selection.endpoint.physical_only?"kernel":"any");
+  if(!selection.endpoint.profile->default_client)printf(" client=%s port=%s",selection.endpoint.client,selection.endpoint.port);
+  putchar('\n');return 0;
+ }
+ if(argc>=4&&!strcmp(argv[1],"--controller-set")){
+  ControllerOptions options={.profile="xtouch",.physical_only=1};
+  for(int i=3;i<argc;i++)if(!controller_option(&options,argv[i])||options.preferences)return 2;
+  McuEndpoint endpoint;if(!options.profile_set||!controller_resolve(&options,&endpoint))return 2;
+  return mcu_controller_preferences_write(argv[2],&endpoint)?0:1;
+ }
 #endif
  setvbuf(stdout,NULL,_IOLBF,0);uint64_t seconds=120;
 #ifdef MIRROR_INPUT
  int arguments=servo_arguments(argc,argv);
- if((arguments!=3&&arguments!=4)||argv[1][0]!='/'||argv[2][0]!='/'||(arguments==4&&strcmp(argv[3],"manual")&&!number(argv[3],900,&seconds))){fputs("mirror-input /absolute/volume.state /absolute/command.state [SECONDS(1..900), default120, or manual] [--servo=off|--servo=on, default off] [--verbose]\n",stderr);return 2;}
+ if((arguments!=3&&arguments!=4)||argv[1][0]!='/'||argv[2][0]!='/'||(arguments==4&&strcmp(argv[3],"manual")&&!number(argv[3],900,&seconds))){fputs("mirror-input /absolute/volume.state /absolute/command.state [SECONDS(1..900), default120, or manual] [--profile=xtouch|xtouch-mini|generic|hui] [--endpoint-client=NAME --endpoint-port=NAME] [--endpoint-type=kernel|any] [--controller-preferences=/absolute/path] [--servo=off|on] [--verbose]\nmirror-input --list-midi\nmirror-input --controller-status /absolute/controller-preferences\nmirror-input --controller-set /absolute/controller-preferences --profile=xtouch|xtouch-mini|generic|hui [endpoint options]\n",stderr);return 2;}
  if(arguments==4&&!strcmp(argv[3],"manual"))seconds=0;
  if(preferences_path){unsigned enabled;if(!surface_preferences_read(preferences_path,&enabled)||enabled!=following.enabled){fputs("Invalid or changed surface preference; no motors started\n",stderr);return 1;}}
  motor_follow_reset(&following);
@@ -794,7 +1095,8 @@ int main(int argc,char **argv){
 #ifdef MIRROR_INPUT
  if(!input_open_file(argv[2],state,start)){reason=input.error==C_BUSY?"command mailbox not idle at bridge start":input.error?"command producer unavailable at bridge start":"command mailbox identity, format or lock unavailable at bridge start";goto done;}
  BRIDGE_LOG("INPUT channel-bank source commands; continuous fader coalescing, independent bounded control transactions, fair owner-drain batches; first/touchless positions accepted; raw SERVO is not source settlement\n");
- BRIDGE_LOG("SERVO_MODE %s; MPC command/source settlement and authoritative motor policy unchanged\n",servo_disabled?"OFF X-Touch default":"ON diagnostic comparison");
+ BRIDGE_LOG("PROFILE %s capabilities=0x%x endpoint=%s/%s type=%s\n",controller.profile->name,controller.profile->capabilities,controller.client,controller.port,controller.physical_only?"kernel":"any");
+ BRIDGE_LOG("SERVO_MODE %s; profile raw-echo policy, MPC command/source settlement and authoritative motor policy unchanged\n",servo_disabled?"OFF":"ON");
 #endif
  if(snd_seq_open(&discovery,"default",SND_SEQ_OPEN_DUPLEX,SND_SEQ_NONBLOCK)<0||snd_seq_set_client_name(discovery,"mpclearn-mcu-discovery")<0){reason="MIDI discovery unavailable";goto done;}
  uint64_t began_wall=monotonic_ms();if(began_wall==UINT64_MAX||began_wall>UINT64_MAX-seconds*1000){reason="clock overflow";goto done;}
@@ -824,7 +1126,7 @@ int main(int argc,char **argv){
     snd_seq_addr_t found;
     if(wall-last_connect<250){poll(NULL,0,10);continue;}
     last_connect=wall;
-    if(!discover(discovery,&found)){poll(NULL,0,10);continue;}
+    if(!discover(discovery,&controller,&found)){poll(NULL,0,10);continue;}
     disconnected_idle=0;last_connect=0; /* normal fresh-copy path before attach */
    }
   }
@@ -844,7 +1146,7 @@ int main(int argc,char **argv){
    bank_apply(&bank,&snapshot,now);
 #ifdef MIRROR_INPUT
 
-   input_sync(&input,&bank);input_health(&input);
+   input_sync(&input,&bank);hui_pickup_sync(&surface,&input,&bank,now);input_health(&input);
    if(input.error){reason="input rejected, ambiguous, expired or unavailable (see error code)";break;}
 #endif
  #ifdef MIRROR_INPUT
@@ -867,7 +1169,7 @@ int main(int argc,char **argv){
    poll(NULL,0,10);continue;
   }
   snd_seq_addr_t current;
-  if(wall-last_discovery>=100){last_discovery=wall;if(!discover(surface.seq,&current)||!address_equal(current,surface.full)){BRIDGE_LOG("DISCONNECTED; pending output discarded\n");surface_close(&surface,&bank);continue;}}
+  if(wall-last_discovery>=100){last_discovery=wall;if(!discover(surface.seq,&controller,&current)||!address_equal(current,surface.full)){BRIDGE_LOG("DISCONNECTED; pending output discarded\n");surface_close(&surface,&bank);continue;}}
   if(!surface_drain(&surface,&bank,state,0)){BRIDGE_LOG("INPUT continuity lost; all touch states UNKNOWN\n");surface_close(&surface,&bank);continue;}
 #ifdef MIRROR_INPUT
   /* Observe disconnect/bank/touch input before publishing any queued desire. */
@@ -877,11 +1179,11 @@ int main(int argc,char **argv){
    if(surface.seq&&(bank.view==BV_DRUM_PADS||bank.assignment==BA_SEND))(void)parent_led_clear(&surface);
 #endif
    bank_drop(&bank,now);input_discard(&input);input_master_invalidate(&input);continue;}
-  bank_apply(&bank,&snapshot,now);input_sync(&input,&bank);
+  bank_apply(&bank,&snapshot,now);input_sync(&input,&bank);hui_pickup_sync(&surface,&input,&bank,now);
   input_drain(&input,&bank,&snapshot,now);
   if(input.error){reason="published transaction drain failed";break;}
   if(stopping)break;
-  input_meter_interest(&input,&bank,&snapshot,now,surface.seq!=NULL);input_io_interest(&input,&bank,&snapshot,now,surface.seq!=NULL);input_effects_interest(&input,&bank,&snapshot,now,surface.seq!=NULL);input_qlink_interest(&input,&bank,&snapshot,now,surface.seq!=NULL);
+  input_meter_interest(&input,&bank,&snapshot,now,surface.seq!=NULL&&mcu_has(&controller,MCU_CAP_METERS));input_io_interest(&input,&bank,&snapshot,now,surface.seq!=NULL);input_effects_interest(&input,&bank,&snapshot,now,surface.seq!=NULL);input_qlink_interest(&input,&bank,&snapshot,now,surface.seq!=NULL);
   input_pump(&input,&bank,&snapshot,now);
   if(input.error){reason="input rejected, ambiguous, expired or unavailable (see error code)";break;}
   if(!channel_output(&surface,&bank,&snapshot,now)){surface_close(&surface,&bank);continue;}
@@ -891,7 +1193,7 @@ int main(int argc,char **argv){
   if(!copied){bank_drop(&bank,now);continue;}
   bank_apply(&bank,&snapshot,now);
 #endif
-  for(unsigned channel=0;channel<MIRROR_BANK;channel++){
+  if(mcu_has(&controller,MCU_CAP_STRIP_MOTOR))for(unsigned channel=0;channel<MIRROR_BANK;channel++){
    /* The iteration already copied source state and serviced input. An idle
     * strip need not repeat full copies; a prospective send still takes every
     * original fresh source/USB/touch/command check below. */

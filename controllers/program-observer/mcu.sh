@@ -5,6 +5,6 @@
 set -eu
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 operation=${1:-status}
-[ "$#" -le 1 ] || exit 2
-case "$operation" in start|status|stop) ;; *) echo 'mcu start|status|stop' >&2;exit 2;; esac
-exec "$here/mcu-session.sh" "$operation"
+case "$operation" in start|status|stop|list-midi|configure) ;; *) echo 'mcu start|status|stop|list-midi|configure [controller options]' >&2;exit 2;; esac
+[ "$#" -ne 0 ] || set -- "$operation"
+exec "$here/mcu-session.sh" "$@"

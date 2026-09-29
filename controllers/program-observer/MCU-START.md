@@ -75,6 +75,76 @@ installed for; with any other image it is ignored. See
 [building from source](../../docs/BUILDING.md#trying-a-build-on-your-own-mpc).
 Remove it with `/usr/share/mpclearn/mcu/mcu-boot-install.sh override clear`.
 
+The development candidate adds **CONTROLLERS** to MPC Preferences. Its
+**X-TOUCH**, **X-TOUCH MINI** and **GENERIC MCU** buttons hand the request to
+the running controller session; the Preferences callback itself does not scan
+MIDI or restart anything. A successful choice is saved for later sessions and
+boots. **GENERIC MCU** applies only when exactly one external physical
+bidirectional MIDI endpoint is present. If none or more than one is present,
+the current bridge is retained and MPC remains usable.
+
+When the CONTROLLERS tab opens, the highlighted button reflects the session
+owner's confirmed active profile. A tap does not optimistically change that
+highlight while the owner handles the request. Switch to another Preferences
+tab and back to refresh it. An unavailable or ambiguous GENERIC MCU request
+leaves the previous active profile highlighted.
+
+For inspection and recovery, the bridge can still list ALSA MIDI endpoints and
+accept the same selection from the command line. `configure` saves the
+selection; `start` with controller options remains a temporary one-session
+override:
+
+```sh
+/usr/share/mpclearn/mcu/mcu list-midi
+/usr/share/mpclearn/mcu/mcu configure \
+  --profile=generic \
+  --endpoint-client='EXACT CLIENT NAME' \
+  --endpoint-port='EXACT PORT NAME'
+/usr/share/mpclearn/mcu/mcu start \
+  --profile=generic \
+  --endpoint-client='EXACT CLIENT NAME' \
+  --endpoint-port='EXACT PORT NAME'
+```
+
+When starting a session with the X-Touch Mini, first confirm its MC MODE LED is
+lit. If it is not, disconnect USB, hold the bottom-left MC button while
+reconnecting, and release it when MC MODE stays lit. Then save the Mini profile:
+
+```sh
+/usr/share/mpclearn/mcu/mcu configure --profile=xtouch-mini
+```
+
+Return to the full X-Touch with
+`/usr/share/mpclearn/mcu/mcu configure --profile=xtouch`. If a controller
+session is active, `configure` drains and restarts its bridge; otherwise the
+saved choice applies at the next session. The fixed 288-byte preference is
+`/data/mpclearn/controller-preferences`.
+
+The exact names are resolved again after a disconnect, so ALSA client and port
+numbers may change. The match must remain unique and bidirectional. Physical
+ALSA clients are required by default; `--endpoint-type=any` is an explicit
+development opt-in for a virtual endpoint. The generic profile uses standard
+MCU fader echo and has eight logical strips, master/global/jog controls, LCD and
+time display. It does not send the X-Touch color extension. Generic meters are
+disabled because MCU devices differ in meter/LCD layout; the X-Touch keeps its
+existing separate-meter bytes and policy.
+
+The `xtouch-mini` profile has a fixed physical endpoint, `X-TOUCH MINI` /
+`X-TOUCH MINI MIDI 1`. It keeps eight logical V-Pots, their rings, supported
+MCU buttons and the master-fader input. The observed Mini master range
+0..16256 is mapped to the existing 0..16383 command range, so its captured top
+position reaches unity. The profile emits no fader pitch, raw echo, LCD, time,
+meter or color output and enables no touch or jog input. Motor Follow cannot
+override those hardware limits. The bridge does not change the Mini's device
+mode; its normal-MIDI Q-Link adapter route remains separate.
+
+The Mini capture began after connection, so no startup exchange was observed.
+Selecting this profile requires the user to put the hardware in MC mode and is
+not a native MPC compatibility claim.
+
+The saved selection survives an accepted New Project restart and reboot. A
+named profile is protocol policy, not a physical compatibility claim.
+
 ## Return to official firmware
 
 Reinstall the official firmware through MPC's normal update procedure. This

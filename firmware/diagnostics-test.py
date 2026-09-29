@@ -224,7 +224,42 @@ def base_report_checks(text):
     assert "release_payload=verified" in text
 
 
+def check_late_usb_mount():
+    # Unrelated mounts cannot hide a late USB or a second, ambiguous USB.
+    with tempfile.TemporaryDirectory(prefix="mpclearn-late-mount-") as td:
+        f = Fixture(td)
+        first = f.usb("USB1", mount_id=40, marked=False)
+        second = f.usb("USB2", mount_id=41, marked=False)
+        f.mounts([first, second])
+        mountinfo = f.proc / "self/mountinfo"
+        first_line, second_line = mountinfo.read_text().splitlines(keepends=True)
+        # Existing read-only media mounts exercise the full eligibility filter.
+        ineligible = [f.usb(f"READONLY{i}", writable=False, mount_id=100+i,
+                            marked=False) for i in range(64)]
+        f.mounts(ineligible)
+        unrelated = mountinfo.read_text()
+        mountinfo.write_text(first_line + unrelated + second_line)
+        p = f.start()
+        try:
+            wait_text(f.scratch, lambda s: "ambiguity_seen=yes" in s)
+            assert not (first[0] / MARKER).exists()
+            assert not (second[0] / MARKER).exists()
+            # Exceeding the eligible-candidate cap must not admit a partial list.
+            many = [f.usb(f"ELIGIBLE{i}", mount_id=200+i, marked=False)
+                    for i in range(65)]
+            f.mounts(many)
+            time.sleep(0.3)
+            assert all(not (entry[0] / MARKER).exists() for entry in many)
+            mountinfo.write_text(unrelated + second_line)
+            text = wait_text(second[0] / MARKER / "report.txt",
+                             lambda s: "result=current" in s)
+            base_report_checks(text)
+        finally:
+            stop(p)
+
+
 def run_checks():
+    check_late_usb_mount()
     # Prompt first whole report, cached status/DRM, stale replacement and idle stability.
     with tempfile.TemporaryDirectory(prefix="mpclearn-current-") as td:
         f = Fixture(td)

@@ -48,18 +48,18 @@ python3 scripts/image_format.py inputs/MPC-3.9.1-Gen1-update.img build/rootfs.or
 debugfs -R "dump /usr/bin/MPC /work/build/MPC" build/rootfs.original.ext
 '
 python3 firmware/patch-mpc-ce.py build/MPC build/v0_2_6/MPC
-./controllers/program-observer/mirror-input-build.sh \
-  "$PWD/build/v0_2_6/MPC" /usr/share/mpclearn/mcu manual
+./controllers/program-observer/native-preferences-build.sh \
+  "$PWD/build/v0_2_6/MPC" "$PWD/build/MPC" /usr/share/mpclearn/mcu
 # After the component and native qualification gates, maintainers build the
 # local release roots, images and three browser recipes together:
 sh firmware/build-v0.2.6.sh
 ```
 
-`package.py` accepts only the qualified observer and matched nine-file package.
-It intentionally refuses an arbitrary unqualified runtime. Rebuild that runtime
-with the existing controller build guide and `mirror-input-build.sh`, using the
-exact MPC executable extracted from your own official image, location
-`/usr/share/mpclearn/mcu` and lifetime `manual`.
+`package.py` accepts only the qualified native Preferences observer and matched
+nine-file package. It intentionally refuses an arbitrary unqualified runtime.
+The production builder uses the exact stock MPC executable and its separately
+patched CE executable, targets `/usr/share/mpclearn/mcu`, and gives the package
+the required manual lifetime.
 
 The image builder reuses TheKikGen's pinned image tool at
 `9be3e63bf03d3467cf06478b48671894dcc634f4`, then independently decodes the output.

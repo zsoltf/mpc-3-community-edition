@@ -187,18 +187,6 @@ static bool unescape_mount(const char *src,char *dst,size_t cap){
  size_t n=0;for(size_t i=0;src[i];i++){unsigned char c=(unsigned char)src[i];if(c=='\\'&&src[i+1]>='0'&&src[i+1]<='7'&&src[i+2]>='0'&&src[i+2]<='7'&&src[i+3]>='0'&&src[i+3]<='7'){c=(unsigned char)((src[i+1]-'0')*64+(src[i+2]-'0')*8+src[i+3]-'0');i+=3;}if(!c||n+1>=cap)return false;dst[n++]=(char)c;}dst[n]=0;return true;
 }
 static bool under_media(const char *p){size_t n=strlen(MEDIA_ROOT);if(strncmp(p,MEDIA_ROOT,n)||p[n]!='/')return false;const char *leaf=p+n+1;if(!*leaf||strchr(leaf,'/'))return false;return strcmp(leaf,"az01-internal")&&strcmp(leaf,"az01-internal-sd");}
-static int read_mounts(Destination out[MAX_MOUNTS]){
- char path[256];snprintf(path,sizeof(path),"%s/self/mountinfo",PROC_ROOT);FILE *f=fopen(path,"re");if(!f)return -1;char *line=NULL;size_t cap=0;int count=0;
- while(count<MAX_MOUNTS&&getline(&line,&cap,f)>0){
-  char *save=NULL,*tok=strtok_r(line," ",&save);char *fields[6];int nf=0;while(tok&&nf<6){fields[nf++]=tok;tok=strtok_r(NULL," ",&save);}if(nf<6)continue;
-  Destination d={.root_fd=-1,.marker_fd=-1};char *end=NULL;long id=strtol(fields[0],&end,10);if(*end||id<=0)continue;d.id=(int)id;long par=strtol(fields[1],&end,10);if(*end||par<0)continue;d.parent=(int)par;
-  if(sscanf(fields[2],"%u:%u",&d.major,&d.minor)!=2||!unescape_mount(fields[3],d.root,sizeof(d.root))||!unescape_mount(fields[4],d.point,sizeof(d.point)))continue;
-  snprintf(d.options,sizeof(d.options),"%s",fields[5]);
-  char *dash=NULL;while(tok){if(!strcmp(tok,"-")){dash=tok;break;}tok=strtok_r(NULL," ",&save);}if(!dash)continue;char *fs=strtok_r(NULL," ",&save),*source=strtok_r(NULL," ",&save);if(!fs||!source)continue;snprintf(d.fstype,sizeof(d.fstype),"%s",fs);if(!unescape_mount(source,d.source,sizeof(d.source)))continue;
-  out[count++]=d;
- }
- free(line);fclose(f);return count;
-}
 static bool option_rw(const char *s){size_t n=strlen(s);return (!strncmp(s,"rw,",3)||!strcmp(s,"rw")||(n>=3&&!strcmp(s+n-3,",rw"))||strstr(s,",rw,"));}
 static bool usb_block_device(unsigned maj,unsigned min){
  char link[512],resolved[1024];snprintf(link,sizeof(link),"%s/%u:%u",SYS_DEV_BLOCK_ROOT,maj,min);if(!realpath(link,resolved))return false;
@@ -212,15 +200,25 @@ static bool marker_identity(Destination *m,int marker){
 }
 /* Discovery opens and classifies mounts, but never creates the marker. */
 static int discover_destinations(Destination candidates[MAX_MOUNTS]){
- Destination mounts[MAX_MOUNTS];int n=read_mounts(mounts);if(n<0)return -1;int found=0;
- for(int i=0;i<n;i++){
-  Destination *m=&mounts[i];if(!under_media(m->point)||!option_rw(m->options)||strcmp(m->root,"/")||!usb_block_device(m->major,m->minor))continue;
+ char path[256];snprintf(path,sizeof(path),"%s/self/mountinfo",PROC_ROOT);FILE *f=fopen(path,"re");if(!f)return -1;char *line=NULL;size_t cap=0;int found=0;bool failed=false;
+ while(getline(&line,&cap,f)>0){
+  char *save=NULL,*tok=strtok_r(line," ",&save);char *fields[6];int nf=0;while(tok&&nf<6){fields[nf++]=tok;tok=strtok_r(NULL," ",&save);}if(nf<6)continue;
+  Destination d={.root_fd=-1,.marker_fd=-1};char *end=NULL;long id=strtol(fields[0],&end,10);if(*end||id<=0)continue;d.id=(int)id;long par=strtol(fields[1],&end,10);if(*end||par<0)continue;d.parent=(int)par;
+  if(sscanf(fields[2],"%u:%u",&d.major,&d.minor)!=2||!unescape_mount(fields[3],d.root,sizeof(d.root))||!unescape_mount(fields[4],d.point,sizeof(d.point)))continue;
+  snprintf(d.options,sizeof(d.options),"%s",fields[5]);
+  char *dash=NULL;while(tok){if(!strcmp(tok,"-")){dash=tok;break;}tok=strtok_r(NULL," ",&save);}if(!dash)continue;char *fs=strtok_r(NULL," ",&save),*source=strtok_r(NULL," ",&save);if(!fs||!source)continue;snprintf(d.fstype,sizeof(d.fstype),"%s",fs);if(!unescape_mount(source,d.source,sizeof(d.source)))continue;
+  Destination *m=&d;if(!under_media(m->point)||!option_rw(m->options)||strcmp(m->root,"/")||!usb_block_device(m->major,m->minor))continue;
   int rootfd=open(m->point,O_RDONLY|O_DIRECTORY|O_CLOEXEC|O_NOFOLLOW);if(rootfd<0)continue;struct stat rs;struct statvfs sv;
   bool ok=!fstat(rootfd,&rs)&&S_ISDIR(rs.st_mode)&&major(rs.st_dev)==m->major&&minor(rs.st_dev)==m->minor&&!fstatvfs(rootfd,&sv)&&!(sv.f_flag&ST_RDONLY)&&faccessat(rootfd,".",W_OK,AT_EACCESS)==0;
   if(!ok){close(rootfd);continue;}m->dev=rs.st_dev;m->root_ino=rs.st_ino;m->root_fd=rootfd;
   int marker=openat(rootfd,MARKER,O_RDONLY|O_DIRECTORY|O_CLOEXEC|O_NOFOLLOW);if(marker>=0&&!marker_identity(m,marker))close(marker);
-  if(found<MAX_MOUNTS)candidates[found++]=*m;else{if(m->marker_fd>=0)close(m->marker_fd);close(m->root_fd);}
+  /* Only eligible destinations consume slots; never admit a partial list. */
+  if(found==MAX_MOUNTS){if(m->marker_fd>=0)close(m->marker_fd);close(rootfd);failed=true;break;}
+  candidates[found++]=*m;
  }
+ if(ferror(f))failed=true;
+ free(line);fclose(f);
+ if(failed){for(int i=0;i<found;i++){if(candidates[i].marker_fd>=0)close(candidates[i].marker_fd);close(candidates[i].root_fd);}return -1;}
  return found;
 }
 static bool destination_same(const Destination *a,const Destination *b){return a->id==b->id&&a->parent==b->parent&&a->major==b->major&&a->minor==b->minor&&a->dev==b->dev&&a->root_ino==b->root_ino&&a->marker_ino==b->marker_ino&&!strcmp(a->root,b->root)&&!strcmp(a->point,b->point)&&!strcmp(a->fstype,b->fstype)&&!strcmp(a->source,b->source);}

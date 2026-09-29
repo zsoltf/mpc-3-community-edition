@@ -34,7 +34,7 @@ for tool in ('docker', 'python3'):
 def attempt(script, *args):
     folder = work/'tree'
     shutil.rmtree(folder, ignore_errors=True); folder.mkdir()
-    for name in list(covered) + ['mirror-input-build.sh', 'device-location.sh', 'mirror-guard.sh']:
+    for name in list(covered) + ['mirror-input-build.sh', 'native-preferences-build.sh', 'device-location.sh', 'mirror-guard.sh']:
         shutil.copy2(source/name, folder/name)
     record = work/'record'; record.unlink(missing_ok=True)
     env = dict(os.environ, PATH=f'{bin}:/usr/bin:/bin', RECORD=str(record))
@@ -53,6 +53,8 @@ for script in ('command-build.sh', 'mirror-input-build.sh'):
     accepted(script, DEV, '600')
     refused(script, IMAGE, '600')
     for path in REFUSED: refused(script, path, 'manual')
+for path in (IMAGE, DEV): accepted('native-preferences-build.sh', '/nonexistent/stock-MPC', path)
+for path in REFUSED: refused('native-preferences-build.sh', '/nonexistent/stock-MPC', path)
 for script, mode in covered.items():
     if mode != 'override': continue
     accepted(script, DEV, '600') if script != 'mirror-build.sh' else accepted(script, DEV)
@@ -62,15 +64,19 @@ print('PASS every package build refuses other device folders before any build st
 
 # Developer documentation shows only these locations in build commands.
 docs = [source/'README.md', source/'MCU-START.md', source/'../../docs/BUILDING.md', source/'../../firmware/README.md']
-command = re.compile(r'(?:build\.sh|command-build\.sh|mirror-input-build\.sh)\s*\\?\s*\n?\s*("?[^\s"]+"?)\s+(\S+)')
+commands = [
+    (re.compile(r'(?:command-build\.sh|mirror-input-build\.sh)\s*\\?\s*\n?\s*("?[^\s"]+"?)\s+(\S+)'), 2),
+    (re.compile(r'native-preferences-build\.sh\s*\\?\s*\n?\s*("?[^\s"]+"?)\s+("?[^\s"]+"?)\s+(\S+)'), 3),
+]
 checked = 0
 for doc in docs:
     if not doc.exists(): continue
-    for match in command.finditer(doc.read_text()):
-        location = match.group(2)
-        if location.startswith('/') or location.startswith('data/'):
-            assert location in (IMAGE, DEV), (doc.name, match.group(0))
-            checked += 1
+    for command, location_group in commands:
+        for match in command.finditer(doc.read_text()):
+            location = match.group(location_group).strip('"')
+            if location.startswith('/') or location.startswith('data/'):
+                assert location in (IMAGE, DEV), (doc.name, match.group(0))
+                checked += 1
 assert checked, 'no documented build commands found'
 print(f'PASS {checked} documented build commands use only the image location or the development override')
 PY

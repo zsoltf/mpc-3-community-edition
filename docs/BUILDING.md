@@ -57,8 +57,8 @@ The output must be 112,222,004 bytes with SHA-256
 Build and run the release component tests:
 
 ```sh
-./controllers/program-observer/mirror-input-build.sh \
-  "$PWD/build/v0_2_6/MPC" /usr/share/mpclearn/mcu manual
+./controllers/program-observer/native-preferences-build.sh \
+  "$PWD/build/v0_2_6/MPC" "$PWD/build/MPC" /usr/share/mpclearn/mcu
 ./controllers/program-observer/mirror-input-check.sh
 ./controllers/program-observer/location-check.sh
 ```
@@ -66,9 +66,9 @@ Build and run the release component tests:
 These ARM tests exercise the observer, command mailbox and controller logic
 with component substitutes. They do not run an MPC musical project or prove
 hardware/audio acceptance. `/usr/share/mpclearn/mcu` is where the image runs
-the package from; the build writes
-`controllers/program-observer/package/mirror-input/`. To create an image of the
-tested release, use its published runtime archive; see
+the package from; the build writes the final package to
+`controllers/program-observer/package/native-preferences/runtime/`. To create
+an image of the tested release, use the canonical firmware build; see
 [firmware preparation](../firmware/README.md).
 
 ### Trying a build on your own MPC
@@ -79,11 +79,11 @@ experiment cannot leave copies, backups or staging folders behind. This needs
 an image made with your own SSH key.
 
 ```sh
-./controllers/program-observer/mirror-input-build.sh \
-  "$PWD/build/v0_2_6/MPC" /data/mpclearn/dev manual
+./controllers/program-observer/native-preferences-build.sh \
+  "$PWD/build/v0_2_6/MPC" "$PWD/build/MPC" /data/mpclearn/dev
 ```
 
-Copy `package/mirror-input/` to a temporary folder on the MPC, such as
+Copy `package/native-preferences/runtime/` to a temporary folder on the MPC, such as
 `/tmp/mcu-dev`, then on the MPC:
 
 ```sh

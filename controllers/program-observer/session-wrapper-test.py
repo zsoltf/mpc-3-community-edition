@@ -12,7 +12,7 @@ With --busybox ROOTFS (an ext4 root image mounted read-only in the container),
 the session scripts run under that image's BusyBox shell and applets through
 qemu-arm, as on the device.
 """
-import hashlib, json, os, pathlib, shutil, signal, subprocess, sys, time
+import ctypes, hashlib, json, mmap, os, pathlib, platform, shutil, signal, struct, subprocess, sys, time
 P = pathlib.Path
 assert P('/.dockerenv').exists() and os.getuid() == 0
 home = P('/data/mpclearn'); dev = home/'dev'; session = home/'session'; history = home/'history'
@@ -34,7 +34,16 @@ if '--busybox' in sys.argv:
     busybox = device/'usr/bin/busybox.nosuid'
     bb = P('/tmp/bb'); bb.mkdir()
     for applet in 'sh awk basename cat chmod chown cmp cp cut dirname env find flock grep head id kill ls mkdir mkfifo mv printf readlink rm sed sha256sum sleep sort stat tail test touch tr wc'.split():
-        (bb/applet).symlink_to(busybox)
+        # Docker Desktop's binfmt handler does not preserve the applet name
+        # when it follows a symlink to this ARM BusyBox.  In particular,
+        # sha256sum then returns a different digest even though an explicit
+        # BusyBox applet invocation reads the same bytes correctly.  Preserve
+        # argv[0] explicitly so this lane tests the device shell and applets.
+        wrapper = bb/applet
+        wrapper.write_text(
+            '#!/bin/sh\n'
+            f'exec qemu-arm-static -L {device} -0 {applet} {busybox} "$@"\n')
+        wrapper.chmod(0o700)
     shell = str(bb/'sh')
     env['QEMU_LD_PREFIX'] = str(device)
     env['PATH'] = f'{bb}:' + env['PATH']
@@ -66,17 +75,44 @@ P('/tmp/session-stub.c').write_text(r'''#include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
 #include <fcntl.h>
+#include <errno.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/syscall.h>
 #include "/src/surface-preferences.h"
+#include "/src/mcu-controller-preferences.h"
+#include "/src/native-preferences.h"
 static volatile sig_atomic_t stopped;
 static void stop(int sig){(void)sig;stopped=1;}
 static void arm(int sig){(void)sig;int fd=open("armed",O_WRONLY|O_CREAT|O_APPEND,0600);if(fd>=0){write(fd,"1",1);close(fd);}}
+static int controller_set(int argc,char **argv){const McuProfile*profile=NULL;const char*client=NULL,*port=NULL;unsigned physical=1;
+ for(int i=3;i<argc;i++){if(!strncmp(argv[i],"--profile=",10))profile=mcu_profile_named(argv[i]+10);else if(!strncmp(argv[i],"--endpoint-client=",18))client=argv[i]+18;else if(!strncmp(argv[i],"--endpoint-port=",16))port=argv[i]+16;else if(!strcmp(argv[i],"--endpoint-type=kernel"))physical=1;else if(!strcmp(argv[i],"--endpoint-type=any"))physical=0;else return 2;}
+ if(!profile)return 2;McuEndpoint endpoint={.profile=profile,.client=client?client:profile->default_client,.port=port?port:profile->default_port,.physical_only=physical};return mcu_controller_preferences_write(argv[2],&endpoint)?0:2;}
+static NativePreferencesState *native_state(const char *path){int fd=open(path,O_RDWR|O_NOFOLLOW);if(fd<0)return MAP_FAILED;struct stat st;void*p=fstat(fd,&st)||st.st_size!=4096?MAP_FAILED:mmap(NULL,4096,PROT_READ|PROT_WRITE,MAP_SHARED,fd,0);close(fd);if(p==MAP_FAILED)return p;NativePreferencesState*s=p;if(s->magic!=NATIVE_PREFERENCES_MAGIC||s->version!=NATIVE_PREFERENCES_VERSION){munmap(p,4096);return MAP_FAILED;}return s;}
+static void native_endpoint(NativePreferencesState*s,const McuEndpoint*e){size_t cn=strlen(e->client),pn=strlen(e->port);memset(s->endpoint_client,0,128);memset(s->endpoint_port,0,128);memcpy(s->endpoint_client,e->client,cn);memcpy(s->endpoint_port,e->port,pn);s->endpoint_client_length=cn;s->endpoint_port_length=pn;}
+static int native_sync(const char*state,const char*preference,const char*active_name){NativePreferencesState*s=native_state(state);McuControllerPreference p;if(s==MAP_FAILED||!mcu_controller_preferences_read(preference,&p))return 1;s->saved_profile=mcu_controller_profile_id(p.endpoint.profile);if(!strcmp(active_name,"saved"))s->active_profile=s->saved_profile;else{s->active_profile=mcu_controller_profile_id(mcu_profile_named(active_name));if(!s->active_profile){munmap(s,4096);return 1;}}native_endpoint(s,&p.endpoint);s->status=NATIVE_PREFERENCES_ACTIVE;munmap(s,4096);return 0;}
+static int native_apply(const char*state,const char*preference){NativePreferencesState*s=native_state(state);if(s==MAP_FAILED)return 11;unsigned seq=s->request_sequence,profile=s->request_profile;if(!seq||seq==s->claimed_sequence){munmap(s,4096);return 10;}s->claimed_sequence=seq;s->status=NATIVE_PREFERENCES_APPLYING;McuControllerPreference p={0};int result=0;
+ if(profile==1||profile==2){const McuProfile*x=mcu_controller_profile(profile);p.endpoint=(McuEndpoint){.profile=x,.client=x->default_client,.port=x->default_port,.physical_only=1};}
+ else if(profile==3){if(!access("generic-unavailable",F_OK))result=12;else if(!access("generic-ambiguous",F_OK))result=13;else{strcpy(p.client,"Generic Device");strcpy(p.port,"Generic Port");p.endpoint=(McuEndpoint){.profile=&mcu_profile_generic,.client=p.client,.port=p.port,.physical_only=1};}}
+ else result=11;
+ if(result){s->status=result==12?NATIVE_PREFERENCES_UNAVAILABLE:result==13?NATIVE_PREFERENCES_AMBIGUOUS:NATIVE_PREFERENCES_INVALID;s->completed_sequence=seq;munmap(s,4096);return result;}
+ if(!mcu_controller_preferences_write(preference,&p.endpoint)){s->status=NATIVE_PREFERENCES_WRITE_FAILED;s->completed_sequence=seq;munmap(s,4096);return 14;}s->saved_profile=profile;native_endpoint(s,&p.endpoint);munmap(s,4096);return 0;}
+static int native_finish(const char*state,int active){NativePreferencesState*s=native_state(state);if(s==MAP_FAILED)return 1;if(active){s->active_profile=s->saved_profile;s->status=NATIVE_PREFERENCES_ACTIVE;}else s->status=NATIVE_PREFERENCES_RESTART_FAILED;s->completed_sequence=s->claimed_sequence;munmap(s,4096);return 0;}
+static int native_watch(const char*path){NativePreferencesState*s=native_state(path);if(s==MAP_FAILED)return 1;pid_t owner=getppid();unsigned seen=s->completed_sequence;for(;;){unsigned requested=__atomic_load_n(&s->request_sequence,__ATOMIC_ACQUIRE);if(requested!=seen){if(getppid()!=owner||kill(owner,SIGUSR2))return 1;seen=requested;}long r=syscall(SYS_futex,&s->request_sequence,0,requested,NULL,NULL,0);if(r<0&&errno!=EAGAIN&&errno!=EINTR)return 1;}}
 int main(int argc,char **argv){int bridge=strstr(argv[0],"mirror-input")!=0;
+if(bridge&&argc==3&&!strcmp(argv[1],"--native-preferences-watch"))return native_watch(argv[2]);
+if(bridge&&argc==5&&!strcmp(argv[1],"--native-preferences-sync"))return native_sync(argv[2],argv[3],argv[4]);
+if(bridge&&argc==4&&!strcmp(argv[1],"--native-preferences-apply"))return native_apply(argv[2],argv[3]);
+if(bridge&&argc==4&&!strcmp(argv[1],"--native-preferences-finish"))return native_finish(argv[2],!strcmp(argv[3],"active"));
 if(bridge&&argc==3&&!strcmp(argv[1],"--surface-status")){unsigned enabled;if(!surface_preferences_read(argv[2],&enabled))return 1;puts(enabled?"on":"off");return 0;}
+if(bridge&&argc==3&&!strcmp(argv[1],"--controller-status")){McuControllerPreference s;if(!mcu_controller_preferences_read(argv[2],&s))return 1;printf("profile=%s endpoint-type=%s",s.endpoint.profile->name,s.endpoint.physical_only?"kernel":"any");if(!s.endpoint.profile->default_client)printf(" client=%s port=%s",s.endpoint.client,s.endpoint.port);puts("");return 0;}
+if(bridge&&argc>=4&&!strcmp(argv[1],"--controller-set"))return controller_set(argc,argv);
 if(strstr(argv[0],"mpclearn-controls")){signal(SIGUSR1,arm);signal(SIGTERM,stop);puts("DISARMED fixture");fflush(stdout);while(!stopped)pause();return 0;}
-if(bridge){signal(SIGTERM,stop);printf("BRIDGE_READY pid=%u\n",(unsigned)getpid());for(int i=1;i<argc;i++)printf("ARG %s\n",argv[i]);fflush(stdout);while(!stopped){FILE*f=fopen("mpc.pid","r");int p=0;if(f){fscanf(f,"%d",&p);fclose(f);}if(p>0&&kill(p,0))break;usleep(10000);}printf("TOUCH_FINAL pid=%u mask=3\n",(unsigned)getpid());return stopped?0:1;}
+if(bridge){signal(SIGTERM,stop);printf("BRIDGE_READY pid=%u\n",(unsigned)getpid());for(int i=1;i<argc;i++){printf("ARG %s\n",argv[i]);if(!strncmp(argv[i],"--controller-preferences=",25)){McuControllerPreference s;if(!mcu_controller_preferences_read(argv[i]+25,&s))return 2;printf("SAVED profile=%s endpoint-type=%s client=%s port=%s\n",s.endpoint.profile->name,s.endpoint.physical_only?"kernel":"any",s.endpoint.client,s.endpoint.port);}}fflush(stdout);while(!stopped){FILE*f=fopen("mpc.pid","r");int p=0;if(f){fscanf(f,"%d",&p);fclose(f);}if(p>0&&kill(p,0))break;usleep(10000);}printf("TOUCH_FINAL pid=%u mask=3\n",(unsigned)getpid());return stopped?0:1;}
 prctl(PR_SET_NAME,"MPC Main Thread",0,0,0);signal(SIGTERM,stop);
 FILE*f=fopen("launches","a");fputs("1",f);fclose(f);unlink("project-ready");unlink("native-intent");unlink("closed");
 f=fopen("/run/mpclearn/state/command.state","w");fprintf(f,"%u\n",(unsigned)getpid());fclose(f);f=fopen("/run/mpclearn/state/volume.state","w");fclose(f);
+int nfd=open("/run/mpclearn/state/native-preferences.state",O_RDWR|O_CREAT|O_EXCL|O_NOFOLLOW,0600);if(nfd<0||ftruncate(nfd,4096))return 90;NativePreferencesState*ns=mmap(NULL,4096,PROT_READ|PROT_WRITE,MAP_SHARED,nfd,0);close(nfd);if(ns==MAP_FAILED)return 91;memset(ns,0,4096);ns->magic=NATIVE_PREFERENCES_MAGIC;ns->version=NATIVE_PREFERENCES_VERSION;ns->bytes=4096;ns->pid=getpid();munmap(ns,4096);
 for(int i=0;i<1100000;i++)putchar('x');puts(" MPC diagnostic tail");fflush(stdout);
 while(!stopped){f=fopen("exit-request","r");if(f){int code=0;fscanf(f,"%d",&code);fclose(f);unlink("exit-request");return code;}usleep(10000);}return 0;}
 ''')
@@ -149,6 +185,22 @@ def du(path): return int(subprocess.run(['du', '-sb', str(path)], capture_output
 def no_raw_state():
     found = [str(p) for p in home.rglob('*.state')]
     assert not found, found
+def native_values():
+    data = (state/'native-preferences.state').read_bytes()
+    assert len(data) == 4096 and struct.unpack_from('<III', data) == (0x3255504e, 2, 4096)
+    return struct.unpack_from('<'+'I'*30, data)
+def native_request(profile):
+    path = state/'native-preferences.state'
+    with path.open('r+b', buffering=0) as f, mmap.mmap(f.fileno(), 4096) as page:
+        sequence = struct.unpack_from('<I', page, 76)[0] + 1
+        struct.pack_into('<I', page, 80, profile)
+        struct.pack_into('<I', page, 92, 1)
+        struct.pack_into('<I', page, 76, sequence)
+        word = ctypes.c_uint32.from_buffer(page, 76)
+        syscall_number = 98 if platform.machine() in ('aarch64', 'arm64') else 202
+        assert ctypes.CDLL(None, use_errno=True).syscall(syscall_number, ctypes.byref(word), 1, 0x7fffffff, 0, 0, 0) >= 0
+        del word
+    return sequence
 def cleanup():
     for exe in P('/proc').glob('[0-9]*/exe'):
         try:
@@ -214,9 +266,10 @@ try:
     p = call(stray/'mcu', 'status', expected=2); assert 'Unsupported package location' in p.stderr
     assert sorted(x.name for x in stray.iterdir()) == sorted(x.name for x in dev.iterdir()); shutil.rmtree(stray)
     # Status before any start creates only the tmpfs folder; the preference path is fixed.
-    p = run('status', 5)
-    assert 'motor_follow=on' in p.stdout and runtime.stat().st_mode & 0o777 == 0o700 and not state.exists()
-    print(f'PASS [{MODE}] fixed locations: 0700 folder adoption, override install with shipped owner/modes, mismatched override ignored and kept, stray location refusal, status on fresh tmpfs')
+    for entry in (dev/'mcu', dev/'mcu-session.sh'):
+        p = call(entry, expected=5)
+        assert 'motor_follow=on' in p.stdout and 'profile=xtouch endpoint-type=kernel' in p.stdout and runtime.stat().st_mode & 0o777 == 0o700 and not state.exists()
+    print(f'PASS [{MODE}] fixed locations: 0700 folder adoption, override install with shipped owner/modes, mismatched override ignored and kept, stray location refusal, no-argument mcu/session status on fresh tmpfs')
     # Runtime admission refuses symlinks, unknown entries and unowned state.
     state.symlink_to('/tmp', target_is_directory=True); run('start', 1); state.unlink()
     state.mkdir(mode=0o700); (state/'unexpected').touch(); run('start', 1); (state/'unexpected').unlink()
@@ -234,6 +287,7 @@ try:
     assert any('-unlaunched-' in e for e in entries()), entries()
     bridge_log = (session/'bridge.log').read_text()
     assert '--motors=on' in bridge_log and '--preferences=/data/mpclearn/surface-preferences' in bridge_log
+    assert 'ARG --controller-preferences=/data/mpclearn/controller-preferences' in bridge_log and 'SAVED profile=xtouch endpoint-type=kernel client=X-Touch port=X-TOUCH_INT' in bridge_log
     assert (session/'session.location').read_text() == f'{dev}\n'
     p = run('status', 2, where=image); assert 'belongs to /data/mpclearn/dev' in p.stderr
     (home/'surface-preferences').write_text('MCU-SURFACE1 motors=0\n'); (home/'surface-preferences').chmod(0o600)
@@ -258,7 +312,26 @@ try:
     retained = run('start')
     assert 'Session source status exit 1' in retained.stdout and 'Existing owned session retained' in retained.stdout, retained.stdout
     (session/'source-failed').unlink(); assert count('launches') == 1 and count('armed') == 1
-    print(f'PASS [{MODE}] explicit bridge-start: actual missed chooser arming recovery, route-failure refusal, exact failure cleanup and no duplicate signal, and a retained start that reports an unhealthy source instead of exiting silently (native adapter/protocol substituted)')
+    # The injected callback is represented by one atomic state write plus the
+    # same shared futex wake. The real owner watcher claims it outside the UI,
+    # preserves the live bridge on errors, and uses its normal drain/restart.
+    native_preferences = state/'native-preferences.state'; assert native_preferences.stat().st_size == 4096
+    run('status'); bridge_before = int((session/'bridge.pid').read_text().split()[0])
+    sequence = native_request(99); until(lambda: native_values()[22] == sequence, 'invalid native request completes')
+    assert native_values()[23] == 6 and int((session/'bridge.pid').read_text().split()[0]) == bridge_before and not (home/'controller-preferences').exists()
+    (session/'generic-unavailable').touch(); sequence = native_request(3); until(lambda: native_values()[22] == sequence, 'unavailable Generic completes')
+    assert native_values()[23] == 4 and int((session/'bridge.pid').read_text().split()[0]) == bridge_before and not (home/'controller-preferences').exists(); (session/'generic-unavailable').unlink()
+    (session/'generic-ambiguous').touch(); sequence = native_request(3); until(lambda: native_values()[22] == sequence, 'ambiguous Generic completes')
+    assert native_values()[23] == 5 and int((session/'bridge.pid').read_text().split()[0]) == bridge_before and not (home/'controller-preferences').exists(); (session/'generic-ambiguous').unlink()
+    sequence = native_request(3); until(lambda: native_values()[22] == sequence and native_values()[23] == 3, 'unique Generic applies')
+    generic_pid = int((session/'bridge.pid').read_text().split()[0]); assert generic_pid != bridge_before
+    assert 'SAVED profile=generic endpoint-type=kernel client=Generic Device port=Generic Port' in (session/'bridge.log').read_text()
+    sequence = native_request(2); until(lambda: native_values()[22] == sequence and native_values()[25] == 2, 'Mini request applies')
+    mini_pid = int((session/'bridge.pid').read_text().split()[0]); assert mini_pid != generic_pid and 'SAVED profile=xtouch-mini' in (session/'bridge.log').read_text()
+    sequence = native_request(1); until(lambda: native_values()[22] == sequence and native_values()[25] == 1, 'X-Touch return applies')
+    assert int((session/'bridge.pid').read_text().split()[0]) != mini_pid and 'SAVED profile=xtouch endpoint-type=kernel client=X-Touch port=X-TOUCH_INT' in (session/'bridge.log').read_text()
+    print(f'PASS [{MODE}] native controller requests: shared futex wake, owner claim, invalid/unavailable/ambiguous bridge retention, unique Generic persistence, active Mini restart and return to X-Touch (UI click, native MPC and ALSA enumeration substituted)')
+    print(f'PASS [{MODE}] explicit bridge-start: actual missed chooser arming recovery, route-failure refusal, exact failure cleanup and no duplicate signal, a retained unhealthy source, and admission of the fixed native Preferences state file (native adapter/protocol/UI substituted)')
     for expected in (2, 3):
         previous = app_pid(); before = set(entries()); depart(True)
         until(lambda: count('launches') == expected and (session/'generation.ready').exists() and app_pid() != previous, 'accepted New Project restarts once')
@@ -369,9 +442,73 @@ try:
     run('stop')
     no_raw_state()
     print(f'PASS [{MODE}] history budget: entry count bound over handoffs, failed write refuses the successor, oversized entry dropped without pruning')
+    # Explicit one-session selection remains available and exact names,
+    # including spaces, survive the existing owner and New Project respawn.
+    before = count('launches')
+    call(dev/'mcu', 'start', '--profile=generic', '--endpoint-client=Virtual MCU', '--endpoint-port=Port Name', '--endpoint-type=any')
+    until(lambda: count('launches') == before+1 and (session/'generation.ready').exists(), 'generic selected session starts')
+    selected = (session/'bridge.log').read_text()
+    for arg in ('ARG --profile=generic', 'ARG --endpoint-client=Virtual MCU', 'ARG --endpoint-port=Port Name', 'ARG --endpoint-type=any'):
+        assert arg in selected, (arg, selected)
+    assert native_values()[24:26] == (1, 3), native_values()[24:26]  # saved X-Touch, active one-session Generic
+    previous = app_pid(); depart(True)
+    until(lambda: count('launches') == before+2 and app_pid() != previous and (session/'generation.ready').exists(), 'generic selected New Project respawn')
+    selected = (session/'bridge.log').read_text()
+    for arg in ('ARG --profile=generic', 'ARG --endpoint-client=Virtual MCU', 'ARG --endpoint-port=Port Name', 'ARG --endpoint-type=any'):
+        assert arg in selected, (arg, selected)
+    assert native_values()[24:26] == (1, 3), native_values()[24:26]
+    run('stop')
+    no_raw_state()
+    # The same session owner writes one bounded preference and a no-option
+    # start consumes it. Invalid replacement leaves the prior selection intact.
+    call(dev/'mcu', 'configure', '--profile=generic', '--endpoint-client=Saved MCU', '--endpoint-port=Saved Port', '--endpoint-type=any')
+    controller_preference = home/'controller-preferences'
+    assert controller_preference.stat().st_size == 288 and controller_preference.stat().st_mode & 0o777 == 0o600
+    p = call(dev/'mcu', 'configure', '--profile=generic', expected=2)
+    assert 'The selected protocol requires exact endpoint client and port names.' in p.stderr
+    before = count('launches'); call(image/'mcu-boot.sh', 'start')
+    until(lambda: count('launches') == before+1 and (session/'generation.ready').exists(), 'saved generic boot session starts')
+    selected = (session/'bridge.log').read_text()
+    assert 'ARG --controller-preferences=/data/mpclearn/controller-preferences' in selected and 'SAVED profile=generic endpoint-type=any client=Saved MCU port=Saved Port' in selected, selected
+    previous = app_pid(); depart(True)
+    until(lambda: count('launches') == before+2 and app_pid() != previous and (session/'generation.ready').exists(), 'saved generic New Project respawn')
+    assert 'SAVED profile=generic endpoint-type=any client=Saved MCU port=Saved Port' in (session/'bridge.log').read_text()
+    run('stop'); no_raw_state()
+    # HUI uses the same fixed preference owner and exact endpoint handoff. This
+    # is the standard software path; XL3 identity and timeout policy are later.
+    before = count('launches')
+    call(dev/'mcu', 'configure', '--profile=hui', '--endpoint-client=HUI Software', '--endpoint-port=DAW Port', '--endpoint-type=any')
+    call(dev/'mcu', 'start')
+    until(lambda: count('launches') == before+1 and (session/'generation.ready').exists(), 'saved HUI session starts')
+    selected = (session/'bridge.log').read_text()
+    assert 'SAVED profile=hui endpoint-type=any client=HUI Software port=DAW Port' in selected, selected
+    previous = app_pid(); depart(True)
+    until(lambda: count('launches') == before+2 and app_pid() != previous and (session/'generation.ready').exists(), 'saved HUI New Project respawn')
+    assert 'SAVED profile=hui endpoint-type=any client=HUI Software port=DAW Port' in (session/'bridge.log').read_text()
+    run('stop'); no_raw_state()
+    before = count('launches')
+    call(dev/'mcu', 'configure', '--profile=xtouch-mini')
+    call(dev/'mcu', 'start')
+    until(lambda: count('launches') == before+1 and (session/'generation.ready').exists(), 'Mini selected session starts')
+    selected = (session/'bridge.log').read_text()
+    assert 'SAVED profile=xtouch-mini endpoint-type=kernel client=X-TOUCH MINI port=X-TOUCH MINI MIDI 1' in selected, selected
+    adapter_pid = int((session/'manual-adapter-unarmed.pid').read_text().split()[0])
+    assert os.readlink(f'/proc/{adapter_pid}/exe').endswith('/mpclearn-controls')
+    previous = app_pid(); depart(True)
+    until(lambda: count('launches') == before+2 and app_pid() != previous and (session/'generation.ready').exists(), 'Mini selected New Project respawn')
+    selected = (session/'bridge.log').read_text()
+    assert 'SAVED profile=xtouch-mini endpoint-type=kernel client=X-TOUCH MINI port=X-TOUCH MINI MIDI 1' in selected, selected
+    adapter_pid = int((session/'manual-adapter-unarmed.pid').read_text().split()[0])
+    assert os.readlink(f'/proc/{adapter_pid}/exe').endswith('/mpclearn-controls')
+    call(dev/'mcu', 'configure', '--profile=xtouch')
+    selected = (session/'bridge.log').read_text(); assert 'SAVED profile=xtouch endpoint-type=kernel client=X-Touch port=X-TOUCH_INT' in selected, selected
+    run('stop')
+    no_raw_state()
+    p = subprocess.run([str(dev/'mcu'), 'status'], env=env, capture_output=True, text=True, timeout=60); assert 'profile=xtouch endpoint-type=kernel' in p.stdout
+    print(f'PASS [{MODE}] controller selection: no-setting X-Touch default, exact explicit session args, bounded saved generic/HUI/Mini selection across boot and New Project, live return to X-Touch, invalid replacement refusal, and separate normal-MIDI adapter (native ALSA/MPC substituted)')
     # Override removal goes through our scratch folder only.
     small(); call(image/'mcu-boot-install.sh', 'override', 'clear')
-    assert not dev.exists() and sorted(p.name for p in home.iterdir()) == ['history', 'session', 'surface-preferences'], list(home.iterdir())
+    assert not dev.exists() and sorted(p.name for p in home.iterdir()) == ['controller-preferences', 'history', 'session', 'surface-preferences'], list(home.iterdir())
     # Nothing outside /data/mpclearn and /run/mpclearn changed, although earlier
     # release folders and the old selector were present throughout.
     assert outside() == before_outside

@@ -79,9 +79,10 @@ assert 'TimeoutStartSec=30\n' in provision_unit and 'ExecStart=/usr/libexec/mpcl
 for name in ['mpclearn-boot.service', 'mpclearn-provision.service']:
     assert os.readlink(units/'multi-user.target.wants'/name) == '../'+name
 config = (payload/'config.h').read_text().splitlines()
-for line in ['#define OBSERVER_LIBRARY "/usr/share/mpclearn/mcu/command-observer.so"', '#define OBSERVER_LOG "/run/mpclearn/state/volume.state"', '#define COMMAND_PATH "/run/mpclearn/state/command.state"', '#define WINDOW_SECONDS 0u']:
+for line in ['#define OBSERVER_LIBRARY "/usr/share/mpclearn/mcu/command-observer.so"', '#define OBSERVER_LOG "/run/mpclearn/state/volume.state"', '#define COMMAND_PATH "/run/mpclearn/state/command.state"', '#define WINDOW_SECONDS 0u', '#define NATIVE_PREFERENCES_STATE "/run/mpclearn/state/native-preferences.state"']:
     assert line in config, line
-print('PASS image payload modes (executables 0700, private files 0600, folder 0700, provisioner 0755), units and image-location config')
+assert b'native_preferences_install\0' in (payload/'command-observer.so').read_bytes()
+print('PASS image payload modes (executables 0700, private files 0600, folder 0700, provisioner 0755), units, image-location config and native Preferences observer')
 if substitute:
     shutil.copy(substitute, provisioner); provisioner.chmod(0o755)
     print('NOTE provisioner substituted for mutation testing:', substitute)

@@ -29,11 +29,15 @@ if '#define WINDOW_SECONDS 0u' not in config:
 for line in ['#define OBSERVER_LIBRARY "'+LOCATION+'/command-observer.so"', '#define OBSERVER_LOG "/run/mpclearn/state/volume.state"', '#define COMMAND_PATH "/run/mpclearn/state/command.state"']:
     if line not in config:
         raise SystemExit('Not built for the image location: '+line)
+if '#define NATIVE_PREFERENCES_STATE "/run/mpclearn/state/native-preferences.state"' not in config:
+    raise SystemExit('Native Preferences state path is absent from the image runtime')
+if b'native_preferences_install\0' not in (source/'command-observer.so').read_bytes():
+    raise SystemExit('Native Preferences observer is absent from the image runtime')
 output.mkdir(parents=True, exist_ok=False)
 for name in names + ['session-package.sha256']:
     shutil.copyfile(source/name, output/name)
 for name in ['mcu-boot.sh','mcu-boot-install.sh']:
     shutil.copyfile(repo/'controllers/program-observer'/name, output/name)
 shutil.copyfile(repo/'controllers/program-observer/LICENSE', output/'LICENSE')
-(output/'BUILD.json').write_text(json.dumps({'runtime_source':RUNTIME_SOURCE, 'firmware':'3.9.1 Gen1', 'qualified_hardware':'MPC Live II + full X-Touch MC/USB', 'location':LOCATION, 'format':'CMD31/MMV17', 'fresh_device_setup':'MCU transport is native; Global MIDI Learn and XMM profiles are not required. Disable raw X-TOUCH_INT musical input; see guide.'}, indent=2)+'\n')
+(output/'BUILD.json').write_text(json.dumps({'runtime_source':RUNTIME_SOURCE, 'firmware':'3.9.1 Gen1', 'qualified_hardware':'MPC Live II + full X-Touch MC/USB', 'location':LOCATION, 'format':'CMD31/MMV17', 'fresh_device_setup':'Choose the controller in MPC Preferences > CONTROLLERS. Global MIDI Learn and XMM profiles are not required. Disable raw X-TOUCH_INT musical input; see guide.'}, indent=2)+'\n')
 (output/'payload.sha256').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in sorted(output.iterdir())))

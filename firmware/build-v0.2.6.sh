@@ -32,8 +32,11 @@ for name in [
     if path.exists(): path.unlink()
 PY
 mkdir -p "$out/package" "$out/inputs-placeholder"
+log native-preferences-runtime
+./controllers/program-observer/native-preferences-build.sh \
+  "$PWD/$out/MPC" "$PWD/build/MPC" /usr/share/mpclearn/mcu
 for name in command-observer.so command-client mirror-input mirror-read config.h mcu-session.sh mcu mpclearn-controls main-button session-package.sha256; do
-    cp -p "controllers/program-observer/package/mirror-input/$name" "$out/package/$name"
+    cp -p "controllers/program-observer/package/native-preferences/runtime/$name" "$out/package/$name"
 done
 cp inputs/MPC-3.9.1-Gen1-update.img "$out/inputs-placeholder/"
 cp inputs/placeholder.pub "$out/inputs-placeholder/owner.pub"

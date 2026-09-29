@@ -1,5 +1,8 @@
 #include "command-state.h"
 #include "command-process.h"
+#ifdef NATIVE_PREFERENCES
+#include "native-preferences.h"
+#endif
 static void *command_file(const char *path,size_t size){
  int fd=open(path,O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC|O_NOFOLLOW,0600);if(fd<0)return MAP_FAILED;
  struct stat st;void *result=MAP_FAILED;
@@ -74,6 +77,9 @@ __attribute__((constructor)) static void startup(void){
  attr_ok=1;
  if(mprotect((char*)stack+4096,CONSUMER_STACK,PROT_READ|PROT_WRITE)||pthread_attr_setstack(&attr,(char*)stack+4096,CONSUMER_STACK)||pthread_atfork(NULL,NULL,child_inert)||!only_thread())goto setup_failure;
  observer_image_bias=load_bias;if(!install_patches(load_bias,-1,&gates))goto setup_failure;
+#ifdef NATIVE_PREFERENCES
+ void *preferences_gate=NULL;if(!native_preferences_initialize()||!native_preferences_install(load_bias,&preferences_gate))goto setup_failure;
+#endif
  atomic_store_explicit(&observer_running,1,memory_order_seq_cst);atomic_store_explicit(&state->alive,1,memory_order_release);atomic_store_explicit(&commands->alive,1,memory_order_release);
  if(pthread_create(&consumer,&attr,consume,NULL))goto setup_failure;
  pthread_attr_destroy(&attr);started=1;atomic_store_explicit(&commands->startup,2,memory_order_release);return;
