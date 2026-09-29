@@ -41,6 +41,13 @@ grep -Fqx '#define WINDOW_SECONDS 0u' config.h || exit 1
 grep -Fqx "#define OBSERVER_LIBRARY \"$here/command-observer.so\"" config.h || exit 1
 grep -Fqx "#define OBSERVER_LOG \"$state/volume.state\"" config.h || exit 1
 grep -Fqx "#define COMMAND_PATH \"$state/command.state\"" config.h || exit 1
+probe_state=
+probe_definitions=$(grep -c '^#define PLUGIN_HOST_PROBE_STATE ' config.h || :)
+case "$probe_definitions" in
+ 0) ;;
+ 1) grep -Fqx "#define PLUGIN_HOST_PROBE_STATE \"$state/plugin-host-probe.state\"" config.h || exit 1;probe_state=$state/plugin-host-probe.state;;
+ *) exit 1;;
+esac
 command=${1:-status};case "$command" in start|status|stop|bridge-start|bridge-stop|list-midi|configure) ;; *) echo 'mcu-session.sh start|status|stop|bridge-start|bridge-stop|list-midi|configure [--profile=xtouch|xtouch-mini|generic|hui --endpoint-client=NAME --endpoint-port=NAME --endpoint-type=kernel|any] [--verbose]' >&2;exit 2;; esac
 [ "$#" -eq 0 ] || shift
 verbose=;controller_profile=xtouch;endpoint_client=;endpoint_port=;endpoint_type=kernel;selection_options=0;profile_option=0
@@ -76,9 +83,16 @@ state_check(){
  tmpfs_dir "$state" || return 1
  for file in "$state"/* "$state"/.[!.]* "$state"/..?*;do
   [ -e "$file" ] || { [ ! -L "$file" ] || return 1;continue; }
-  case "$file" in "$state/command.state"|"$state/volume.state"|"$state/native-preferences.state") [ ! -L "$file" ] && [ -f "$file" ] && [ "$(stat -c %u "$file")" = 0 ] || return 1;; *) return 1;; esac
+  case "$file" in
+   "$state/command.state"|"$state/volume.state"|"$state/native-preferences.state") [ ! -L "$file" ] && [ -f "$file" ] && [ "$(stat -c %u "$file")" = 0 ] || return 1;;
+   "$probe_state") [ -n "$probe_state" ] && [ ! -L "$file" ] && [ -f "$file" ] && [ "$(stat -c '%u:%a:%s' "$file")" = 0:600:256 ] || return 1;;
+   *) return 1;;
+  esac
  done
 }
+probe_absent(){ [ -z "$probe_state" ] || [ ! -e "$probe_state" ]; }
+probe_present(){ [ -n "$probe_state" ] && [ -e "$probe_state" ]; }
+remove_probe_state(){ [ -z "$probe_state" ] || rm -f "$probe_state"; }
 if [ -e "$state" ] || [ -L "$state" ];then state_check || exit 1
 elif [ "$command" = start ];then mkdir -m 700 "$state" && state_check || exit 1
 fi
@@ -297,6 +311,7 @@ archive_entry(){
  if [ "$generation" = 1 ];then
   for file in $generation_files mpc-output.pipe;do rm -f "$file";done
   rm -f "$state/command.state" "$state/volume.state" "$state/native-preferences.state"
+  remove_probe_state
  fi
  if [ "$1" = session ];then
   for file in $session_files;do rm -f "$file";done
@@ -309,7 +324,7 @@ archive_generation(){
 }
 archive_session(){ archive_entry session; }
 launch_app(){
- state_check && [ ! -e "$state/command.state" ] && [ ! -e "$state/volume.state" ] && [ ! -e "$state/native-preferences.state" ] || return 1
+ state_check && [ ! -e "$state/command.state" ] && [ ! -e "$state/volume.state" ] && [ ! -e "$state/native-preferences.state" ] && probe_absent || return 1
  authorized && ! mpc_running && ! systemctl is-active --quiet acvs || return 1
  mkfifo -m 600 mpc-output.pipe || return 1
  tail -c "$cap_mpc_log" <mpc-output.pipe >mpc.log 9>&- &
@@ -487,7 +502,7 @@ case "$command" in
   fi
   identity bridge.pid "$here/mirror-input" && exit 1
   if same_boot && [ -f owner.pid ];then read -r owner_pid owner_tick <owner.pid;[ "$(start_tick "$owner_pid")" != "$owner_tick" ] || { echo 'Previous session owner still finishing.' >&2;exit 1; };fi
-  if [ -e "$state/command.state" ] || [ -e "$state/volume.state" ] || [ -e "$state/native-preferences.state" ] || [ -e "$snapshot" ];then
+  if [ -e "$state/command.state" ] || [ -e "$state/volume.state" ] || [ -e "$state/native-preferences.state" ] || probe_present || [ -e "$snapshot" ];then
    [ -f session.id ] && [ -f "$snapshot.sha256" ] && sha256sum -c "$snapshot.sha256" >/dev/null || exit 1
   fi
   # Prior-boot locators cannot authorize signals. Preserve them before any

@@ -3,6 +3,10 @@
 #ifdef NATIVE_PREFERENCES
 #include "native-preferences.h"
 #endif
+#ifdef PLUGIN_HOST_PROBE
+int plugin_host_probe_initialize(void);
+int plugin_host_probe_install(uint32_t,int,void**);
+#endif
 static void *command_file(const char *path,size_t size){
  int fd=open(path,O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC|O_NOFOLLOW,0600);if(fd<0)return MAP_FAILED;
  struct stat st;void *result=MAP_FAILED;
@@ -79,6 +83,9 @@ __attribute__((constructor)) static void startup(void){
  observer_image_bias=load_bias;if(!install_patches(load_bias,-1,&gates))goto setup_failure;
 #ifdef NATIVE_PREFERENCES
  void *preferences_gate=NULL;if(!native_preferences_initialize()||!native_preferences_install(load_bias,&preferences_gate))goto setup_failure;
+#endif
+#ifdef PLUGIN_HOST_PROBE
+ void *plugin_host_gate=NULL;if(!plugin_host_probe_initialize()||!plugin_host_probe_install(load_bias,-1,&plugin_host_gate))goto setup_failure;
 #endif
  atomic_store_explicit(&observer_running,1,memory_order_seq_cst);atomic_store_explicit(&state->alive,1,memory_order_release);atomic_store_explicit(&commands->alive,1,memory_order_release);
  if(pthread_create(&consumer,&attr,consume,NULL))goto setup_failure;

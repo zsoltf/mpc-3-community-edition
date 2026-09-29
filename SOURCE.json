@@ -8,5 +8,9 @@
   "qualified_hardware": "MPC Live II + full X-Touch MC/USB",
   "image_flash_tested": false,
   "debug_image_flash_tested": false,
-  "status": "release"
+  "status": "development",
+  "release_artifacts_current_for_source": false,
+  "product_candidate": "ec4705e67cbe227691afcbd02753af556925a20b",
+  "development_source_base": "9ef65c82ad8295f592983ef2d00f4b537e67e6e5",
+  "diagnostics_status": "Unqualified WIP e962807; excluded from product candidate"
 }

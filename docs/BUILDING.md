@@ -59,13 +59,21 @@ Build and run the release component tests:
 ```sh
 ./controllers/program-observer/native-preferences-build.sh \
   "$PWD/build/v0_2_6/MPC" "$PWD/build/MPC" /usr/share/mpclearn/mcu
+./ui/build.sh
+./ui/check.sh
+./controllers/program-observer/native-preferences-check.sh
 ./controllers/program-observer/mirror-input-check.sh
 ./controllers/program-observer/location-check.sh
 ```
 
-These ARM tests exercise the observer, command mailbox and controller logic
-with component substitutes. They do not run an MPC musical project or prove
-hardware/audio acceptance. `/usr/share/mpclearn/mcu` is where the image runs
+These ARM tests exercise the canonical `ui/` toolkit, its public-only third and
+Global MIDI Learn assignment screens, the production native UI adapters,
+observer, command mailbox and
+controller logic with component substitutes. They do not render or dispatch
+touch in MPC, run an MPC musical project, or prove hardware/audio acceptance.
+See the [native UI recipe](native-ui-guide.md) and
+[toolkit guide](../ui/README.md) for the exact host boundary and remaining UI
+limits. `/usr/share/mpclearn/mcu` is where the image runs
 the package from; the build writes the final package to
 `controllers/program-observer/package/native-preferences/runtime/`. To create
 an image of the tested release, use the canonical firmware build; see
@@ -82,6 +90,14 @@ an image made with your own SSH key.
 ./controllers/program-observer/native-preferences-build.sh \
   "$PWD/build/v0_2_6/MPC" "$PWD/build/MPC" /data/mpclearn/dev
 ```
+
+Before staging or restarting, measure available blocks on `/data` and
+`/media/az01-internal/Settings/MPC`, as well as `/tmp`. `/` is a different
+filesystem and does not establish room for the development override, session
+receipts or native settings. The installer temporarily keeps both runtimes.
+The next start also archives the prior session. Native filmstrip generation can
+consume space after startup, so remeasure before stopping; a zero-availability
+data partition has prevented the session owner from writing its revocation.
 
 Copy `package/native-preferences/runtime/` to a temporary folder on the MPC, such as
 `/tmp/mcu-dev`, then on the MPC:

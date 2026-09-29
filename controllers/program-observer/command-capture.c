@@ -11,6 +11,9 @@ static void component_pause(unsigned);
 #undef observer_hook
 #include "command-state.h"
 #include "transport-queue.h"
+#ifdef NATIVE_PREFERENCES
+#include "native-preferences.h"
+#endif
 CommandState *command_state;
 _Atomic uint32_t command_in_hook,command_violation;
 static uint32_t command_owner,command_queues;
@@ -508,6 +511,9 @@ static void send_destinations(Context *c){
 #define COMMAND_DRAIN_READ() ((void)0)
 #endif
 static void service(Context *c){
+#ifdef NATIVE_PREFERENCES
+ native_preferences_refresh(); /* Qualified stock UI-drain thread. */
+#endif
  meter_service(c);
  send_destinations(c);
  effects_complete(c);

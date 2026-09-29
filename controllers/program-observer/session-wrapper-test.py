@@ -187,7 +187,7 @@ def no_raw_state():
     assert not found, found
 def native_values():
     data = (state/'native-preferences.state').read_bytes()
-    assert len(data) == 4096 and struct.unpack_from('<III', data) == (0x3255504e, 2, 4096)
+    assert len(data) == 4096 and struct.unpack_from('<III', data) == (0x3355504e, 4, 4096)
     return struct.unpack_from('<'+'I'*30, data)
 def native_request(profile):
     path = state/'native-preferences.state'
@@ -250,7 +250,8 @@ try:
     assert not dev.exists()
     call(image/'mcu-boot-install.sh', 'override', str(source))
     assert all(os.stat(dev/n).st_uid == 0 and (dev/n).stat().st_mode & 0o777 == (0o700 if n in EXECUTABLES else 0o600) for n in NAMES+['session-package.sha256'])
-    assert dev.stat().st_mode & 0o777 == 0o700 and (dev/'for-image').read_text() == sha(image/'payload.sha256')+'\n'
+    assert dev.stat().st_mode & 0o777 == 0o700 and (dev/'for-image').read_text() == sha(image/'payload.sha256')+'\n', (
+        oct(dev.stat().st_mode & 0o777), (dev/'for-image').read_text(), sha(image/'payload.sha256'))
     # Boot admission ignores an override for another image, says so, and removes nothing.
     good = (dev/'for-image').read_text()
     for bad in ('0'*64+'\n', None):
@@ -506,6 +507,27 @@ try:
     no_raw_state()
     p = subprocess.run([str(dev/'mcu'), 'status'], env=env, capture_output=True, text=True, timeout=60); assert 'profile=xtouch endpoint-type=kernel' in p.stdout
     print(f'PASS [{MODE}] controller selection: no-setting X-Touch default, exact explicit session args, bounded saved generic/HUI/Mini selection across boot and New Project, live return to X-Touch, invalid replacement refusal, and separate normal-MIDI adapter (native ALSA/MPC substituted)')
+    # The getter probe owns one exact development-only tmpfs record. Ordinary
+    # packages still reject that name. A package with the exact define admits
+    # only its root-owned 0600/256-byte record through status, idempotent start
+    # and stop; unknown or malformed files remain refusals.
+    probe_state = state/'plugin-host-probe.state'
+    probe_state.write_bytes(bytes(256)); probe_state.chmod(0o600)
+    run('status', 1); probe_state.unlink()
+    normal_config = (dev/'config.h').read_text()
+    (dev/'config.h').write_text(normal_config + f'#define PLUGIN_HOST_PROBE_STATE "{probe_state}"\n'); manifest(dev)
+    before = count('launches'); run('start')
+    until(lambda: count('launches') == before+1 and (session/'generation.ready').exists(), 'configured getter-probe session starts')
+    probe_state.write_bytes(bytes(255)); probe_state.chmod(0o600); run('status', 1)
+    probe_state.write_bytes(bytes(256)); probe_state.chmod(0o644); run('status', 1)
+    probe_state.chmod(0o600); run('status', 3); run('start'); assert count('launches') == before+1
+    (state/'unexpected-probe-neighbor').touch(); run('status', 1); (state/'unexpected-probe-neighbor').unlink()
+    run('stop'); assert probe_state.exists()  # retained with other raw state until the next owned archive
+    before = count('launches'); run('start')
+    until(lambda: count('launches') == before+1 and (session/'generation.ready').exists(), 'configured getter-probe state is archived before restart')
+    assert not probe_state.exists(); run('stop'); no_raw_state()
+    (dev/'config.h').write_text(normal_config); manifest(dev)
+    print(f'PASS [{MODE}] getter probe state: ordinary rejection, exact configured 0600/256 admission through status/idempotent start/stop, next-start archive cleanup, malformed/unknown refusal (native getter route substituted)')
     # Override removal goes through our scratch folder only.
     small(); call(image/'mcu-boot-install.sh', 'override', 'clear')
     assert not dev.exists() and sorted(p.name for p in home.iterdir()) == ['controller-preferences', 'history', 'session', 'surface-preferences'], list(home.iterdir())
