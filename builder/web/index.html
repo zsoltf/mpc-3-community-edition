@@ -17,23 +17,23 @@
   <meta name="twitter:card" content="summary_large_image">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&family=Doto:wght@700..900&family=Titillium+Web:wght@300;400;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Doto:wght@700..900&family=Titillium+Web:wght@300;400;600;700&display=swap" rel="stylesheet">
   <script>try{const t=localStorage.getItem('theme');if(t==='dark'||t==='light')document.documentElement.dataset.theme=t;}catch(e){}</script>
   <style>
     :root {
       color-scheme: light;
-      --page: #e8eaed; --page-2: #dfe2e6; --ink: #15171a; --ink-2: #454a52; --ink-3: #5f666e; --line: #cbd0d6;
+      --page: #f7f7f5; --page-2: #edeeeb; --ink: #15171a; --ink-2: #454a52; --ink-3: #5f666e; --line: #cbd0d6;
       --red: #d6362a; --red-hover: #bb291e; --red-ink: #ffffff;
       /* White on this red passes 4.5:1 in both themes. */
       --cta: #d6362a; --cta-hover: #bb291e;
-      --header: rgba(232,234,237,.82);
+      --header: rgba(247,247,245,.94);
       /* Hardware and MPC screens look the same in both themes. */
       --dev-edge: #3b3e45;
       --led-red: #ff4a3d; --led-yel: #ffc933; --led-grn: #3be070; --led-cyan: #33d6e6; --led-blue: #5b85ff; --led-mag: #ff5fd6;
       --mpc-red: #e3174b; --mpc-bg: #1b1b1b; --mpc-panel: #1f1f1f; --mpc-ink: #f2f2f2;
-      --dev-shadow: 0 1px 0 rgba(255,255,255,.07) inset, 0 40px 70px -40px rgba(12,14,18,.6), 0 14px 28px -16px rgba(12,14,18,.4);
-      --sans: "Archivo", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      --mpc: "Titillium Web", "Archivo", ui-sans-serif, system-ui, sans-serif;
+      --dev-shadow: 0 10px 20px -14px rgba(12,14,18,.65);
+      --sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --mpc: "Titillium Web", "Inter", ui-sans-serif, system-ui, sans-serif;
       --lcd: "Doto", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     }
     @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
@@ -66,7 +66,7 @@
     /* Header */
     .top { position: sticky; top: 0; z-index: 20; background: var(--header); backdrop-filter: saturate(150%) blur(12px); -webkit-backdrop-filter: saturate(150%) blur(12px); border-bottom: 1px solid var(--line); }
     .top .wrap { display: flex; align-items: center; justify-content: space-between; gap: 16px; height: 64px; }
-    .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; font-weight: 700; font-stretch: 108%; letter-spacing: -.01em; white-space: nowrap; }
+    .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; font-weight: 600; font-stretch: normal; letter-spacing: -.01em; white-space: nowrap; }
     .brand .mark { width: 26px; height: 26px; border-radius: 7px; background: var(--ink); display: grid; place-items: center; }
     .brand .mark i { display: block; width: 10px; height: 10px; border-radius: 2px; background: var(--red); }
     .brand .tag { font-size: 12px; font-weight: 600; color: var(--ink-3); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; font-stretch: 100%; }
@@ -90,18 +90,18 @@
     .fring { position: absolute; z-index: 30; display: none; pointer-events: none; border: 2px solid #ff5a4f; border-radius: 4px; box-shadow: 0 0 0 1px #000, 0 0 12px rgba(255,90,79,.6); }
     .vui :focus-visible { outline: none; }
     .nojs { margin: 18px 0 0; font-size: 15px; font-weight: 600; color: var(--ink-2); }
-    .btn { appearance: none; font: inherit; font-size: 16px; font-weight: 700; font-stretch: 105%; line-height: 1.1; border: 1.5px solid var(--ink); border-radius: 8px; padding: 13px 20px; background: transparent; color: var(--ink); cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 10px; transition: background .15s, border-color .15s, color .15s, transform .1s; white-space: nowrap; }
+    .btn { appearance: none; font: inherit; font-size: 14px; font-weight: 600; font-stretch: normal; line-height: 1.1; border: 1px solid var(--line); border-radius: 6px; padding: 12px 18px; background: transparent; color: var(--ink); cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 10px; transition: background .15s, border-color .15s, color .15s, transform .1s; white-space: nowrap; }
     .btn:hover { background: var(--ink); color: var(--page); }
     .btn:active { transform: translateY(1px); }
-    .btn.primary { background: var(--cta); border-color: var(--cta); color: var(--red-ink); box-shadow: 0 1px 0 rgba(255,255,255,.25) inset, 0 8px 20px -10px var(--cta); }
+    .btn.primary { background: var(--cta); border-color: var(--cta); color: var(--red-ink); box-shadow: none; }
     .btn.primary:hover { background: var(--cta-hover); border-color: var(--cta-hover); color: var(--red-ink); }
     .top .btn { font-size: 14px; padding: 9px 14px; }
 
     /* Hero */
-    .hero { padding: 52px 0 40px; }
-    .hero h1 { font-size: clamp(44px, 7vw, 96px); font-weight: 850; font-stretch: 125%; letter-spacing: -.035em; line-height: .94; margin: 0; }
+    .hero { padding: 56px 0 32px; }
+    .hero h1 { font-size: clamp(34px, 4.2vw, 54px); font-weight: 600; font-stretch: normal; letter-spacing: -.045em; line-height: 1.1; margin: 0; }
     .hero-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 24px 48px; align-items: end; margin-top: 24px; }
-    .hero .lead { margin: 0; font-size: 19px; line-height: 1.5; color: var(--ink-2); max-width: 54ch; }
+    .hero .lead { margin: 0; font-size: 17px; line-height: 1.65; color: var(--ink-2); max-width: 54ch; }
     .ctas { display: flex; flex-wrap: wrap; gap: 12px; }
     @media (max-width: 860px) { .hero-row { grid-template-columns: 1fr; } }
     @media (max-width: 640px) { .hero { padding-top: 40px; } .hero .lead { font-size: 17px; } }
@@ -128,14 +128,14 @@
     .ghost.parked { display: none; }
 
     /* MPC Live II, laid out from the top-panel diagram in Akai's user guide */
-    .l2 { position: relative; aspect-ratio: 1.62; container-type: inline-size; border-radius: 2.4cqw; margin-top: 12px; background: linear-gradient(180deg, #2b2c30 0, #212225 8%, #1d1e21 60%, #1a1b1e); box-shadow: 0 1px 0 rgba(255,255,255,.1) inset, 0 -2px 0 rgba(0,0,0,.5) inset, var(--dev-shadow); user-select: none; -webkit-user-select: none; }
+    .l2 { position: relative; aspect-ratio: 1.68; container-type: inline-size; border-radius: .3cqw; margin-top: 12px; background: linear-gradient(125deg, #303033, #252528 60%, #2b2b2e); box-shadow: 0 1px 0 rgba(255,255,255,.1) inset, 0 -2px 0 rgba(0,0,0,.5) inset, var(--dev-shadow); user-select: none; -webkit-user-select: none; }
     .l2-jacks { position: absolute; left: 44%; right: 8%; top: -1.3cqw; height: 1.5cqw; display: flex; justify-content: space-between; align-items: flex-end; pointer-events: none; }
     .l2-jacks i { width: 2.2cqw; height: 1.4cqw; border-radius: .4cqw .4cqw 0 0; background: linear-gradient(#3a3b40, #1b1c1f); }
     .l2-jacks i:nth-child(3n) { width: 1.4cqw; height: 1.8cqw; background: linear-gradient(#8a8c90, #3a3b40); }
     .l2 .c { position: absolute; transform: translate(-50%, -50%); }
     .hb { appearance: none; border: 0; padding: 0; width: 4.6cqw; height: 3cqw; border-radius: .45cqw; background: linear-gradient(#34353a, #26272b); box-shadow: 0 .22cqw 0 #0b0b0c, 0 1px 0 rgba(255,255,255,.08) inset; color: #d6d8db; font: 700 .72cqw/1.05 var(--sans); letter-spacing: .02em; display: grid; place-items: center; text-align: center; cursor: pointer; transition: background .1s, color .1s, box-shadow .1s; }
     .hb small { position: absolute; left: 50%; top: calc(100% + .45cqw); transform: translateX(-50%); font-size: .6cqw; font-weight: 600; color: #7d8187; white-space: nowrap; letter-spacing: .03em; }
-    .hb.lit { color: #111; background: var(--lc); box-shadow: 0 0 1.4cqw -.2cqw var(--lc), 0 .22cqw 0 #0b0b0c; }
+    .hb.lit { color: var(--lc); background: linear-gradient(#34353a, #26272b); box-shadow: 0 .22cqw 0 #0b0b0c; text-shadow: 0 0 .35cqw var(--lc); }
     .hb:active { box-shadow: 0 .08cqw 0 #0b0b0c; transform: translate(-50%, calc(-50% + .14cqw)); }
     .hb.dim { color: #b8bbbf; }
     .hb.tint { color: var(--lc); }
@@ -144,15 +144,15 @@
     .dial { border-radius: 50%; background: radial-gradient(circle, transparent 60%, #0c0c0e 61%, #0c0c0e 63%, transparent 64%), repeating-conic-gradient(from var(--r, 0deg), #3b3d43 0 3.5deg, #1b1c1f 3.5deg 7deg); box-shadow: 0 0 0 .35cqw #0e0e10, 0 1cqw 1.8cqw -.6cqw rgba(0,0,0,.9); cursor: grab; touch-action: none; }
     .dial::before { content: ""; position: absolute; inset: 22%; border-radius: 50%; background: radial-gradient(circle at 38% 30%, #4d5057, #1f2023 70%); box-shadow: 0 1px 0 rgba(255,255,255,.12) inset; }
     .dial::after { content: ""; position: absolute; left: 50%; top: 27%; width: 12%; height: 12%; margin-left: -6%; border-radius: 50%; background: radial-gradient(circle at 40% 35%, #0e0e10, #2b2c30); transform-origin: 50% 191.7%; transform: rotate(var(--r, 0deg)); }
-    .l2-pads { position: absolute; left: 5.6%; top: 21.3%; width: 34.8%; aspect-ratio: 1; display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.64cqw; }
-    .pad { appearance: none; border: 0; padding: 0; border-radius: .6cqw; background: radial-gradient(circle at 50% 45%, #1d1d20, #131315 75%); box-shadow: 0 0 0 .18cqw color-mix(in oklab, var(--pc) 85%, transparent) inset, 0 0 1.6cqw -.5cqw var(--pc), 0 .25cqw .4cqw rgba(0,0,0,.6); cursor: pointer; transition: background .25s, box-shadow .25s; }
+    .l2-pads { position: absolute; left: 4.4%; top: 18.2%; width: 36%; aspect-ratio: 1; display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.64cqw; }
+    .pad { position: relative; appearance: none; border: 0; padding: 0; border-radius: .15cqw; background: radial-gradient(circle at 50% 45%, #1d1d20, #131315 75%); box-shadow: 0 0 0 .18cqw color-mix(in oklab, var(--pc) 85%, transparent) inset, 0 0 .45cqw -.2cqw var(--pc), 0 .25cqw .4cqw rgba(0,0,0,.6); cursor: pointer; transition: background .25s, box-shadow .25s; }
     .pad.hit { transition: none; background: radial-gradient(circle at 50% 45%, color-mix(in oklab, var(--pc) 75%, #fff), color-mix(in oklab, var(--pc) 45%, #111) 80%); box-shadow: 0 0 0 .18cqw var(--pc) inset, 0 0 3cqw 0 var(--pc); }
-    .l2-screen { position: absolute; left: 47.1%; top: 16.6%; width: 37%; padding: .75cqw; border-radius: .7cqw; background: linear-gradient(135deg, #0b0b0c, #050506 60%, #111214); box-shadow: 0 0 0 .12cqw #2e3035, 0 0 0 .4cqw #121315; }
-    .l2-model { position: absolute; left: 84%; top: 11.4%; transform: translate(-100%, -50%); font: 700 .95cqw/1 var(--sans); font-stretch: 118%; letter-spacing: .12em; color: #8d9197; }
-    .l2-leds { position: absolute; left: 92.2%; top: 13.8%; transform: translate(-50%, -50%); display: flex; gap: .55cqw; }
+    .l2-screen { position: absolute; left: 44.5%; top: 12%; width: 43%; padding: 1.8cqw 2.8cqw; border-radius: .15cqw; background: linear-gradient(135deg, #0b0b0c, #050506 60%, #111214); box-shadow: 0 0 0 .12cqw #2e3035, 0 0 0 .4cqw #121315; }
+    .l2-model { position: absolute; left: 66%; top: 61.3%; transform: translate(-50%, -50%); font: 500 1.75cqw/1 Arial, sans-serif; letter-spacing: -.08em; color: #b74849; }
+    .l2-leds { position: absolute; left: 92.7%; top: 10.3%; transform: translate(-50%, -50%); display: flex; gap: .55cqw; }
     .l2-leds i { width: .55cqw; height: .55cqw; border-radius: 50%; background: #3a2323; }
     .l2-leds i.on { background: #ff3b30; box-shadow: 0 0 .8cqw #ff3b30; }
-    .l2-grille { position: absolute; left: 2.7%; right: 2.9%; top: 83.2%; bottom: 3.4%; border-radius: 1cqw; background: radial-gradient(circle, #070708 0 38%, transparent 44%) 0 0 / .95cqw .95cqw, linear-gradient(#303136, #25262a); box-shadow: 0 1px 0 rgba(255,255,255,.08) inset, 0 -1px 0 rgba(0,0,0,.4); }
+    .l2-grille { position: absolute; left: 1.2%; right: 1.2%; top: 83.3%; bottom: .5%; border-radius: .12cqw; background: radial-gradient(circle, #070708 0 38%, transparent 44%) 0 0 / .42cqw .42cqw, linear-gradient(#303136, #25262a); box-shadow: 0 1px 0 rgba(255,255,255,.08) inset, 0 -1px 0 rgba(0,0,0,.4); }
 
     /* MPC 3 screens, drawn at native resolution and scaled to fit */
     .vwrap { position: relative; aspect-ratio: 16 / 10; overflow: hidden; background: var(--mpc-bg); border-radius: 2px; }
@@ -246,13 +246,12 @@
     }
 
     /* Sections */
-    .section { padding: 120px 0; }
+    .section { padding: 88px 0; }
     .section + .section { border-top: 1px solid var(--line); }
     @media (max-width: 760px) { .section { padding: 80px 0; } }
-    h2 { font-size: clamp(36px, 4.8vw, 62px); font-weight: 820; font-stretch: 118%; letter-spacing: -.03em; line-height: 1; margin: 0 0 22px; }
+    h2 { font-size: clamp(28px, 3vw, 40px); font-weight: 600; font-stretch: normal; letter-spacing: -.035em; line-height: 1.15; margin: 0 0 22px; }
     .copy p { margin: 0 0 16px; font-size: 18px; color: var(--ink-2); max-width: 46ch; }
     .copy p.small { font-size: 15px; color: var(--ink-3); }
-    .links-inline { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 44px; }
     .feature { display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 8fr); gap: 64px; align-items: center; }
     .feature.flip { grid-template-columns: minmax(0, 8fr) minmax(0, 4fr); }
     .feature.flip .copy { order: 2; }
@@ -260,16 +259,16 @@
     .caption { margin: 14px 2px 0; font-size: 14px; color: var(--ink-3); }
     .status { margin: 12px 2px 0; font-size: 14px; font-weight: 600; color: var(--ink-2); min-height: 1.5em; }
 
-    .caps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 36px 48px; margin: 48px 0 0; }
-    .caps div { border-top: 2px solid var(--ink); padding-top: 14px; }
-    .caps dt { font-weight: 800; font-stretch: 112%; font-size: 19px; letter-spacing: -.01em; margin-bottom: 6px; }
-    .caps dd { margin: 0; color: var(--ink-2); font-size: 16px; }
-    @media (max-width: 900px) { .caps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-    @media (max-width: 560px) { .caps { grid-template-columns: 1fr; gap: 28px; } }
-    .xt-intro { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 16px 72px; align-items: end; }
-    .xt-intro p { margin: 0; font-size: 18px; color: var(--ink-2); max-width: 52ch; }
-    .xt-intro h2 { margin: 0; }
-    @media (max-width: 900px) { .xt-intro { grid-template-columns: 1fr; } }
+    .section.xtouch-summary { padding: 32px 0; }
+    .xt-summary { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 36px; align-items: center; }
+    .xt-summary h2 { margin: 0; font-size: 22px; letter-spacing: -.025em; }
+    .xt-summary p { margin: 0; max-width: 65ch; font-size: 16px; color: var(--ink-2); }
+    .xt-links { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-weight: 500; }
+    .xt-links a { text-underline-offset: 4px; }
+    @media (max-width: 900px) {
+      .xt-summary { grid-template-columns: 1fr; gap: 12px; }
+      .xt-links { flex-direction: row; flex-wrap: wrap; gap: 20px; }
+    }
 
     /* A close-up of the MPC screen in its body */
     .bezel { position: relative; container-type: inline-size; padding: 2.2cqw; border-radius: 2.6cqw; background: linear-gradient(180deg, #2a2b2f, #1d1e21); box-shadow: 0 1px 0 rgba(255,255,255,.1) inset, var(--dev-shadow); user-select: none; -webkit-user-select: none; }
@@ -387,6 +386,25 @@
       .soon i, .ml-row.learning em, .halo.bump { animation: none; }
       .ghost { display: none; }
     }
+
+    /* Restrained site treatment and reference-aligned MPC panel. */
+    .l2-brand { position: absolute; left: 66%; top: 3%; transform: translateX(-50%); color: #e4e4e4; font: 900 3.35cqw/.8 Arial, sans-serif; letter-spacing: -.16cqw; text-align: center; }
+    .l2-brand small { display: block; margin-top: .42cqw; font: 600 .91cqw/1 Arial, sans-serif; letter-spacing: .11cqw; }
+    .l2-padbank { position: absolute; left: 20%; top: .8%; transform: translateX(-50%); font: 500 .6cqw/1 var(--sans); color: #c6c6c8; }
+    .l2 .bank::before { content: ''; width: 74%; height: .35cqw; border-radius: .05cqw; background: var(--lc); box-shadow: 0 0 .4cqw -.1cqw var(--lc); }
+    .pad::after { content: attr(data-pad); position: absolute; left: .4cqw; top: calc(100% + .35cqw); color: #b8b8ba; font: 400 .54cqw/1 Arial, sans-serif; }
+    .l2 .knob { background: repeating-conic-gradient(#202022 0 8deg, #171719 8deg 16deg); box-shadow: 0 0 0 .25cqw #161618, 0 .4cqw .5cqw -.15cqw #08080a; }
+    .l2 .knob::before { content: ''; position: absolute; inset: 22%; border-radius: 50%; background: conic-gradient(from 30deg, #606165, #242427, #727377, #39393c, #696a6d, #262629, #606165); }
+    .l2 .knob::after { top: 13%; height: 15%; width: 4%; margin-left: -2%; background: #999a9c; }
+    .l2 .dial::before { inset: 16%; background: conic-gradient(#5a5b5e, #343437, #77787b, #343437, #5a5b5e); }
+    .l2 .dial::after { display: none; }
+    .stage-hint { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+    .watch-demo { font: 600 13px/1 var(--sans); color: var(--ink); border: 1px solid var(--line); border-radius: 5px; padding: 10px 13px; background: transparent; cursor: pointer; }
+    .watch-demo:hover { background: var(--page-2); }
+    .watch-demo[aria-pressed='true'] { border-color: var(--ink-3); }
+    .xt-body { box-shadow: 0 10px 20px -14px rgba(12,14,18,.65); }
+    .wire i { box-shadow: none; width: 5px; height: 5px; margin-top: -2px; }
+    .copy p { font-size: 17px; }
   </style>
 </head>
 <body>
@@ -417,9 +435,9 @@
 <main>
   <section class="hero">
     <div class="wrap">
-      <h1>Your MPC, extended.</h1>
+      <h1>More control for your MPC.</h1>
       <div class="hero-row">
-        <p class="lead">Free community firmware for the MPC Live II. Two-way X-Touch control with motor faders, mouse note editing and Shift+wheel note stepping, built in your browser from Akai's own 3.9.1 update.</p>
+        <p class="lead">Motor faders, mouse editing and easier note selection for your MPC Live II. Free community firmware, built in your browser from Akai's 3.9.1 update.</p>
         <div class="ctas">
           <a class="btn primary" href="builder.html">Build your image</a>
           <a class="btn" href="#get">How it works</a>
@@ -430,10 +448,10 @@
       <div class="stage" id="stage" role="group" aria-label="Interactive demo: an MPC Live II and an X-Touch stay in sync">
         <figure>
           <div class="l2" id="live2">
-            <div class="l2-jacks" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+            <span class="l2-brand" aria-hidden="true">AKAI<small>PROFESSIONAL</small></span><span class="l2-padbank" aria-hidden="true">PAD BANK</span>
             <div class="l2-screen" aria-hidden="true"><div class="vwrap"><div class="vui mixer" id="mixer"><div class="pull"></div></div></div></div>
             <div class="l2-pads" id="pads" role="group" aria-label="Pads"></div>
-            <span class="l2-model" aria-hidden="true">MPC LIVE II</span>
+            <span class="l2-model" aria-hidden="true"><b>MPC</b> LIVE II</span>
             <span class="l2-leds" aria-hidden="true"><i class="on"></i><i></i><i></i><i></i></span>
             <div class="l2-grille" aria-hidden="true"></div>
           </div>
@@ -456,28 +474,18 @@
         </figure>
         <div class="ghost parked" id="ghost" aria-hidden="true"></div>
       </div>
-      <p class="stage-hint">Move a fader on either one, tap the pads, press Play.</p>
+      <p class="stage-hint"><button class="watch-demo" id="watchDemo" type="button" aria-pressed="false">Watch demo</button><span>Or move a fader, tap a pad or press Play.</span></p>
       <noscript><p class="nojs">The demos on this page need JavaScript.</p></noscript>
     </div>
   </section>
 
-  <section class="section" id="xtouch">
-    <div class="wrap">
-      <div class="xt-intro">
-        <h2>Two-way X-Touch.</h2>
-        <p>Set a full-size X-Touch to MC mode, plug it into the MPC and load a project. Names, colors, meters and fader positions come from the MPC, and whatever you move on either side moves on the other.</p>
-      </div>
-      <dl class="caps">
-        <div><dt>Mixer</dt><dd>Volume on motor faders, pan on encoders, plus mute, solo, select and record arm.</dd></div>
-        <div><dt>Sends and Drum Mix</dt><dd>The selected track's four sends on faders, or every pad of a Drum track, bank by bank.</dd></div>
-        <div><dt>Plug-ins</dt><dd>Open an insert, page through its parameters, and bypass it with Shift.</dd></div>
-        <div><dt>Q-Links</dt><dd>All sixteen, on the encoders or flipped onto the faders.</dd></div>
-        <div><dt>Transport</dt><dd>Play, stop, record, loop, click, undo and automation modes. Footswitches do Play and Record.</dd></div>
-        <div><dt>Jog wheel</dt><dd>Scrub by beats, or press Scrub and it becomes the MPC's data wheel.</dd></div>
-      </dl>
-      <div class="links-inline">
-        <a class="btn" href="guide.html">Read the X-Touch guide</a>
-        <a class="btn" href="xtouch-cheatsheet.md" download>Download the cheat sheet</a>
+  <section class="section xtouch-summary" id="xtouch">
+    <div class="wrap xt-summary">
+      <h2>Two-way X-Touch.</h2>
+      <p>Mix, control plug-ins and run transport from your X-Touch. Motor faders, names and meters stay in sync with the MPC.</p>
+      <div class="xt-links">
+        <a href="guide.html">Setup &amp; controls</a>
+        <a href="xtouch-cheatsheet.md" download>Cheat sheet</a>
       </div>
     </div>
   </section>
@@ -826,24 +834,25 @@ function hwButton(x, y, label, sub, opts = {}) {
   live2.append(b);
   return b;
 }
-const colX = [12.1, 17.9, 23.4, 29, 34.8, 40.3];
+const colX = [12.5, 17.3, 22.1, 26.9, 33.5, 38.3];
 [['A', 'E'], ['B', 'F'], ['C', 'G'], ['D', 'H'], ['UNDO', 'REDO'], ['COPY', 'DELETE']].forEach(([a, b], k) =>
-  hwButton(colX[k], 9.4, a, b, k === 0 ? { cls: 'lit', lc: '#ff3b30' } : k < 4 ? { cls: 'tint', lc: '#ff6b61' } : {}));
+  hwButton(colX[k], 5.4, k < 4 ? '' : a, k < 4 ? a + ' / ' + b : b, k < 4 ? { cls: 'bank', lc: k === 0 ? '#e8bc58' : '#ce3444' } : { cls: 'tint', lc: k === 4 ? '#ddd18c' : '#c25868' }));
 [['NOTE<br>REPEAT', 'LATCH'], ['FULL<br>LEVEL', 'HALF LEVEL'], ['16<br>LEVEL', 'NOTES'], ['ERASE', ''], ['STEP<br>SEQ', 'AUTOMATION'], ['TC', 'ON/OFF']].forEach(([a, b], k) =>
-  hwButton(colX[k], 16.6, a, b, { cls: 'dim' }));
-const rowX = [49.6, 55.1, 60.4, 65.5, 70.9, 76.2];
+  hwButton(colX[k], 12, a, b, { cls: 'tint', lc: k === 1 || k === 4 ? '#d6c976' : '#c25868' }));
+const rowX = [49.6, 56.3, 61.1, 65.8, 70.5, 75.2];
 [['SHIFT', ''], ['MENU', 'BROWSE'], ['MAIN', 'GRID'], ['MIX', 'SAMPLER'], ['MUTE', 'SAMPLE EDIT'], ['NEXT<br>SEQ', 'XYFX']].forEach(([a, b], k) =>
-  hwButton(rowX[k], 63.4, a, b, k === 3 ? { cls: 'lit', lc: '#f2f2f2' } : {}));
-hwButton(81.4, 63.4, '+', '');
-hwButton(49.6, 74.8, 'TAP', 'MASTER');
-hwButton(55.1, 74.8, 'REC', '', { cls: 'tint', lc: '#ff3b30' });
-hwButton(60.4, 74.8, 'OVER<br>DUB', '', { cls: 'tint', lc: '#ffb000' });
-const hwStop = hwButton(65.5, 74.8, 'STOP', '', { act: true, lc: '#f2f2f2' });
-const hwPlay = hwButton(70.9, 74.8, 'PLAY', '', { act: true, lc: '#35e06a' });
-hwButton(76.2, 74.8, 'PLAY<br>START', '', { cls: 'tint', lc: '#35e06a' });
-hwButton(81.4, 74.8, '&minus;', '');
-hwButton(92.2, 9.4, 'Q-LINK', '', { cls: 'dim' });
+  hwButton(rowX[k], 67.5, a, b, { cls: 'tint', lc: k === 0 ? '#c25868' : '#ddd18c' }));
+hwButton(82, 67.5, '+', '', { cls: 'tint', lc: '#d34b64' });
+hwButton(49.6, 75.5, 'TAP', 'MASTER', { cls: 'tint', lc: '#ddd18c' });
+hwButton(56.3, 75.5, 'REC', '', { cls: 'tint', lc: '#ff3b30' });
+hwButton(61.1, 75.5, 'OVER<br>DUB', '', { cls: 'tint', lc: '#ffb000' });
+const hwStop = hwButton(65.8, 75.5, 'STOP', '', { act: true, lc: '#f2f2f2' });
+const hwPlay = hwButton(70.5, 75.5, 'PLAY', '', { act: true, lc: '#35e06a' });
+const hwPlayStart = hwButton(75.2, 75.5, 'PLAY<br>START', '', { act: true, cls: 'tint', lc: '#35e06a' });
+hwButton(82, 75.5, '&minus;', '');
+hwButton(92.7, 5.4, 'Q-LINK', '', { cls: 'dim' });
 hwPlay.setAttribute('aria-label', 'MPC Play'); hwStop.setAttribute('aria-label', 'MPC Stop');
+hwPlayStart.setAttribute('aria-label', 'MPC Play Start');
 function knob(x, y, size, cls) {
   const k = el('div', cls + ' c', { 'aria-hidden': 'true' });
   Object.assign(k.style, { left: x + '%', top: y + '%', width: size + 'cqw', height: size + 'cqw' });
@@ -852,9 +861,9 @@ function knob(x, y, size, cls) {
   k.style.setProperty('--r', r + 'deg');
   rotary(k, d => { r = cls === 'knob' ? clamp(r + d, -140, 140) : r + d; k.style.setProperty('--r', r + 'deg'); }, stopAuto);
 }
-knob(4.6, 11.2, 4.4, 'knob');
-[22.9, 34.3, 45.9, 57.4].forEach(y => knob(92.9, y, 5.6, 'knob'));
-knob(92.2, 73.4, 10.4, 'dial');
+knob(5.6, 8.3, 4.7, 'knob');
+[19.1, 31.6, 44.2, 56.7].forEach(y => knob(92.7, y, 4.6, 'knob'));
+knob(92.7, 73.2, 7.4, 'dial');
 
 const PADC = ['#ff3b30', '#ff3b30', '#ffb000', '#ffb000', '#19e65c', '#19e65c', '#1ec8ff', '#1ec8ff', '#8a6cff', '#8a6cff', '#ff4fa3', '#ff4fa3', '#19e65c', '#1ec8ff', '#ffb000', '#ff3b30'];
 const padEls = [];
@@ -862,7 +871,7 @@ const padsBox = $('#pads');
 for (let r = 3; r >= 0; r--) for (let c = 0; c < 4; c++) {
   const n = r * 4 + c;
   const p = el('button', 'pad', { type: 'button', 'aria-label': 'Pad ' + (n + 1), tabindex: n === 12 ? '0' : '-1' });
-  p.style.setProperty('--pc', PADC[n]);
+  p.style.setProperty('--pc', PADC[n]); p.dataset.pad = 'PAD ' + (n + 1);
   padsBox.append(p);
   padEls[n] = p;
   p.addEventListener('pointerdown', e => { if (e.isTrusted) stopAuto(); hitPad(n); });
@@ -882,6 +891,7 @@ function hitPad(n) {
   pulse(true);
 }
 hwPlay.addEventListener('click', () => { stopAuto(); M.playing = true; touched(true); });
+hwPlayStart.addEventListener('click', () => { stopAuto(); M.beat = 0; M.playing = true; touched(true); });
 hwStop.addEventListener('click', () => { stopAuto(); if (M.playing) M.playing = false; else M.beat = 0; touched(true); });
 
 // X-Touch strips
@@ -1117,11 +1127,17 @@ function ghostPads(seq) {
   }, k * 250)));
 }
 let auto = !reduce, autoTimers = [];
+$('#watchDemo').textContent = auto ? 'Stop demo' : 'Watch demo';
+$('#watchDemo').setAttribute('aria-pressed', auto);
 function stopAuto() {
   if (!auto) return;
   auto = false;
+  $('#watchDemo').textContent = 'Watch demo';
+  $('#watchDemo').setAttribute('aria-pressed', 'false');
   autoTimers.forEach(clearTimeout);
   autoTimers = [];
+  override.fill(null);
+  $('#xtBody').classList.remove('boot');
   tweens.length = 0;
   dragX = -1;
   hideGhost();
@@ -1138,14 +1154,21 @@ function tour(round) {
 }
 function powerOn() {
   const body = $('#xtBody');
-  if (reduce) { body.classList.remove('boot'); return; }
+  if (reduce || !auto) { body.classList.remove('boot'); return; }
   for (let i = 0; i < 9; i++) {
-    setTimeout(() => { override[i] = 1; }, 150 + i * 55);
-    setTimeout(() => { override[i] = null; }, 700 + i * 55);
+    autoTimers.push(setTimeout(() => { override[i] = 1; }, 150 + i * 55));
+    autoTimers.push(setTimeout(() => { override[i] = null; }, 700 + i * 55));
   }
-  setTimeout(() => body.classList.remove('boot'), 300);
+  autoTimers.push(setTimeout(() => body.classList.remove('boot'), 300));
   autoTimers.push(setTimeout(() => tour(0), 1600));
 }
+$('#watchDemo').addEventListener('click', () => {
+  if (auto) { stopAuto(); M.playing = false; dirty = true; return; }
+  auto = true; M.playing = true; dirty = true;
+  $('#watchDemo').textContent = 'Stop demo';
+  $('#watchDemo').setAttribute('aria-pressed', 'true');
+  tour(0);
+});
 ['pointerdown', 'wheel', 'keydown'].forEach(t => stage.addEventListener(t, e => { if (e.isTrusted) stopAuto(); }, { passive: true }));
 addEventListener('resize', hideGhost);
 
